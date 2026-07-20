@@ -811,3 +811,73 @@ populates correctly. This closes the loop the user opened by asking
 observing fine" doesn't mean the whole pipeline is actually intact until
 something (in this case, literally checking for the output files)
 confirms it.
+
+## `rts2-imgproc` (task: image processing daemon) - DONE
+
+Last piece needed to fully replicate D50's functionality: the daemon that
+runs astrometry.net (or any other configured external processor) against
+each new image, then files it to archive/trash/dark/flat and updates the
+DB accordingly. Always genuinely DB-bound (unlike `rts2-executor`, which
+classic could build without PostgreSQL) - classic `imgproc.cpp`'s
+`#ifndef RTS2_HAVE_PGSQL` fallback path (plain `rts2core::Device`, no
+correction-forwarding, no `checkUnprocessedImages`) is dropped entirely
+here, same reasoning as `devicedb.h` itself: `db` has no no-DB mode, so
+there's nothing for that branch to guard against.
+
+This was blocked earlier in `base`'s scriptexec push (see `base/STATUS.md`
+task 22-26 write-up) because `connimgprocess.h` genuinely needs
+`rts2db::Observation` - at that point `db` didn't exist yet, so it was
+correctly deferred rather than dragged into a DB-free project. Since then
+`rts2fits/imagedb.h` and `rts2db/observation.h` both landed in `db` (DB
+bootstrap + observation tiers), so the real blocker is gone; porting this
+was just a matter of wiring it up. New `db/imgproc/` subtree:
+
+- `include/rts2script/connimgprocess.h` + `src/connimgprocess.cpp`
+  (`rts2plan::ConnProcess`/`ConnImgOnlyProcess`/`ConnImgProcess`/
+  `ConnObsProcess`, flattened from classic
+  `include/rts2script/connimgprocess.h` + `lib/rts2script/connimgprocess.cpp`)
+  - the actual forked-astrometry-process connections: parse `correct`/
+    `corrwerr` output, classify dark/flat/trash/archive, forward telescope
+    corrections to a live executor connection, and (via
+    `rts2db::Observation::checkUnprocessedImages`) fire `EVENT_ALL_PROCESSED`
+    once every image of an observation has been processed.
+  - Classic's `#ifdef RTS2_HAVE_LIBJPEG` preview-writing paths
+    (`last_processed_jpeg`/`last_good_jpeg`/`last_trash_jpeg` on
+    `ConnProcess`, and the JPEG-writing block in `ConnImgProcess::init()`)
+    are dropped outright, consistent with `rts2_executor_jpeg_thumbnails_dead`
+    (Magick++/libjpeg preview generation is vestigial, real previews come
+    from the separate asarina project, and neither base nor db link
+    Magick++/libjpeg anywhere).
+  - Dropped the classic `#include "rts2db/taruser.h"` - grep-verified
+    nothing in the file actually uses `TarUser`, a vestigial include.
+  - `#include`s use base's flattened header names (`connexe.h`, `script.h`,
+    not classic's `rts2script/connexe.h`/`rts2script/script.h` - base's
+    `rts2script` was flattened directly into `include/` when it was
+    ported, see task 25 in `base/STATUS.md`).
+- `src/imgproc.cpp` (`rts2plan::ImageProc:rts2db::DeviceDb`, flattened from
+  classic `src/plan/imgproc.cpp`) - the daemon itself: a fixed-size pool
+  of worker slots (`numProc`, config `[imgproc] num_proc`) each holding one
+  `ConnProcess`, a FIFO queue for the rest, glob-based reprocessing of a
+  standby directory, and per-night/lifetime counters
+  (good/trash/bad/dark/flat/observation counts) exposed as RTS2 values.
+  **Dropped `queDark`/`queFlat`/`queDarks`/`queFlats`**: declared in
+  classic's header but never defined anywhere in `imgproc.cpp` - genuinely
+  dead, unimplemented declarations in the classic tree itself, not
+  something this port broke.
+- `CMakeLists.txt`: `db_imgproc` static lib (just `connimgprocess.cpp`,
+  linked `PUBLIC` against `db` - which already exports `base_script`
+  transitively, so `ConnExe`/`ConnFork` come along for free) plus the
+  `rts2-imgproc` executable, following the exact `db_executor`/
+  `rts2-executor` pattern next door. Added `add_subdirectory(imgproc)` to
+  the top-level `db/CMakeLists.txt`.
+- Builds clean (only the two pre-existing benign warning classes already
+  seen elsewhere in this port: `setValueInteger` overload-hiding, one
+  `sign-compare` in a glob-count loop matching classic's own `unsigned
+  int`-vs-`int` comparison); full `db` tree still builds clean, `ctest`
+  still 7/7. `rts2-imgproc --help` runs and prints the standard RTS2
+  daemon option list, confirming the binary links and starts.
+- Not yet smoke-tested against a real astrometry.net invocation or a live
+  `rts2-executor` correction round-trip - that needs a real observation
+  and a configured `[imgproc] astrometry` script, deferred to whichever
+  site testing session picks this up next (see
+  `rts2c_bugfixing_raids`/the D50 device-by-device testing notes).
