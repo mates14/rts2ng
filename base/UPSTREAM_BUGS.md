@@ -773,6 +773,86 @@ manual `cmake`/`make` build doesn't enable - invisible until packaging
 **Fix applied in base**: pass the string as data via a real `"%s"`
 format in all three, e.g. `wprintw (getWriteWindow (), "%s", _val.c_str ());`.
 
+---
+
+## DevClientCameraImage::allImageDataReceived() - windowed readout position never recorded (LTV1/LTV2/CRPIX)
+
+**Files:** `lib/rts2fits/devcliimg.cpp` (`DevClientCameraImage::allImageDataReceived()`)
+**Maintainer:** Petr Kubanek
+**Severity:** high - every windowed (non-full-frame) exposure from any
+camera that doesn't use the optional multi-channel `CHAN1_OFFSETS`/
+`CHAN2_OFFSETS` config (i.e. every camera actually deployed at any real
+site checked) writes `LTV1`/`LTV2` as if the window were never offset
+from the detector origin, regardless of where it actually was. Found
+live: a user maintaining a separate post-processing pipeline
+(`asarina/pipeline/patch_window.py`) had to *guess* the window's
+position from `NAXIS1`/`NAXIS2` alone, assuming it was centered on the
+chip - because RTS2 itself never wrote the real position anywhere.
+
+**Bug:** each received data channel carries the actual per-exposure
+readout window's origin (`imgh->x`/`imgh->y`, in unbinned detector
+pixels - see `camd.cpp`'s `fhd->x = htons (chipUsedReadout->getXInt ())`
+for where the device side puts it on the wire). `allImageDataReceived()`
+decodes these into local `x`/`y`, and correctly uses them a few lines
+later for `DATASEC`/`DETSEC`/`TRIMSEC` (e.g. `(datasec->getXInt () - x)
+/ bin1`). But the `mods[2]`/`mods[3]` array - which becomes both the
+literal `LTV1`/`LTV2` FITS header values a few lines below, and the
+`CRPIX1`/`CRPIX2` sky-WCS adjustment inside `writeWCS()` - is built
+*only* from the optional per-channel `CHAN1_OFFSETS`/`CHAN2_OFFSETS`
+config (for multi-amplifier geometry) and never incorporates `x`/`y` at
+all:
+
+```cpp
+double mods[NUM_WCS_VALUES] = {0, 0, 0, 0, 1, 1, 0};
+
+if (chan1_offsets && chan < chan1_offsets->size ())
+    mods[2] += (*chan1_offsets)[chan];
+...
+if (bin1 != 0)
+    mods[2] /= bin1;
+```
+
+For any camera not using `CHAN1_OFFSETS` (none of the ones checked do),
+`mods[2]`/`mods[3]` stay exactly `0` regardless of the window's actual
+position, so `LTV1`/`LTV2`/`CRPIX1`/`CRPIX2` never reflect it.
+
+**Fix applied in base** (`kernel/src/devcliimg.cpp`): fold the window
+offset into the same `mods[2]`/`mods[3]` computation, using the exact
+same `(detector_pixel - x) / bin` convention the neighboring `DATASEC`
+computation already uses (so a windowed image's `LTV1`/`LTV2` now agree
+with its own `DATASEC`):
+
+```diff
+-			if (bin1 != 0)
+-			{
+-				mods[2] /= bin1;
+-			}
+-
+-			if (bin2 != 0)
+-			{
+-				mods[3] /= bin2;
+-			}
++			if (bin1 != 0)
++			{
++				mods[2] = mods[2] / bin1 - ((double) x) / bin1;
++			}
++
++			if (bin2 != 0)
++			{
++				mods[3] = mods[3] / bin2 - ((double) y) / bin2;
++			}
+```
+
+Verified against two real exposures from a dummy camera (detsize
+0:0:1000:1000, datasec 20:20:960:960): a window at `x=0` (matching the
+detector origin) produced `LTV1=LTV2=-0`, `DATASEC=[21:100,21:100]`; a
+window at `x=500,y=500` produced `LTV1=LTV2=-500`, with `CRPIX1`/`CRPIX2`
+shifting by the same `-500` through the untouched `writeWCS()` code -
+both self-consistent with each window's own `DATASEC`. `LTM1_1`/`LTM2_2`
+are left as-is - they have a separate, pre-existing gap (don't reflect
+`bin1`/`bin2` either), out of scope for this fix, which targets the
+window-position gap specifically.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

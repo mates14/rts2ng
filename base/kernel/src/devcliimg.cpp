@@ -340,14 +340,33 @@ void DevClientCameraImage::allImageDataReceived (int data_conn, rts2core::DataCh
 			if (mods[5] > 0)
 				mods[3] *= -1;
 
+			// Fold in the actual per-exposure readout window position (x, y -
+			// the window's own top-left corner in unbinned detector
+			// coordinates, see camd.cpp's chipUsedReadout/"WINDOW" value and
+			// how it's copied into imgh->x/y before sending the image). Without
+			// this, LTV1/LTV2 (and, via writeWCS()'s CRPIX adjustment just
+			// below, CRPIX1/CRPIX2) stayed at their all-zero/untouched
+			// defaults for any camera not using the optional multi-channel
+			// CHAN1_OFFSETS/CHAN2_OFFSETS config - i.e. every camera actually
+			// deployed - so a windowed (non-full-frame) exposure never
+			// recorded where its window actually was. Verified against this
+			// same block's own DATASEC computation a few lines below, which
+			// already divides by the identical (detsec_x - x)/bin1 - a
+			// windowed image's LTV1/LTV2 now agree with its own DATASEC.
+			// Confirmed upstream classic RTS2 has the exact same gap
+			// (lib/rts2fits/devcliimg.cpp), so this was never window-aware
+			// for any camera, not something this port broke. LTM1_1/LTM2_2
+			// are left as-is (a separate, pre-existing limitation: they
+			// don't reflect bin1/bin2 either) - only the window-position
+			// gap is fixed here.
 			if (bin1 != 0)
 			{
-				mods[2] /= bin1;
+				mods[2] = mods[2] / bin1 - ((double) x) / bin1;
 			}
 
 			if (bin2 != 0)
 			{
-				mods[3] /= bin2;
+				mods[3] = mods[3] / bin2 - ((double) y) / bin2;
 			}
 
 			ci->image->writeWCS (mods);

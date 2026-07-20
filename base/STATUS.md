@@ -1589,6 +1589,15 @@ one below). Keep both in sync when a new one turns up.
   `getEpoch()` could return garbage before the first `setEpoch()` call.
   Found by code inspection while porting. Fixed by defaulting to `-1`,
   matching the same convention already used by `rts2core::Expander::epochId`.
+- `DevClientCameraImage::allImageDataReceived()` (kernel/src/devcliimg.cpp):
+  `LTV1`/`LTV2`/`CRPIX1`/`CRPIX2` never incorporated the actual per-exposure
+  windowed-readout position (`x`/`y`) - only the optional multi-channel
+  `CHAN1_OFFSETS`/`CHAN2_OFFSETS` config, unused by any camera actually
+  deployed, so every windowed exposure silently recorded LTV as if it
+  weren't windowed at all. Found live by the user (a separate pipeline had
+  resorted to guessing the window position from `NAXIS1`/`NAXIS2` alone).
+  See "Window position fix" below and `UPSTREAM_BUGS.md` for the full
+  write-up and empirical verification.
 
 ## Scriptexec push (task 22-26): all six D50 devices are ported, but nothing
 ## can command them yet - the user asked to jump straight to the "other
@@ -2216,6 +2225,79 @@ covers any number of extra binary packages, not just one.
 in there) - not changed here since the actual gxccd SDK path on the
 user's other build machines isn't known; add `export
 BASE_GXCCD_SDK_DIR=/path/to/libgxccd` there the same way if/when needed.
+
+### Window position (LTV1/LTV2/CRPIX) never recorded for windowed exposures - fixed
+
+User reported hitting this as a real, high-priority bug: RTS2 never
+recorded where a windowed (non-full-frame) exposure's readout window
+actually was on the detector. They already had a workaround in a
+separate pipeline (`asarina/pipeline/patch_window.py`) that *guesses*
+the window position post-hoc from `NAXIS1`/`NAXIS2` alone, assuming it
+was centered on the chip - exactly the kind of thing that should never
+be necessary if RTS2 wrote the real value at capture time, which was the
+ask: fix it at the point of writing the FITS file.
+
+Traced to `kernel/src/devcliimg.cpp`'s `allImageDataReceived()`: the
+`mods[2]`/`mods[3]` array that becomes both the literal `LTV1`/`LTV2`
+FITS header values and (via `writeWCS()`) the `CRPIX1`/`CRPIX2` sky-WCS
+adjustment is built only from the optional per-channel
+`CHAN1_OFFSETS`/`CHAN2_OFFSETS` config (multi-amplifier geometry) and
+never incorporates the window's own per-exposure `x`/`y` position
+(`imgh->x`/`imgh->y`, decoded a few lines above and already used
+correctly by the neighboring `DATASEC`/`DETSEC`/`TRIMSEC` computations).
+Since no camera actually deployed anywhere uses `CHAN1_OFFSETS`,
+`mods[2]`/`mods[3]` stayed exactly `0` for every real windowed exposure,
+regardless of where the window actually was. **Confirmed identical in
+classic RTS2** (`lib/rts2fits/devcliimg.cpp`, byte-for-byte) - a
+genuine, long-standing upstream bug, not something this port introduced.
+Full write-up in `UPSTREAM_BUGS.md`.
+
+**Fix**: fold the window offset into the same `mods[2]`/`mods[3]`
+computation, using the identical `(detector_pixel - x) / bin` convention
+`DATASEC` already uses, so a windowed image's `LTV1`/`LTV2` are now
+self-consistent with its own `DATASEC`:
+
+```diff
+-			if (bin1 != 0)
+-			{
+-				mods[2] /= bin1;
+-			}
+-
+-			if (bin2 != 0)
+-			{
+-				mods[3] /= bin2;
+-			}
++			if (bin1 != 0)
++			{
++				mods[2] = mods[2] / bin1 - ((double) x) / bin1;
++			}
++
++			if (bin2 != 0)
++			{
++				mods[3] = mods[3] / bin2 - ((double) y) / bin2;
++			}
+```
+
+**Verified empirically**, not just by inspection - stood up a real,
+throwaway `centrald` + `rts2-camd-dummy` + `rts2-scriptexec` chain
+(dummy camera configured with `--detsize 0:0:1000:1000 --datasec
+20:20:960:960`, a `BOX x y w h` script command to command a real
+windowed readout, `E 0.1` to expose) and inspected the resulting FITS
+headers directly:
+- Window at `x=0,y=0,w=100,h=100` (overlapping the chip's own overscan
+  edge): `DATASEC=[21:100,21:100]`, `LTV1=LTV2=-0` - consistent (window
+  starts exactly at the detector origin, so no shift).
+- Window at `x=500,y=500,w=200,h=200`: `LTV1=LTV2=-500`,
+  `DATASEC=[1:200,1:200]` (window fully inside the good-data region) -
+  the `-500` exactly matches the window's own offset.
+- Repeated the second case with `--wcs` set on the dummy camera:
+  `CRPIX1`/`CRPIX2` shifted by the same amount through the untouched
+  `writeWCS()` code, confirming the one fix correctly propagates into
+  both the literal `LTV1`/`LTV2` header and the sky-WCS reference pixel.
+
+Deliberately left alone: `LTM1_1`/`LTM2_2` (a separate, pre-existing gap
+- they don't reflect `bin1`/`bin2` either, only matters for binned data,
+out of scope for this specifically-reported window-position bug).
 
 ## Conventions being used
 
