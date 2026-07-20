@@ -1,0 +1,64 @@
+rts2-db (0.1.0-5) UNRELEASED; urgency=medium
+
+  * postinst: create /var/lib/rts2/images, owned by the rts2 system user -
+    the actual place rts2-executor needs write access for FITS output
+    (see the matching rts2-base 0.1.0-2 change setting [observatory]
+    base_path there). Found via a live install where images were
+    silently not being written (root-owned /images, code default, was
+    unwritable by the unprivileged rts2 user, and the failure was never
+    logged - separately fixed in rts2-base's fitsfile.cpp).
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 20 Jul 2026 00:10:00 +0200
+
+rts2-db (0.1.0-4) UNRELEASED; urgency=medium
+
+  * Replace the standalone rts2-executor.service unit entirely: it never
+    appeared in rts2-mon on a live rts2-base-managed system, because
+    Type=simple + a bare ExecStart bypasses rts2-start's shared-flag
+    injection (from /etc/rts2/centrald) and doesn't match how rts2-base's
+    own units track a forking daemon (Type=forking + PIDFile=). Now
+    postinst appends an "executor EXEC --run-as rts2" line to rts2-base's
+    /etc/rts2/services instead, so rts2-executor runs through the same
+    rts2-start/rts2@.service mechanism as every device. --run-as (not
+    systemd's User=) does the privilege drop, after the lock file is
+    already created as root - avoids the /var/run permission problem
+    entirely, no RuntimeDirectory workaround needed.
+
+ -- RTS2 Project <petr@rts2.org>  Sun, 19 Jul 2026 22:15:00 +0200
+
+rts2-db (0.1.0-3) UNRELEASED; urgency=medium
+
+  * Fix debian/control: Depends: rts2-base (= ${source:Version}) was wrong
+    - that substitution variable is rts2-db's own version, not rts2-base's
+    (they're independent source packages with independent version
+    numbers), so it demanded an exact-version match that could never be
+    satisfied once the two packages' versions drifted even slightly.
+    Dropped the version pin entirely. Found via a live install attempt
+    (rts2-base was already at 0.1.0-1 on the test system, rts2-db at
+    0.1.0-2, dpkg correctly refused to configure).
+
+ -- RTS2 Project <petr@rts2.org>  Sun, 19 Jul 2026 21:52:00 +0200
+
+rts2-db (0.1.0-2) UNRELEASED; urgency=medium
+
+  * Fix rts2-executor.service: running as User=rts2 (for Postgres peer
+    auth) conflicted with the default root-only lock-file location
+    (/var/run/rts2_*), causing an immediate crash loop on start. Added
+    RuntimeDirectory=rts2-executor and pointed --lock-prefix at it, so the
+    unit gets its own systemd-managed, rts2-owned /run/rts2-executor/.
+    Found via a live install on a real rts2-base-managed system.
+
+ -- RTS2 Project <petr@rts2.org>  Sun, 19 Jul 2026 21:45:00 +0200
+
+rts2-db (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial rts2-db package: rts2db PostgreSQL schema + bootstrap tooling
+    (rts2-builddb, rts2-configdb), the target-management CLI tools
+    (rts2-newtarget, rts2-target, rts2-targetinfo, rts2-targetlist), and
+    rts2-executor. postinst provisions a local 'stars' database on first
+    install only - an already-present database (e.g. a site's existing
+    manual D50/SBT-style setup) is left untouched. rts2-executor.service
+    is shipped disabled, same as rts2-base's own units - never auto-start
+    something that commands real telescopes/cameras.
+
+ -- RTS2 Project <petr@rts2.org>  Sun, 19 Jul 2026 21:00:00 +0200

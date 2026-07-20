@@ -1,0 +1,17 @@
+# systemd unit to start every device/service listed in
+# @BASE_CONFDIR@/rts2/{centrald,devices,services}
+#
+# base note: dropped the classic unit's "After=postgresql.service" - this
+# is rts2-base (base only, no DB); a future rts2-db package that actually
+# needs a database can add its own ordering via a drop-in.
+[Unit]
+Description=RTS2 (all configured devices/services)
+Documentation=https://github.com/RTS2/rts2
+
+[Service]
+Type=forking
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-start all
+ExecStop=@CMAKE_INSTALL_FULL_BINDIR@/rts2-stop all
+
+[Install]
+WantedBy=multi-user.target

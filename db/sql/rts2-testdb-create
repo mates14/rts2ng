@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# Provision a local RTS2 test database from a completely clean slate: a
+# system user, a matching Postgres role (peer auth - the same convention
+# used at D50/SBT), the database itself, the full schema + standard lookup
+# data (via rts2-builddb), and a test camera/mount/filters (via
+# rts2-configdb). Counterpart to rts2-testdb-destroy, which undoes all of
+# this so the two can be run back to back to test provisioning repeatedly.
+#
+# Usage: ./rts2-testdb-create [dbname] [dbuser]
+# Defaults: dbname=stars dbuser=rts2
+#
+# Idempotent: safe to run again against a partially-provisioned system
+# (existing user/role/database are detected and left alone; only the
+# database itself must not already exist, since rts2-builddb assumes an
+# empty one).
+
+set -e
+
+DBNAME="${1:-stars}"
+DBUSER="${2:-rts2}"
+SQLDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "System user '$DBUSER' ..."
+if id -u "$DBUSER" >/dev/null 2>&1; then
+	echo "  already exists, leaving as-is."
+else
+	sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$DBUSER"
+	echo "  created."
+fi
+
+echo "Postgres role '$DBUSER' ..."
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$DBUSER'" | grep -q 1; then
+	echo "  already exists, leaving as-is."
+else
+	sudo -u postgres createuser --login --createdb --createrole "$DBUSER"
+	echo "  created (LOGIN, CREATEDB, CREATEROLE)."
+fi
+
+echo "Database '$DBNAME' ..."
+sudo -u "$DBUSER" createdb "$DBNAME"
+
+echo "Building schema + standard data (non-interactive: -A loads everything, including Stetson/planet demo targets) ..."
+(cd "$SQLDIR" && sudo -u "$DBUSER" ./rts2-builddb -A "$DBNAME")
+
+echo "Adding test camera/mount/filters ..."
+(cd "$SQLDIR" && sudo -u "$DBUSER" ./rts2-configdb "$DBNAME" --testdb)
+
+echo "Done - '$DBNAME' ready, owned by '$DBUSER'."

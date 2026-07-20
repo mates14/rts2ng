@@ -1,0 +1,39 @@
+Source: rts2-db
+Section: science
+Priority: optional
+Maintainer: RTS2 Project <petr@rts2.org>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               g++,
+               libcfitsio-dev,
+               libncurses-dev,
+               libnova-dev,
+               libusb-1.0-0-dev,
+               libpq-dev,
+               libecpg-dev,
+               libxml2-dev,
+               postgresql-server-dev-all
+Standards-Version: 4.6.2
+Homepage: https://github.com/RTS2/rts2
+
+Package: rts2-db
+Architecture: any
+Depends: rts2-base,
+         postgresql-client,
+         adduser,
+         ${shlibs:Depends},
+         ${misc:Depends}
+Recommends: postgresql
+Description: Remote Telescope System 2 - database and observation executor
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains rts2-db: the PostgreSQL-backed target/observation
+ database schema and bootstrap tooling (rts2-builddb, rts2-configdb), the
+ target-management command-line tools (rts2-newtarget, rts2-target,
+ rts2-targetinfo, rts2-targetlist), and rts2-executor, the daemon that
+ selects and carries out observations of database-defined targets. On
+ first install, postinst provisions a local 'stars' database (system user
+ and Postgres role 'rts2', schema, standard lookup data) if one does not
+ already exist - it never touches an existing database. Requires
+ rts2-base for the underlying device drivers and wire protocol.

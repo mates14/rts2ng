@@ -1,0 +1,29 @@
+Source: rts2-base
+Section: science
+Priority: optional
+Maintainer: RTS2 Project <petr@rts2.org>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               g++,
+               libcfitsio-dev,
+               libncurses-dev,
+               libnova-dev,
+               libusb-1.0-0-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/RTS2/rts2
+
+Package: rts2-base
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: rsyslog
+Description: Remote Telescope System 2 - core daemons and drivers
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains rts2-base: the database-free core (centrald, the
+ wire protocol, rts2-mon) plus every device driver whose control library
+ links statically (no bundled proprietary shared library) - dummy
+ test drivers, the D50/SBT/FRAM mount, dome, focuser, filter wheel and
+ sensor drivers, and the FLI and Moravian Instruments (gxccd) camera
+ drivers. It does not include scheduling, the executor, or a database -
+ those live in separate rts2-db/rts2-httpd packages.

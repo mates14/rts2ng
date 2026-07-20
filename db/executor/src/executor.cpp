@@ -1,0 +1,1173 @@
+/*
+ * Executor body.
+ * Copyright (C) 2003-2010 Petr Kubanek <petr@kubanek.net>
+ * Copyright (C) 2010-2011 Petr Kubanek, Institute of Physics <kubanek@fzu.cz>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ */
+
+// db note: classic file also included <Magick++.h> (guarded by
+// RTS2_HAVE_LIBJPEG) purely to call Magick::InitializeMagick(".") for JPEG
+// thumbnail generation - confirmed vestigial by the user (2026-07-14, real
+// previews come from a separate "asarina" project) and dropped entirely,
+// not just deferred. See rts2_executor_jpeg_thumbnails_dead memory / the
+// db STATUS.md "Deliberately deferred" section.
+//
+// db note (2026-07-15, "executor-lite" pass): this file has been
+// stripped down per an explicit user decision (see the
+// rts2_executor_lite_plan memory) - the Plan/PlanSet target-chaining
+// feature, the ExecutorQueue scheduling machinery (sort modes, repeats,
+// multi-queue apparatus), the selectorNext/DEVICE_TYPE_SELECTOR
+// special-casing, and the dark/flat auto-scheduling policy were all
+// removed. Auger/shower handling, photometer support, GRB handling, and
+// the (currently dead, kept for a possible future revival) acquisition
+// state machine were all explicitly confirmed to stay.
+//
+// Also removed (same pass, after investigation confirmed a genuine
+// independent hard-limit backstop exists at the mount/kernel level -
+// base/teld's ObjectCheck-based hard horizon check): the ConnNotify/
+// MasterConstraints live constraint-file-reload plumbing and the
+// per-target soft Constraints check inside ExecutorQueue's visibility
+// filter (Moon distance, airmass, etc. - see the comment on
+// ExecutorQueue::isAboveHorizon() in executorque.cpp). GRB handling keeps
+// its own checkConstraints() call in setGrb() - GRB alerts bypass the
+// queuer entirely (they're a direct real-time interrupt), so unlike the
+// queue path, there's no other decision-maker to reject an
+// out-of-constraints GRB target.
+#include "valuearray.h"
+#include "rts2db/constraints.h"
+#include "rts2db/devicedb.h"
+#include "rts2db/target.h"
+#include "rts2db/targetgrb.h"
+#include "rts2script/executorque.h"
+#include "execcli.h"
+#include "rts2script/execclidb.h"
+#include "rts2devcliphot.h"
+
+#define OPT_IGNORE_DAY    OPT_LOCAL + 100
+#define OPT_DISABLE_AUTO  OPT_LOCAL + 102
+#define OPT_EXE_TIMEOUT   OPT_LOCAL + 103
+
+namespace rts2plan
+{
+
+/**
+ * Executor class.
+ *
+ * @author Petr Kubanek <petr@kubanek.net>
+ */
+class Executor:public rts2db::DeviceDb
+{
+	public:
+		Executor (int argc, char **argv);
+		virtual ~ Executor (void);
+		virtual rts2core::DevClient *createOtherType (rts2core::Connection * conn, int other_device_type);
+
+		virtual void postEvent (rts2core::Event * event);
+
+		virtual void deviceReady (rts2core::Connection * conn);
+
+		virtual int info ();
+
+		virtual void changeMasterState (rts2_status_t old_state, rts2_status_t new_state);
+
+		int end ()
+		{
+			maskState (EXEC_MASK_END, EXEC_END);
+			return 0;
+		}
+
+		int stop ();
+
+		virtual int commandAuthorized (rts2core::Connection * conn);
+
+	protected:
+		virtual int processOption (int in_opt);
+		virtual int init ();
+		virtual int reloadConfig ();
+
+		virtual int setValue (rts2core::Value *oldValue, rts2core::Value *newValue);
+
+	private:
+		rts2db::Target * currentTarget;
+
+		void clearNextTargets ();
+
+		void doSwitch ();
+		int switchTarget ();
+
+		int setNext (int nextId);
+		int queueTarget (int nextId, double t_start = NAN, double t_end = NAN);
+		int setNow (int nextId);
+		int setGrb (int grbId);
+		int setShower ();
+
+		/**
+		 * Skips current target, schedule now the next target.
+		 */
+		int skip ();
+
+		// -1 means no exposure registered (yet), > 0 means scripts in progress, 0 means all script finished
+		rts2core::ValueInteger *scriptCount;
+		int waitState;
+		std::list < rts2db::Target * > targetsQue;
+		struct ln_lnlat_posn *observer;
+		double obs_altitude;
+
+		// current + next target queue - see the ExecutorQueue class comment
+		// for how much this was trimmed down for executor-lite
+		ExecutorQueue *queue;
+
+		rts2core::ValueDouble *grb_sep_limit;
+		rts2core::ValueDouble *grb_min_sep;
+
+		rts2core::ValueBool *enabled;
+
+		rts2core::ValueInteger *acqusitionOk;
+		rts2core::ValueInteger *acqusitionFailed;
+
+		int setNow (rts2db::Target * newTarget);
+
+		void processTarget (rts2db::Target * in_target);
+		void updateScriptCount ();
+
+		rts2core::ValueInteger *current_id;
+		rts2core::ValueInteger *current_id_sel;
+		rts2core::ValueString *current_name;
+		rts2core::ValueInteger *current_plan_id;
+		rts2core::ValueString *current_type;
+		rts2core::ValueDouble *current_errorbox;
+		rts2core::ValueInteger *current_obsid;
+		rts2core::ValueTime *current_obsstart;
+
+		rts2core::ValueString *objectName;
+		rts2core::ValueString *pi;
+		rts2core::ValueString *program;
+
+		rts2core::ValueBool *autoLoop;
+		rts2core::ValueBool *defaultAutoLoop;
+
+		rts2core::ValueInteger *next_id;
+		rts2core::ValueString *next_name;
+
+		rts2core::ValueBool *ignoreDay;
+
+		rts2core::ValueInteger *img_id;
+
+		rts2core::ValueDouble *exe_timeout;
+};
+
+}
+
+using namespace rts2plan;
+
+Executor::Executor (int in_argc, char **in_argv):rts2db::DeviceDb (in_argc, in_argv, DEVICE_TYPE_EXECUTOR, "EXEC")
+{
+	currentTarget = NULL;
+	createValue (scriptCount, "script_count", "number of running scripts", false);
+	scriptCount->setValueInteger (-1);
+
+	waitState = 0;
+
+	createValue (enabled, "enabled", "if false, executor will not perform its duties, thus enabling problem-free full manual control", false, RTS2_VALUE_WRITABLE);
+	enabled->setValueBool (true);
+
+	createValue (acqusitionOk, "acqusition_ok", "number of acqusitions completed sucesfully", false);
+	acqusitionOk->setValueInteger (0);
+
+	createValue (acqusitionFailed, "acqusition_failed", "number of acqusitions which failed", false);
+	acqusitionFailed->setValueInteger (0);
+
+	createValue (current_id, "current", "ID of current target", false);
+	createValue (current_id_sel, "current_sel", "ID of currently selected target", false);
+	createValue (current_name, "current_name", "name of current target", false);
+	// db note: plan_id is vestigial - the Plan/TargetPlan chaining
+	// feature was removed (see rts2_executor_lite_plan memory), so this
+	// always reads -1 now. It cannot simply be deleted though:
+	// DevClientTelescopeExec::actionEvent() (base/script/execcli.cpp)
+	// dereferences the EVENT_SLEW_TO_TARGET(_NOW) event argument as a
+	// rts2core::ValueInteger*, so an actual object must keep existing for
+	// it to point to.
+	createValue (current_plan_id, "current_plan_id", "plan id of current target (always -1, kept for wire-protocol compatibility)", false);
+	createValue (current_type, "current_type", "type of current target", false);
+	createValue (current_errorbox, "current_errorbox", "current target error box (if any)", false);
+	createValue (current_obsid, "obsid", "ID of observation", false);
+	createValue (current_obsstart, "observation_start", "time when the current observation started", false);
+
+	createValue (objectName, "OBJECT", "target object name", true, RTS2_VALUE_WRITABLE);
+	createValue (pi, "PI", "project investigator of the target", true, RTS2_VALUE_WRITABLE);
+	createValue (program, "PROGRAM", "target program name", true, RTS2_VALUE_WRITABLE);
+
+	createValue (autoLoop, "auto_loop", "if enabled, observation will loop on its own after current script ends", false, RTS2_VALUE_WRITABLE);
+	autoLoop->setValueBool (true);
+
+	createValue (defaultAutoLoop, "default_auto_loop", "default state of auto loop (after execution of a script)", false, RTS2_VALUE_WRITABLE);
+	defaultAutoLoop->setValueBool (true);
+
+	createValue (next_id, "next", "ID of next target", false, RTS2_VALUE_WRITABLE);
+	createValue (next_name, "next_name", "name of next target", false);
+
+	queue = new ExecutorQueue (this, "next", &observer, obs_altitude, -1);
+
+	createValue (img_id, "img_id", "ID of current image", false);
+
+	createValue (exe_timeout, "exe_timeout", "inactivity timeout interval for external scripts", false, RTS2_VALUE_WRITABLE);
+	exe_timeout->setValueDouble (600.0);
+
+	createValue (ignoreDay, "ignore_day", "whenever executor should run in daytime", false, RTS2_VALUE_WRITABLE);
+	ignoreDay->setValueBool (false);
+
+	createValue (grb_sep_limit, "grb_sep_limit", "[deg] when GRB distane is above grb_sep_limit degrees from current position, telescope will be immediatelly slewed to new position", false, RTS2_VALUE_WRITABLE | RTS2_DT_DEG_DIST);
+	grb_sep_limit->setValueDouble (0);
+
+	createValue (grb_min_sep, "grb_min_sep", "[deg] when GRB is below grb_min_sep degrees from current position, telescope will not be slewed", false, RTS2_VALUE_WRITABLE | RTS2_DT_DEG_DIST);
+	grb_min_sep->setValueDouble (0);
+
+	addOption (OPT_IGNORE_DAY, "ignore-day", 0, "observe even during daytime");
+	addOption (OPT_DISABLE_AUTO, "no-auto", 0, "disable autolooping");
+	addOption (OPT_EXE_TIMEOUT, "exe-timeout", 1, "external script inactivity timeout");
+}
+
+Executor::~Executor (void)
+{
+	postEvent (new rts2core::Event (EVENT_KILL_ALL));
+	delete currentTarget;
+	clearNextTargets ();
+	delete queue;
+}
+
+int Executor::processOption (int in_opt)
+{
+	switch (in_opt)
+	{
+		case OPT_IGNORE_DAY:
+			ignoreDay->setValueBool (true);
+			break;
+		case OPT_DISABLE_AUTO:
+			autoLoop->setValueBool (false);
+			defaultAutoLoop->setValueBool (false);
+			break;
+		case OPT_EXE_TIMEOUT:
+			exe_timeout->setValueCharArr (optarg);
+			break;
+		default:
+			return rts2db::DeviceDb::processOption (in_opt);
+	}
+	return 0;
+}
+
+int Executor::init ()
+{
+	int ret = rts2db::DeviceDb::init ();
+	if (ret)
+		return ret;
+
+	setIdleInfoInterval(1);
+
+	return ret;
+}
+
+int Executor::reloadConfig ()
+{
+	int ret;
+	double f;
+	ret = rts2db::DeviceDb::reloadConfig ();
+	if (ret)
+		return ret;
+	observer = config->getObserver ();
+	obs_altitude = config->getObservatoryAltitude ();
+	f = 0;
+	config->getDouble ("grbd", "seplimit", f);
+	grb_sep_limit->setValueDouble (f);
+
+	f = 0;
+	config->getDouble ("grbd", "minsep", f);
+	grb_min_sep->setValueDouble (f);
+
+	return 0;
+}
+
+int Executor::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
+{
+	if (oldValue == enabled && ((rts2core::ValueBool *) newValue)->getValueBool () == false)
+	{
+		stop ();
+		return 0;
+	}
+	if (oldValue == next_id)
+	{
+		return setNext (newValue->getValueInteger ()) ? 0 : -2;
+	}
+	return rts2db::DeviceDb::setValue (oldValue, newValue);
+}
+
+rts2core::DevClient * Executor::createOtherType (rts2core::Connection * conn, int other_device_type)
+{
+	switch (other_device_type)
+	{
+		case DEVICE_TYPE_MOUNT:
+			return new rts2script::DevClientTelescopeExec (conn);
+		case DEVICE_TYPE_CCD:
+			return new rts2script::DevClientCameraExecDb (conn);
+		case DEVICE_TYPE_FOCUS:
+			return new rts2image::DevClientFocusImage (conn);
+		case DEVICE_TYPE_PHOT:
+			return new rts2script::DevClientPhotExec (conn);
+		case DEVICE_TYPE_DOME:
+		case DEVICE_TYPE_SENSOR:
+		case DEVICE_TYPE_ROTATOR:
+			return new rts2image::DevClientWriteImage (conn);
+		default:
+			return rts2db::DeviceDb::createOtherType (conn, other_device_type);
+	}
+}
+
+void Executor::postEvent (rts2core::Event * event)
+{
+	std::string p1, p2;
+	switch (event->getType ())
+	{
+		case EVENT_SLEW_TO_TARGET:
+		case EVENT_SLEW_TO_TARGET_NOW:
+			maskState (EXEC_STATE_MASK, EXEC_MOVE);
+			break;
+		case EVENT_NEW_TARGET:
+			currentTarget->newObsSlew ((struct ln_equ_posn *) event->getArg (), p1, p2, current_plan_id->getValueInteger ());
+			break;
+		case EVENT_CHANGE_TARGET:
+			currentTarget->updateSlew ((struct ln_equ_posn *) event->getArg (), p1, p2, current_plan_id->getValueInteger ());
+			break;
+		case EVENT_NEW_TARGET_HADEC:
+		case EVENT_CHANGE_TARGET_HADEC:
+			{
+				struct ln_equ_posn *posHaDec = (struct ln_equ_posn *) event->getArg ();
+				struct ln_equ_posn pos;
+				pos.ra = ln_get_apparent_sidereal_time ( ln_get_julian_from_sys () ) * 15.0 + observer->lng - posHaDec->ra;
+				pos.dec = posHaDec->dec;
+				if (event->getType () == EVENT_NEW_TARGET_HADEC)
+					currentTarget->newObsSlew (&pos, p1, p2, current_plan_id->getValueInteger ());
+				else
+					currentTarget->updateSlew (&pos, p1, p2, current_plan_id->getValueInteger ());
+			}
+			break;
+		case EVENT_NEW_TARGET_ALTAZ:
+		case EVENT_CHANGE_TARGET_ALTAZ:
+			{
+				struct ln_hrz_posn *hrz = (struct ln_hrz_posn *) event->getArg ();
+				struct ln_equ_posn pos;
+				ln_get_equ_from_hrz (hrz, observer, ln_get_julian_from_sys (), &pos);
+				if (event->getType () == EVENT_NEW_TARGET_ALTAZ)
+					currentTarget->newObsSlew (&pos, p1, p2, current_plan_id->getValueInteger ());
+				else
+					currentTarget->updateSlew (&pos, p1, p2, current_plan_id->getValueInteger ());
+			}
+			break;
+		// EVENT_OBSERVE is send for continues observation
+		case EVENT_OBSERVE:
+		case EVENT_SCRIPT_STARTED:
+			maskState (EXEC_STATE_MASK, EXEC_OBSERVE);
+			break;
+		case EVENT_ACQUIRE_START:
+			maskState (EXEC_STATE_MASK, EXEC_ACQUIRE);
+			break;
+		case EVENT_ACQUIRE_WAIT:
+			maskState (EXEC_STATE_MASK, EXEC_ACQUIRE_WAIT);
+			break;
+		case EVENT_ACQUSITION_END:
+			// we receive event before any connection - connections
+			// receive it from rts2core::Device.
+			// So we can safely change target status here, and it will
+			// propagate to devices connections
+			maskState (EXEC_STATE_MASK, EXEC_OBSERVE);
+			switch (*(int *) event->getArg ())
+			{
+				case NEXT_COMMAND_PRECISION_OK:
+					if (currentTarget)
+					{
+						logStream (MESSAGE_DEBUG) << "NEXT_COMMAND_PRECISION_OK " <<
+							currentTarget->getObsTargetID () << sendLog;
+						currentTarget->acqusitionEnd ();
+					}
+					maskState (EXEC_MASK_ACQ, EXEC_ACQ_OK);
+					break;
+				case -5:
+				case NEXT_COMMAND_PRECISION_FAILED:
+					if (currentTarget)
+						currentTarget->acqusitionFailed ();
+					maskState (EXEC_MASK_ACQ, EXEC_ACQ_FAILED);
+					break;
+			}
+			break;
+		case EVENT_LAST_READOUT:
+			updateScriptCount ();
+			// that was last script running
+			if (scriptCount->getValueInteger () == 0)
+			{
+				maskState (EXEC_STATE_MASK, EXEC_LASTREAD);
+				switchTarget ();
+			}
+			break;
+		case EVENT_SCRIPT_ENDED:
+			updateScriptCount ();
+		#ifdef DEBUG_EXTRA
+			logStream (MESSAGE_DEBUG) <<
+				"EVENT_SCRIPT_ENDED Executor currentTarget " << currentTarget <<
+				" next que  " << queue->size () << sendLog;
+		#endif					 /* DEBUG_EXTRA */
+			if (currentTarget)
+			{
+				if (scriptCount->getValueInteger () == 0
+					&& currentTarget->observationStarted ())
+				{
+					maskState (EXEC_STATE_MASK, EXEC_IDLE);
+					switchTarget ();
+				}
+				else if (scriptCount->getValueInteger () == 0)
+				{
+					logStream (MESSAGE_DEBUG) << "EVENT_SCRIPT_ENDED with observations not started" << sendLog;
+					maskState (EXEC_STATE_MASK, EXEC_IDLE);
+					// FIXME: crude workaround for fixing an unwelcome loop of this target due to not removing it in filterExpired
+					currentTarget->startObservation ();
+
+					switchTarget ();
+				}
+				// scriptCount is not 0, but we hit continues target..
+				else if (currentTarget->isContinues () == 1
+					&& (queue->size () == 0 || queue->front ().target->getTargetID () == currentTarget->getTargetID ())
+					)
+				{
+					// wait, if we are in stop..don't queue it again..
+					if ((getState () & EXEC_MASK_END) != EXEC_END && autoLoop->getValueBool () == true)
+						event->setArg ((void *) currentTarget);
+					// that will eventually hit devclient which post that message, which
+					// will set currentTarget to this value and handle it same way as EVENT_OBSERVE,
+					// which is exactly what we want
+				}
+			}
+			else
+			{
+				maskState (EXEC_STATE_MASK, EXEC_IDLE);
+				if (scriptCount->getValueInteger () == 0)
+					switchTarget ();
+			}
+			break;
+		case EVENT_MOVE_OK:
+			if (waitState)
+			{
+				postEvent (new rts2core::Event (EVENT_CLEAR_WAIT));
+				break;
+			}
+			if (currentTarget)
+				postEvent (new rts2core::Event (EVENT_OBSERVE));
+			break;
+		case EVENT_CORRECTING_OK:
+			if (waitState)
+			{
+				postEvent (new rts2core::Event (EVENT_CLEAR_WAIT));
+			}
+			else
+			{
+				// we aren't waiting, let's observe target again..
+				if (currentTarget)
+					postEvent (new rts2core::Event (EVENT_OBSERVE));
+			}
+			break;
+		case EVENT_MOVE_FAILED:
+			if (*((int *) event->getArg ()) == DEVICE_ERROR_KILL)
+			{
+				break;
+			}
+			postEvent (new rts2core::Event (EVENT_STOP_OBSERVATION));
+			if (waitState)
+			{
+				postEvent (new rts2core::Event (EVENT_CLEAR_WAIT));
+			}
+			else if (currentTarget)
+			{
+				// get us lover priority to prevent moves to such dangerous
+				// position
+				currentTarget->changePriority (-100, ln_get_julian_from_sys () + 12 * (1.0 / 1440.0));
+			}
+			updateScriptCount ();
+			if (scriptCount->getValueInteger () == 0)
+				switchTarget ();
+			break;
+		case EVENT_ENTER_WAIT:
+			waitState = 1;
+			break;
+		case EVENT_CLEAR_WAIT:
+			waitState = 0;
+			break;
+		case EVENT_GET_ACQUIRE_STATE:
+			*((int *) event->getArg ()) =
+				(currentTarget) ? currentTarget->getAcquired () : -2;
+			break;
+		case EVENT_WRITE_TO_IMAGE:
+		case EVENT_WRITE_ONLY_IMAGE:
+		case EVENT_WRITE_TO_IMAGE_ENDS:
+			{
+				// Write self values to image
+				rts2image::CameraImage *ci = (rts2image::CameraImage *) event->getArg ();
+				rts2image::Image *image = ci->image;
+				CondValueVector::iterator iter;
+
+				for (iter = getValuesBegin (); iter != getValuesEnd (); iter++)
+				{
+					rts2core::Value *value = (*iter)->getValue ();
+
+					if (value->getWriteToFits ())
+					{
+						if (event->getType () == EVENT_WRITE_TO_IMAGE ||
+							event->getType () == EVENT_WRITE_ONLY_IMAGE)
+						{
+							if (value->getValueWriteFlags () == RTS2_VWHEN_BEFORE_EXP)
+								image->writeConnValue (NULL, value);
+							value->resetValueChanged ();
+						}
+						else if (event->getType () == EVENT_WRITE_TO_IMAGE_ENDS)
+						{
+							if (value->writeWhenChanged ())
+								image->recordChange (NULL, value);
+						}
+					}
+				}
+
+				break;
+			}
+		case EVENT_SET_TARGET:
+		case EVENT_SET_TARGET_NOT_CLEAR:
+		case EVENT_SET_TARGET_KILL:
+		case EVENT_SET_TARGET_KILL_NOT_CLEAR:
+			objectName->setValueString (currentTarget->getTargetName ());
+			pi->setValueString(currentTarget->getPIName ());
+			program->setValueString (currentTarget->getProgramName ());
+			sendValueAll (objectName);
+			sendValueAll (pi);
+			sendValueAll (program);
+			break;
+	}
+	rts2db::DeviceDb::postEvent (event);
+}
+
+void Executor::deviceReady (rts2core::Connection * conn)
+{
+	if (currentTarget)
+		conn->postEvent (new rts2core::Event (EVENT_SET_TARGET, (void *) currentTarget));
+}
+
+int Executor::info ()
+{
+  	char buf[2];
+	updateScriptCount ();
+	if (currentTarget)
+	{
+		current_id->setValueInteger (currentTarget->getObsTargetID ());
+		current_id_sel->setValueInteger (currentTarget->getTargetID ());
+		buf[0] = currentTarget->getTargetType ();
+		buf[1] = '\0';
+		current_type->setValueCharArr (buf);
+		current_errorbox->setValueDouble (currentTarget->getErrorBox ());
+		current_name->setValueCharArr (currentTarget->getTargetName ());
+		img_id->setValueInteger (currentTarget->getCurrImgId ());
+		if (current_obsid->getValueInteger () != currentTarget->getObsId ())
+		{
+			current_obsid->setValueInteger (currentTarget->getObsId ());
+			current_obsstart->setNow ();
+		}
+	}
+	else
+	{
+		current_id->setValueInteger (-1);
+		current_id_sel->setValueInteger (-1);
+		current_plan_id->setValueInteger (-1);
+		current_errorbox->setValueDouble (NAN);
+		current_name->setValueCharArr (NULL);
+		img_id->setValueInteger (-1);
+		current_obsid->setValueInteger (-1);
+	}
+
+
+	if (queue->empty ())
+	{
+		next_id->setValueInteger (-1);
+		next_name->setValueCharArr (NULL);
+	}
+	else
+	{
+		next_id->setValueInteger (queue->front ().target->getTargetID ());
+		next_name->setValueCharArr (queue->front ().target->getTargetName ());
+	}
+
+	return rts2db::DeviceDb::info ();
+}
+
+void Executor::changeMasterState (rts2_status_t old_state, rts2_status_t new_state)
+{
+	if (ignoreDay->getValueBool () == true)
+		return rts2db::DeviceDb::changeMasterState (old_state, new_state);
+
+	switch (new_state & (SERVERD_STATUS_MASK | SERVERD_ONOFF_MASK))
+	{
+		case SERVERD_NIGHT:
+		case SERVERD_MORNING:
+		case SERVERD_EVENING:
+		case SERVERD_DAWN:
+		case SERVERD_DUSK:
+			// unblock stop state
+			if ((getState () & EXEC_MASK_END) == EXEC_END)
+				maskState (EXEC_MASK_END, EXEC_NOT_END);
+			if (!currentTarget && queue->size () != 0)
+				switchTarget ();
+			break;
+		default:
+			// we need to stop observation that is continuus
+			// that will guarantie that in isContinues call, we will not queue our target again
+			stop ();
+			break;
+	}
+	return rts2db::DeviceDb::changeMasterState (old_state, new_state);
+}
+
+int Executor::setNext (int nextId)
+{
+	if (queue->size () != 0)
+	{
+		if (queue->front ().target->getTargetID () == nextId)
+			// asked for same target
+			return 0;
+		clearNextTargets ();
+	}
+	return queueTarget (nextId);
+}
+
+int Executor::queueTarget (int tarId, double t_start, double t_end)
+{
+	try
+	{
+		rts2db::Target *nt = createTarget (tarId, observer, obs_altitude);
+		if (!nt)
+			return -2;
+		queue->addTarget (nt, t_start, t_end);
+		if (!currentTarget)
+			return switchTarget () == 0 ? 0 : -2;
+		else
+			infoAll ();
+	}
+	catch (rts2core::Error &ex)
+	{
+		logStream (MESSAGE_ERROR) << "cannot queue target with ID " << tarId << " :" << ex << sendLog;
+		return -2;
+	}
+	return 0;
+}
+
+int Executor::setNow (int nextId)
+{
+	rts2db::Target *newTarget;
+
+	if (!currentTarget)
+		return setNext (nextId);
+
+	try
+	{
+		newTarget = createTarget (nextId, observer, obs_altitude);
+		if (!newTarget)
+			// error..
+			return -2;
+		return setNow (newTarget);
+	}
+	catch (rts2core::Error &er)
+	{
+		logStream (MESSAGE_ERROR) << "cannot set now target with ID " << nextId << " : " << er << sendLog;
+		return -2;
+	}
+}
+
+int Executor::setNow (rts2db::Target * newTarget)
+{
+	if (currentTarget)
+	{
+		logStream (INFO_OBSERVATION_INTERRUPTED | MESSAGE_INFO) << currentTarget->getObsId () << " " << currentTarget->getTargetID () << " " << currentTarget->getPlanId () << sendLog;
+		currentTarget->endObservation (-1);
+		processTarget (currentTarget);
+	}
+	currentTarget = newTarget;
+	current_plan_id->setValueInteger (-1);
+	sendValueAll (current_plan_id);
+
+	// at this situation, we would like to get rid of nextTarget as
+	// well
+	clearNextTargets ();
+
+	clearAll ();
+	postEvent (new rts2core::Event (EVENT_SET_TARGET_KILL, (void *) currentTarget));
+	postEvent (new rts2core::Event (EVENT_SLEW_TO_TARGET_NOW, (void *) current_plan_id));
+
+	infoAll ();
+
+	struct ln_equ_posn pos;
+	currentTarget->getPosition (&pos);
+
+	logStream (MESSAGE_INFO) << "executing now target " << currentTarget->getTargetName () << "(#" << currentTarget->getTargetID () << ") at RA DEC " << LibnovaRaDec (&pos) << sendLog;
+	return 0;
+}
+
+int Executor::setGrb (int grbId)
+{
+	rts2db::Target *grbTarget = NULL;
+	int ret;
+
+	// is during night and ready?
+	if (!(getMasterState () == SERVERD_NIGHT || getMasterState () == SERVERD_DUSK || getMasterState () == SERVERD_DAWN))
+	{
+		logStream (MESSAGE_DEBUG) << "daylight / not on state GRB ignored" << sendLog;
+		return -2;
+	}
+	try
+	{
+		if (rts2core::Configuration::instance ()->grbdValidity () == 0)
+		{
+			logStream (MESSAGE_INFO) << "GRBs has 0 validity period, grb command ignored for GRB with target id " << grbId << sendLog;
+			return 0;
+		}
+		grbTarget = createTarget (grbId, observer, obs_altitude);
+
+		if (!grbTarget)
+			return -2;
+
+		double JD = ln_get_julian_from_sys ();
+
+		if (grbTarget->checkConstraints (JD) == false)
+		{
+			logStream (MESSAGE_INFO) << "GRB " << grbTarget->getTargetName () << " (" << grbTarget->getTargetID () << ") does not meet constraints: violated " << grbTarget->getViolatedConstraints (JD).toString () << ", satisfied " << grbTarget->getSatisfiedConstraints (JD).toString () << sendLog;
+			delete grbTarget;
+			return -2;
+		}
+
+		if (grbTarget->isAboveHorizon (JD) == false)
+		{
+			logStream (MESSAGE_INFO) << "GRB " << grbTarget->getTargetName () << " (" << grbTarget->getTargetID () << ") is not visible, ignoring GRB request" << sendLog;
+			delete grbTarget;
+			return -2;
+		}
+
+		// if we're already disabled, don't execute us
+		if (grbTarget->getTargetEnabled () == false)
+		{
+			logStream (MESSAGE_INFO)
+				<< "ignored execution request for GRB target " << grbTarget->getTargetName ()
+				<< " (# " << grbTarget->getObsTargetID () << ") because this target is disabled" << sendLog;
+			delete grbTarget;
+			return 0;
+		}
+		if (!currentTarget)
+		{
+			return setNow (grbTarget);
+		}
+
+		if (currentTarget->getTargetType () == TYPE_GRB && grbTarget->getTargetType () == TYPE_GRB)
+		{
+			// targets closer than 5 minutes are probably same GRBs. Then choose one with lower error box
+			if (fabs (((rts2db::TargetGRB *) grbTarget)->getGrbDate () - ((rts2db::TargetGRB *) currentTarget)->getGrbDate ()) < 300)
+			{
+				if (((rts2db::TargetGRB *) grbTarget)->getErrorBox () > ((rts2db::TargetGRB *) currentTarget)->getErrorBox ())
+				{
+					logStream (MESSAGE_INFO) << "GRB targets " << grbTarget->getTargetID () << " and " << currentTarget->getTargetID () << ", errors " << ((rts2db::TargetGRB *) grbTarget)->getErrorBox () << " and " << ((rts2db::TargetGRB *) currentTarget)->getErrorBox () << " are probably same, ignoring update" << sendLog;
+					delete grbTarget;
+					return 0;
+				}
+			}
+		}
+		// it's not same..
+		ret = grbTarget->compareWithTarget (currentTarget, grb_sep_limit->getValueDouble ());
+		if (ret == 0)
+		{
+			return setNow (grbTarget);
+		}
+		// if that's only few arcsec update, don't change
+		ret = grbTarget->compareWithTarget (currentTarget, grb_min_sep->getValueDouble ());
+		if (ret == 1)
+		{
+			logStream (MESSAGE_INFO) << "GRB update for target " << grbTarget->getTargetName () << " (#"
+				<< grbTarget->getObsTargetID () << ") ignored, as its distance from current target "
+				<< currentTarget->getTargetName () << " (#" << currentTarget->getObsTargetID ()
+				<< ") is below separation limit of " << LibnovaDegDist (grb_min_sep->getValueDouble ())
+				<< "." << sendLog;
+			delete grbTarget;
+			return 0;
+		}
+		// otherwise set us as next target
+		clearNextTargets ();
+		queue->addTarget (grbTarget);
+		return 0;
+	}
+	catch (rts2core::Error &er)
+	{
+		logStream (MESSAGE_ERROR) << "cannot set grb target with ID " << grbId << " :" << er << sendLog;
+		delete grbTarget;
+		return -2;
+	}
+}
+
+int Executor::setShower ()
+{
+	// is during night and ready?
+	if (!(getMasterState () == SERVERD_NIGHT))
+	{
+		logStream (MESSAGE_DEBUG) << "daylight shower ignored" << sendLog;
+		return -2;
+	}
+
+	if (currentTarget
+	    && currentTarget->getTargetType() == TYPE_AUGER)
+	{
+		logStream (MESSAGE_DEBUG) << "another shower is being observed, ignoring" << sendLog;
+		return -2;
+	}
+	return setNow (TARGET_SHOWER);
+}
+
+int Executor::skip ()
+{
+	info ();
+	if (next_id->getValueInteger () < 0)
+		return -2;
+	return setNow (next_id->getValueInteger ());
+}
+
+int Executor::stop ()
+{
+	logStream (MESSAGE_DEBUG) << "****** stop ()" << sendLog;
+	clearNextTargets ();
+	postEvent (new rts2core::Event (EVENT_KILL_ALL));
+	postEvent (new rts2core::Event (EVENT_STOP_OBSERVATION));
+	updateScriptCount ();
+	if (scriptCount->getValueInteger () == 0)
+		switchTarget ();
+	return 0;
+}
+
+void Executor::clearNextTargets ()
+{
+	queue->setCurrentTarget (currentTarget);
+  	queue->clearNext ();
+	sendValueAll (next_id);
+	sendValueAll (next_name);
+	logStream (MESSAGE_DEBUG) << "cleared list of next targets" << sendLog;
+
+	// switch auto loop back to default value
+	if (autoLoop->getValueBool () != defaultAutoLoop->getValueBool ())
+	{
+		logStream (MESSAGE_INFO) << "resetting auto_loop back to " << defaultAutoLoop->getValueBool () << sendLog;
+		autoLoop->setValueBool (defaultAutoLoop->getValueBool ());
+		sendValueAll (autoLoop);
+	}
+}
+
+void Executor::doSwitch ()
+{
+	int ret;
+	int nextId;
+	// make sure queue is configured for target change
+	queue->setCurrentTarget (currentTarget);
+	queue->beforeChange (getNow ());
+	// we need to change current target - usefull for planner runs
+	if (currentTarget && currentTarget->isContinues () == 2 && (queue->size () == 0 || queue->front ().target->getTargetID () == currentTarget->getTargetID ()))
+	{
+		// create again our target..since conditions changed, we will get different target id
+		queue->addFront (createTarget (currentTarget->getTargetID (), observer, obs_altitude));
+	}
+	// log loop if the next target will be the same
+	if (currentTarget && ((queue->size () > 0 && queue->front ().target->getTargetID () == currentTarget->getTargetID ())
+		|| (autoLoop->getValueBool () == true && queue->size () == 0)))
+	{
+		logStream (MESSAGE_INFO | INFO_OBSERVATION_LOOP) << currentTarget->getObsId () << " " << currentTarget->getTargetID () << sendLog;
+	}
+
+	if (autoLoop->getValueBool () == false && currentTarget && currentTarget->observationStarted ())
+	{
+		// don't execute already started observation, if auto loop is off
+		currentTarget = NULL;
+		current_plan_id->setValueInteger (-1);
+	}
+
+	// switch auto loop back to default value
+	// FIXME: the same code as in clearNextTargets, probably refactor it to some function?..
+	if (autoLoop->getValueBool () != defaultAutoLoop->getValueBool ())
+	{
+		logStream (MESSAGE_INFO) << "resetting auto_loop back to " << defaultAutoLoop->getValueBool () << sendLog;
+		autoLoop->setValueBool (defaultAutoLoop->getValueBool ());
+		sendValueAll (autoLoop);
+	}
+
+	if (queue->size () != 0)
+	{
+		// go to post-process
+		if (currentTarget)
+		{
+			// next target is defined - tested on line -5
+			nextId = queue->front ().target->getTargetID ();
+			ret = currentTarget->endObservation (nextId);
+			if (!(ret == 1 && nextId == currentTarget->getTargetID ()))
+				// don't queue only in case nextTarget and currentTarget are
+				// same and endObservation returns 1
+			{
+				processTarget (currentTarget);
+				currentTarget = queue->front ().target;
+			}
+		}
+		else
+		{
+			currentTarget = queue->front ().target;
+		}
+		current_plan_id->setValueInteger (-1);
+		sendValueAll (current_plan_id);
+	}
+	if (currentTarget)
+	{
+		// send script_ends to all devices..
+		queAll (new rts2core::CommandScriptEnds (this));
+		postEvent (new rts2core::Event (EVENT_SET_TARGET, (void *) currentTarget));
+		postEvent (new rts2core::Event (EVENT_SLEW_TO_TARGET, (void *) current_plan_id));
+	}
+}
+
+int Executor::switchTarget ()
+{
+	// Remove script temporary values from executor
+	deleteTemporaryValues ();
+
+	if (enabled->getValueBool () == false)
+	{
+		clearNextTargets ();
+		logStream (MESSAGE_WARNING) << "please switch executor to enabled to allow it carrying observations" << sendLog;
+		return -1;
+	}
+
+	if (((getState () & EXEC_MASK_END) == EXEC_END)
+		|| (autoLoop->getValueBool () == false && queue->size () == 0))
+	{
+		maskState (EXEC_MASK_END, EXEC_NOT_END);
+		if (autoLoop->getValueBool () == true)
+			postEvent (new rts2core::Event (EVENT_KILL_ALL));
+
+		if (currentTarget)
+		{
+			currentTarget->endObservation (-1);
+			processTarget (currentTarget);
+		}
+		currentTarget = NULL;
+		clearNextTargets ();
+	}
+	else if (ignoreDay->getValueBool () == true)
+	{
+		doSwitch ();
+	}
+	else
+	{
+		// we will not observe during daytime..
+		switch (getMasterState ())
+		{
+			case SERVERD_EVENING:
+			case SERVERD_DUSK:
+			case SERVERD_NIGHT:
+			case SERVERD_DAWN:
+				doSwitch ();
+				break;
+			default:
+				if (currentTarget)
+				{
+					currentTarget->endObservation (-1);
+					processTarget (currentTarget);
+				}
+				currentTarget = NULL;
+				clearNextTargets ();
+				logStream (MESSAGE_ERROR) << "system not in ON state, and ignore_day in EXECutor is not set - not changing the target" << sendLog;
+				return -1;
+		}
+	}
+	infoAll ();
+	return 0;
+}
+
+void Executor::processTarget (rts2db::Target * in_target)
+{
+	int ret;
+	// test for final acq..
+	switch (in_target->getAcquired ())
+	{
+		case 1:
+			acqusitionOk->inc ();
+			break;
+		case -1:
+			acqusitionFailed->inc ();
+			break;
+	}
+	logStream (INFO_OBSERVATION_END | MESSAGE_INFO) << in_target->getObsId () << " " << in_target->getTargetID () << " " << in_target->getPlanId () << sendLog;
+	ret = in_target->postprocess ();
+	if (!ret)
+		targetsQue.push_back (in_target);
+	else
+		delete in_target;
+}
+
+void Executor::updateScriptCount ()
+{
+	int scriptRunning = 0;
+	postEvent (new rts2core::Event (EVENT_SCRIPT_RUNNING_QUESTION, (void *) &scriptRunning));
+	scriptCount->setValueInteger (scriptRunning);
+}
+
+int Executor::commandAuthorized (rts2core::Connection * conn)
+{
+	int tar_id;
+	if (conn->isCommand ("grb"))
+	{
+		// change observation if we are to far from GRB position..
+		if (conn->paramNextInteger (&tar_id) || !conn->paramEnd ())
+			return -2;
+		return setGrb (tar_id);
+	}
+	else if (conn->isCommand ("shower"))
+	{
+		if (!conn->paramEnd ())
+			return -2;
+		return setShower ();
+	}
+	else if (conn->isCommand ("now"))
+	{
+		// change observation imediatelly - in case of burst etc..
+		if (conn->paramNextInteger (&tar_id) || !conn->paramEnd ())
+			return -2;
+		return setNow (tar_id);
+	}
+	else if (conn->isCommand ("now_single"))
+	{
+		if (conn->paramNextInteger (&tar_id) || !conn->paramEnd ())
+			return -2;
+		return setNow (tar_id);
+	}
+	else if (conn->isCommand ("queue"))
+	{
+		int failed = 0;
+		while (!conn->paramEnd ())
+		{
+			if (conn->paramNextInteger (&tar_id))
+			{
+				failed++;
+				continue;
+			}
+			int ret = queueTarget (tar_id);
+			if (ret)
+				failed++;
+		}
+		return failed == 0 ? 0 : -2;
+	}
+	else if (conn->isCommand ("queue_at"))
+	{
+		int failed = 0;
+		double t_start;
+		double t_end;
+		while (!conn->paramEnd ())
+		{
+			if (conn->paramNextInteger (&tar_id) || conn->paramNextDouble (&t_start) || conn->paramNextDouble (&t_end))
+			{
+				failed++;
+				continue;
+			}
+			int ret = queueTarget (tar_id, t_start, t_end);
+			if (ret)
+				failed++;
+		}
+		return failed == 0 ? 0 : -2;
+	}
+	else if (conn->isCommand ("next"))
+	{
+		if (conn->paramNextInteger (&tar_id) || !conn->paramEnd ())
+			return -2;
+		return setNext (tar_id);
+	}
+	else if (conn->isCommand ("skip"))
+	{
+		if (!conn->paramEnd ())
+			return -2;
+		return skip ();
+	}
+	else if (conn->isCommand ("end"))
+	{
+		if (!conn->paramEnd ())
+			return -2;
+		return end ();
+	}
+	else if (conn->isCommand ("stop"))
+	{
+		if (!conn->paramEnd ())
+			return -2;
+		end ();
+		return stop ();
+	}
+	else if (conn->isCommand ("clear"))
+	{
+		if (!conn->paramEnd ())
+		  	return -2;
+		clearNextTargets ();
+		return 0;
+	}
+	else if (conn->isCommand ("write_headers"))
+	{
+		char *imgn;
+		if (conn->paramNextString (&imgn) || !conn->paramEnd ())
+			return -2;
+		rts2image::Image image;
+		image.openFile (imgn, false, true);
+		postEvent (new rts2core::Event (EVENT_WRITE_ONLY_IMAGE, (void *) &image));
+		image.saveImage ();
+		return 0;
+	}
+	else if (conn->isCommand ("correction_info"))
+	{
+		char *telescope_name;
+		int corr_mark, corr_img, corr_obs;
+		int imgId, obsId;
+		double ra_err, dec_err, pos_err;
+
+		if (conn->paramNextString (&telescope_name)
+			|| conn->paramNextInteger (&corr_mark) || conn->paramNextInteger (&corr_img) || conn->paramNextInteger (&corr_obs)
+			|| conn->paramNextInteger (&imgId) || conn->paramNextInteger (&obsId)
+			|| conn->paramNextDouble (&ra_err) || conn->paramNextDouble (&dec_err) || conn->paramNextDouble (&pos_err)
+			|| !conn->paramEnd ())
+			return -2;
+
+		// We should not correct if we are not inside an observing sequence
+		if ((getState () & EXEC_STATE_MASK) != EXEC_MOVE &&
+			(getState () & EXEC_STATE_MASK) != EXEC_OBSERVE &&
+			(getState () & EXEC_STATE_MASK) != EXEC_ACQUIRE)
+			return DEVDEM_E_IGNORE;
+
+		rts2core::Connection *telConn = findName (telescope_name);
+
+		if (telConn)
+			telConn->queCommand (new rts2core::CommandCorrect (this, corr_mark, corr_img, corr_obs, imgId, obsId, ra_err, dec_err, pos_err));
+
+		return 0;
+	}
+	return rts2db::DeviceDb::commandAuthorized (conn);
+}
+
+int main (int argc, char **argv)
+{
+	Executor executor (argc, argv);
+	return executor.run ();
+}

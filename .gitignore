@@ -1,0 +1,24 @@
+# Local build output (each subtree builds out-of-source into these)
+build/
+obj-x86_64-linux-gnu/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Debian package build artifacts (debuild/dpkg-buildpackage output lands
+# one level up from debian/, i.e. at the subtree root)
+*.deb
+*.ddeb
+*.buildinfo
+*.changes
+
+# debhelper staging/log output inside debian/ (each subtree has its own
+# debian/ one level down, hence **/ - only control, rules, changelog,
+# compat, source/ etc. are actual packaging source)
+**/debian/.debhelper/
+**/debian/*.debhelper.log
+**/debian/*.debhelper
+**/debian/*.substvars
+**/debian/debhelper-build-stamp
+**/debian/files
+**/debian/rts2-*/

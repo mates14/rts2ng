@@ -1,0 +1,104 @@
+#!/bin/sh
+# postinst for rts2-db.
+#
+# Provisions a local 'stars' database only on a genuinely fresh install -
+# an already-present database (a site's existing manual D50/SBT-style
+# setup, or a reinstall/upgrade) is detected and left completely alone.
+# Deliberately more conservative than the db/sql/rts2-testdb-create dev
+# tool it's modeled on: the 'rts2' Postgres role gets LOGIN only, never
+# CREATEDB/CREATEROLE - schema creation runs as the postgres superuser, and
+# the app role reaches everything through the existing "GRANT ... TO GROUP
+# observers" mechanism already baked into sql/grant.sql.
+#
+# Never touches rts2-configdb (camera/mount/filter setup is site-specific,
+# left to the admin - see the message printed at the end).
+#
+# rts2-executor has no systemd unit of its own - it runs through
+# rts2-base's existing rts2-start/rts2@.service mechanism, exactly like
+# every device (a standalone Type=simple unit was tried first and didn't
+# work: it bypassed --server auto-injection from /etc/rts2/centrald and
+# the --run-as privilege-drop rts2-start already provides, and doesn't
+# match how rts2-base's own units track a forking daemon - see
+# db/STATUS.md). /etc/rts2/services is a conffile owned by rts2-base,
+# so this postinst appends its line idempotently rather than shipping its
+# own copy of that file. Still never enables/starts anything - same
+# reasoning as rts2-base's own units: don't auto-start something that can
+# command real telescopes/cameras.
+
+set -e
+
+RTS2_DB_USER=rts2
+RTS2_DB_NAME=stars
+RTS2_SQL_DIR=/usr/share/rts2-db/sql
+RTS2_SERVICES_FILE=/etc/rts2/services
+
+case "$1" in
+    configure)
+        if ! getent passwd "$RTS2_DB_USER" >/dev/null; then
+            adduser --system --group --no-create-home \
+                --shell /usr/sbin/nologin "$RTS2_DB_USER"
+        fi
+
+        # rts2-executor (running as $RTS2_DB_USER) is what actually writes
+        # FITS files, using the [observatory] base_path que_path/archive_path/
+        # etc. macros expand against (rts2-base's packaged rts2.ini points
+        # base_path here; an existing customized rts2.ini needs this added
+        # by hand - see base/packaging/rts2.ini). The code default
+        # (/images/) is root-owned and silently unwritable otherwise - found
+        # via a live install where images just never appeared, no error
+        # logged (see the matching fitsfile.cpp fix).
+        mkdir -p /var/lib/rts2/images
+        chown "$RTS2_DB_USER:$RTS2_DB_USER" /var/lib/rts2/images
+
+        if command -v pg_lsclusters >/dev/null 2>&1 && pg_lsclusters --no-header 2>/dev/null | grep -q .; then
+            if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname = '$RTS2_DB_USER'\"" | grep -q 1; then
+                su postgres -c "createuser --login $RTS2_DB_USER"
+            fi
+
+            if su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname = '$RTS2_DB_NAME'\"" | grep -q 1; then
+                echo "rts2-db: database '$RTS2_DB_NAME' already exists - leaving it untouched."
+            else
+                echo "rts2-db: creating database '$RTS2_DB_NAME' ..."
+                su postgres -c "createdb $RTS2_DB_NAME"
+                su postgres -c "cd $RTS2_SQL_DIR && ./rts2-builddb -A $RTS2_DB_NAME"
+            fi
+
+            # Idempotent either way - a fresh DB needs it, and it's harmless
+            # to re-grant on a pre-existing one that already has it.
+            su postgres -c "psql $RTS2_DB_NAME -c 'GRANT observers TO $RTS2_DB_USER;'" || \
+                echo "rts2-db: could not GRANT observers TO $RTS2_DB_USER - if '$RTS2_DB_NAME' predates this package and has no 'observers' group, grant appropriate access to '$RTS2_DB_USER' manually." >&2
+        else
+            echo "rts2-db: no local PostgreSQL cluster detected - skipping database provisioning." >&2
+            echo "rts2-db: point rts2-executor at a remote database yourself (see rts2-executor --help)." >&2
+        fi
+
+        if [ -f "$RTS2_SERVICES_FILE" ] && ! grep -q "^executor[[:space:]]" "$RTS2_SERVICES_FILE"; then
+            {
+                echo ""
+                echo "# Added by rts2-db - --run-as drops root to the rts2 system user"
+                echo "# after the daemon has forked and created its lock file, so it"
+                echo "# can reach the database via Postgres peer auth."
+                printf 'executor\tEXEC\t--run-as %s\n' "$RTS2_DB_USER"
+            } >> "$RTS2_SERVICES_FILE"
+            echo "rts2-db: added an 'executor' line to $RTS2_SERVICES_FILE."
+        fi
+
+        echo "rts2-db: next steps - register your camera/mount/filters with:"
+        echo "  sudo -u $RTS2_DB_USER $RTS2_SQL_DIR/rts2-configdb $RTS2_DB_NAME -c <camera> -t <mount> -f <filter>"
+        echo "then create targets with rts2-newtarget/rts2-target, and start the"
+        echo "executor yourself when ready with:"
+        echo "  sudo systemctl enable --now rts2@EXEC.service"
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

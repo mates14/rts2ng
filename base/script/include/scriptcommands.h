@@ -1,0 +1,81 @@
+/*
+ * Commands which can be used in scripts
+ * Copyright (C) 2003-2007 Petr Kubanek <petr@kubanek.net>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ */
+
+// base note: classic tree has this at include/rts2db/scriptcommands.h,
+// despite the rts2db-suggesting path it's a pure #define constants file
+// with zero database linkage - flattened here to script/include/ since
+// it's exclusively used by the script engine.
+
+#pragma once
+
+/**
+ * @file This file list commands which can be introduced to script.
+ *
+ * @author Petr Kubanek <petr@kubanek.net>
+ */
+
+#define COMMAND_SEQUENCE        "SEQUENCE"
+#define COMMAND_IMAGE           "I"
+#define COMMAND_EXPOSURE        "E"
+#define COMMAND_DARK            "D"
+/**
+ * Command to start SHIFT sequence on CCD
+ */
+#define COMMAND_SHIFTSTART      "STARTSHIFT"
+#define COMMAND_SHIFTPROGRESS   "DOSHIFT"
+#define COMMAND_SHIFTEND        "ENDSHIFT"
+#define COMMAND_CHANGE          "C"
+#define COMMAND_BOX             "BOX"
+#define COMMAND_CENTER          "CENTER"
+// must be paired with COMMAND_CHANGE
+#define COMMAND_WAIT            "W"
+#define COMMAND_ACQUIRE         "A"
+#define COMMAND_WAIT_ACQUIRE    "Aw"
+#define COMMAND_PHOTOMETER      "P"
+#define COMMAND_BLOCK_WAITSIG   "block_waitsig"
+#define COMMAND_BLOCK_ACQ       "ifacq"
+#define COMMAND_BLOCK_ELSE      "else"
+#define COMMAND_BLOCK_FOR       "for"
+#define COMMAND_BLOCK_WHILE     "while"
+#define COMMAND_BLOCK_DO        "do"
+#define COMMAND_BLOCK_ONCE      "once"
+#define COMMAND_WAIT_SOD        "waitsod"
+#define COMMAND_WAITFOR         "waitfor"
+#define COMMAND_SLEEP           "sleep"
+#define COMMAND_WAIT_FOR_IDLE   "wait_idle"
+#define COMMAND_EXE             "exe"
+#define COMMAND_COMMAND         "cmd"
+
+// hex pattern
+#define COMMAND_HEX             "hex"
+// 5x5 pattern
+#define COMMAND_FXF             "fxf"
+// spiral pattern
+#define COMMAND_SPIRAL          "spiral"
+
+// signal handling..
+#define COMMAND_SEND_SIGNAL     "SS"
+#define COMMAND_WAIT_SIGNAL     "SW"
+
+// target operations
+#define COMMAND_TARGET_DISABLE  "tardisable"
+#define COMMAND_TAR_TEMP_DISAB  "tempdisable"
+#define COMMAND_TARGET_BOOST    "tarboost"
+
+#define COMMAND_LOOP_DISABLE    "loopdisable"

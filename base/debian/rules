@@ -1,0 +1,95 @@
+#!/usr/bin/make -f
+
+# base note: no CMakeLists.txt in this tree has install() rules yet (see
+# base/STATUS.md's Debian-packaging section) - adding them properly means
+# touching ~30 individual driver CMakeLists.txt files, a separate future
+# cleanup. For now dh_auto_install is overridden to copy build output
+# directly, a standard technique for upstream trees without polished
+# install() support.
+#
+# BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR point at the proprietary vendor
+# SDKs as they exist on this build host - adjust for a different builder
+# (or drop them to build rts2-base without the gxccd/FLI camera drivers).
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+BASE_GXCCD_SDK_DIR ?= /home/mates/libgxccd-0.9.0
+BASE_FLI_SDK_DIR ?= /home/mates/src/fliusb/libfli
+
+BUILDDIR = obj-$(DEB_HOST_MULTIARCH)
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=$(BUILDDIR)
+
+override_dh_auto_configure:
+	dh_auto_configure --buildsystem=cmake --builddirectory=$(BUILDDIR) -- \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DBASE_GXCCD_SDK_DIR=$(BASE_GXCCD_SDK_DIR) \
+		-DBASE_FLI_SDK_DIR=$(BASE_FLI_SDK_DIR)
+
+# Binaries this package ships: centrald, rts2-mon, scriptexec, and every
+# driver that builds without a bundled proprietary shared library (see
+# debian/control). rts2-camd-andor (vendor SDK is .so-only) and
+# rts2-teld-paramount (libmks3 not vendored, informal non-redistribution
+# understanding on the source) are deliberately excluded even if a build
+# host happens to have BASE_ANDOR_SDK_DIR/BASE_PARACL_DIR set.
+RTS2_BASE_BINARIES = \
+	centrald/rts2-centrald \
+	monitor/rts2-mon \
+	scriptexec/rts2-scriptexec \
+	camd/dummy/rts2-camd-dummy \
+	camd/fli/rts2-camd-fli \
+	camd/gxccd/rts2-camd-gxccd \
+	teld/dummy/rts2-teld-dummy \
+	teld/d50/rts2-teld-d50 \
+	teld/gemini/rts2-teld-gemini \
+	teld/lx200/rts2-teld-lx200 \
+	focusd/dummy/rts2-focusd-dummy \
+	focusd/tefo/rts2-focusd-tefo \
+	focusd/aaf/rts2-focusd-aaf \
+	focusd/optec/rts2-focusd-optec \
+	focusd/nstep/rts2-focusd-nstep \
+	focusd/fli/rts2-focusd-fli \
+	filterd/dummy/rts2-filterd-dummy \
+	filterd/fli/rts2-filterd-fli \
+	sensord/system/rts2-sensor-system \
+	sensord/nut/rts2-sensor-nut \
+	sensord/cloud4/rts2-sensor-cloud4 \
+	sensord/bart-rain/rts2-sensor-bart-rain \
+	sensord/aws-mlab/rts2-sensor-aws-mlab \
+	sensord/d50-wfunit/rts2-sensor-d50-wfunit \
+	sensord/fram-weather/rts2-sensor-fram-weather \
+	sensord/avelab/rts2-sensor-avelab \
+	sensord/windrs/rts2-sensor-windrs \
+	sensord/external/rts2-sensor-external \
+	dome/d50/rts2-dome-d50 \
+	dome/bart/rts2-dome-bart \
+	dome/zelio/rts2-dome-zelio
+
+override_dh_auto_install:
+	install -d debian/rts2-base/usr/bin
+	for b in $(RTS2_BASE_BINARIES); do \
+		install -m 0755 $(BUILDDIR)/$$b debian/rts2-base/usr/bin/; \
+	done
+	install -m 0755 $(BUILDDIR)/packaging/rts2-start debian/rts2-base/usr/bin/
+	install -m 0755 $(BUILDDIR)/packaging/rts2-stop debian/rts2-base/usr/bin/
+	install -d debian/rts2-base/etc/rts2
+	install -m 0644 $(BUILDDIR)/packaging/rts2.ini debian/rts2-base/etc/rts2/rts2.ini
+	install -m 0644 $(BUILDDIR)/packaging/centrald debian/rts2-base/etc/rts2/centrald
+	install -m 0644 $(BUILDDIR)/packaging/devices debian/rts2-base/etc/rts2/devices
+	install -m 0644 $(BUILDDIR)/packaging/services debian/rts2-base/etc/rts2/services
+	install -d debian/rts2-base/lib/systemd/system
+	install -m 0644 $(BUILDDIR)/packaging/rts2.service debian/rts2-base/lib/systemd/system/rts2.service
+	install -m 0644 "$(BUILDDIR)/packaging/rts2@.service" "debian/rts2-base/lib/systemd/system/rts2@.service"
+	install -d debian/rts2-base/etc/rsyslog.d debian/rts2-base/etc/logrotate.d
+	install -m 0644 packaging/rts2-rsyslog.conf debian/rts2-base/etc/rsyslog.d/49-rts2.conf
+	install -m 0644 packaging/rts2-logrotate.conf debian/rts2-base/etc/logrotate.d/rts2-base
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start rts2.service
+	dh_installsystemd --no-enable --no-start "rts2@.service"
+
+# No CMake test target exercises real hardware, and kernel/tests requires
+# a from-scratch full build - dh_auto_test would just rebuild everything
+# again under ctest for no benefit at package-build time.
+override_dh_auto_test:

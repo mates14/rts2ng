@@ -1,0 +1,29 @@
+rts2-base (0.1.0-2) UNRELEASED; urgency=medium
+
+  * packaging/rts2.ini: set [observatory] base_path explicitly to
+    /var/lib/rts2/images/ (rts2-db's postinst creates and owns this
+    directory). The code default of "/images/" when unset is root-owned
+    and unwritable by the "rts2" user rts2-executor runs as - found via a
+    live install where image writes were silently failing (no error
+    logged - see the matching fitsfile.cpp fix). Only affects fresh
+    installs of this conffile; existing customized rts2.ini files are
+    untouched by design (standard conffile handling) and need the line
+    added by hand.
+  * kernel/src/fitsfile.cpp: FitsFile::createImage() logged an error on
+    every failure path except mkpath() failing - added the missing
+    logStream() call so a bad image base path fails loudly instead of
+    silently.
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 20 Jul 2026 00:05:00 +0200
+
+rts2-base (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial rts2-base package: core (centrald, wire protocol, rts2-mon)
+    plus every statically-linkable driver family from the base CMake
+    port (dummy, D50/SBT/FRAM mounts and domes, focusers, filter wheels,
+    sensors, FLI and gxccd cameras). Excludes Andor (vendor SDK ships
+    only a shared library, no static option) and Paramount (libmks3
+    source is under an informal non-redistribution understanding, not
+    vendored into this build).
+
+ -- RTS2 Project <petr@rts2.org>  Thu, 16 Jul 2026 18:03:23 +0200

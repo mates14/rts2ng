@@ -1,0 +1,36 @@
+#!/bin/bash
+#
+# Tear down a local RTS2 test database, its owning role, and the matching
+# system user - the counterpart to rts2-testdb-create. Exists so the
+# creation script can be tested repeatedly from a truly clean slate (no
+# leftover database, role, or system user), not just re-run against an
+# already-provisioned system.
+#
+# Usage: sudo ./rts2-testdb-destroy [dbname] [dbuser]
+# Defaults: dbname=stars dbuser=rts2
+#
+# Must be run as a user with sudo rights; every step below sudos to the
+# specific account it needs (postgres superuser or the target DB role).
+
+set -e
+
+DBNAME="${1:-stars}"
+DBUSER="${2:-rts2}"
+
+echo "Terminating any open connections to '$DBNAME' ..."
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DBNAME' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+
+echo "Dropping database '$DBNAME' (if it exists) ..."
+sudo -u postgres dropdb --if-exists "$DBNAME"
+
+echo "Dropping Postgres role '$DBUSER' (if it exists) ..."
+sudo -u postgres psql -c "DROP ROLE IF EXISTS \"$DBUSER\";" || echo "  (role '$DBUSER' still owns something elsewhere - left in place)"
+
+echo "Removing system user '$DBUSER' (if it exists) ..."
+if id -u "$DBUSER" >/dev/null 2>&1; then
+	sudo userdel "$DBUSER" || echo "  (userdel failed - check for lingering processes owned by '$DBUSER')"
+else
+	echo "  (no such system user)"
+fi
+
+echo "Done - '$DBNAME'/'$DBUSER' (database, role, system user) removed."

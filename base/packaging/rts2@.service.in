@@ -1,0 +1,15 @@
+# systemd template unit to start a single named device/service, e.g.
+# `systemctl enable --now rts2@C0` for a device named C0 in
+# @BASE_CONFDIR@/rts2/devices (or a name from centrald/services).
+[Unit]
+Description=RTS2 %I
+Documentation=https://github.com/RTS2/rts2
+
+[Service]
+Type=forking
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-start %I
+ExecStop=@CMAKE_INSTALL_FULL_BINDIR@/rts2-stop %I
+PIDFile=@RTS2_LOCK_PREFIX@%i
+
+[Install]
+WantedBy=multi-user.target
