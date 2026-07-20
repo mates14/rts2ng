@@ -11,8 +11,7 @@ Build-Depends: debhelper-compat (= 13),
                libusb-1.0-0-dev,
                libpq-dev,
                libecpg-dev,
-               libxml2-dev,
-               postgresql-server-dev-all
+               libxml2-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/RTS2/rts2
 

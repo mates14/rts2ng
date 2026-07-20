@@ -1,3 +1,17 @@
+rts2-db (0.1.0-6) UNRELEASED; urgency=medium
+
+  * debian/control: drop postgresql-server-dev-all from Build-Depends -
+    it provides pg_config/server headers for building things that run
+    inside the Postgres backend (extensions), which rts2-db is not; it
+    only ever needs libpq/libecpg as an ordinary client. Confirmed ecpg
+    itself is owned by libecpg-dev, already declared (`dpkg -S
+    $(which ecpg)`), and db/CMakeLists.txt never touches pg_config.
+    Found because a build host (flores, Debian 13) had libecpg-dev/
+    libpq-dev/ecpg installed but not this package, and the build
+    succeeded fine once the bogus Build-Depends was skipped.
+
+ -- RTS2 Project <petr@rts2.org>  Tue, 21 Jul 2026 00:45:00 +0200
+
 rts2-db (0.1.0-5) UNRELEASED; urgency=medium
 
   * postinst: create /var/lib/rts2/images, owned by the rts2 system user -
