@@ -20,7 +20,11 @@ set(BASE_ANDOR_SDK_DIR "" CACHE PATH "Path to an Andor SDK tree (contains includ
 
 if(BASE_ANDOR_SDK_DIR)
 	find_path(ANDOR_INCLUDE_DIR NAMES atmcdLXd.h PATHS "${BASE_ANDOR_SDK_DIR}/include" NO_DEFAULT_PATH)
-	file(GLOB ANDOR_LIBRARY_REAL "${BASE_ANDOR_SDK_DIR}/lib/libandor-*-x86_64.so*")
+	# Vendor filename varies by SDK build variant - some ship
+	# libandor-x86_64.so.<ver>, others libandor-stdc++6-x86_64.so.<ver> (an
+	# extra tag between "libandor" and "x86_64") - match both, but not the
+	# libandor-i386.so.<ver> 32-bit variant.
+	file(GLOB ANDOR_LIBRARY_REAL "${BASE_ANDOR_SDK_DIR}/lib/libandor*x86_64.so*")
 	if(ANDOR_INCLUDE_DIR AND ANDOR_LIBRARY_REAL)
 		list(GET ANDOR_LIBRARY_REAL 0 ANDOR_LIBRARY_REAL)
 
