@@ -1,0 +1,29 @@
+Source: rts2-viewer
+Section: science
+Priority: optional
+Maintainer: RTS2 Project <petr@rts2.org>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               g++,
+               qtbase5-dev,
+               libcfitsio-dev,
+               libncurses-dev,
+               libnova-dev,
+               libusb-1.0-0-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/RTS2/rts2
+
+Package: rts2-viewer
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Remote Telescope System 2 - Qt camera viewer client
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains rts2-viewer: a Qt5 GUI client that connects to a
+ running camera device over the RTS2 wire protocol, displays incoming
+ images with a logfit display stretch, and provides a draggable measure
+ cursor with live centroid/FWHM fitting and a focus-progress graph. It
+ is a standalone network client - point it at any centrald with
+ --server/--device, whether local or remote - and does not require
+ rts2-base to be installed on the same machine.

@@ -1,0 +1,10 @@
+rts2-viewer (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial rts2-viewer package: the Qt5 camera-viewer client (image
+    display with logfit stretch, draggable measure cursor with live
+    centroid/FWHM fitting, windowing control, and a focus-progress
+    graph). Standalone network client - no dependency on rts2-base being
+    installed on the same machine, since it only ever talks to a
+    centrald over the wire protocol (local or remote).
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 20 Jul 2026 19:15:00 +0200

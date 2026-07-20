@@ -1,0 +1,37 @@
+#!/usr/bin/make -f
+
+# gui note: same "no CMake install() rules yet" situation as rts2-base/
+# rts2-db (see base/debian/rules and base/STATUS.md's Debian-packaging
+# section) - dh_auto_install is overridden to copy the built binary
+# directly. gui nests the base source tree via GUI_BASE_DIR (defaults to
+# ../base, see gui/CMakeLists.txt), so building this package also builds
+# every base driver as a side effect (add_subdirectory has no notion of
+# "only what I depend on") - hence the base build-deps below, even though
+# this package ships none of those drivers itself. We don't set
+# BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR/BASE_ANDOR_SDK_DIR here: rts2-viewer
+# doesn't need any camera driver built, and those CMake options just
+# cleanly skip the corresponding base subdirectories when unset.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+BUILDDIR = obj-$(DEB_HOST_MULTIARCH)
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=$(BUILDDIR)
+
+override_dh_auto_configure:
+	dh_auto_configure --buildsystem=cmake --builddirectory=$(BUILDDIR) -- \
+		-DCMAKE_INSTALL_PREFIX=/usr
+
+override_dh_auto_install:
+	install -d debian/rts2-viewer/usr/bin
+	install -m 0755 $(BUILDDIR)/viewer/rts2-viewer debian/rts2-viewer/usr/bin/
+
+# No systemd unit - this is a GUI tool a user launches by hand, not a
+# daemon (same reasoning as never auto-starting anything that commands
+# real telescopes/cameras, just inverted: there's nothing here to start).
+
+# Same reasoning as rts2-base/rts2-db: no CMake test target exercises
+# real hardware or a display, and a from-scratch rebuild under ctest at
+# package-build time would add nothing.
+override_dh_auto_test:
