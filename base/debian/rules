@@ -13,11 +13,19 @@
 # rts2-drivers-fli package). The FLI binaries ship in the separate
 # rts2-drivers-fli package below (same source, same build - libfli isn't
 # redistributed, so rts2-base itself stays buildable without it).
+#
+# BASE_FLI_SDK_DIR has no hardcoded default here (unlike
+# BASE_GXCCD_SDK_DIR) - it's expected to come in from the environment
+# (`?=` below only fills it in if unset), single-sourced from
+# buildme.sh's own `export BASE_FLI_SDK_DIR=...` so the plain-cmake build
+# and this packaging build can never disagree on the path again. Export
+# it yourself before calling dpkg-buildpackage directly without
+# buildme.sh.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 BASE_GXCCD_SDK_DIR ?= /home/mates/libgxccd-0.9.0
-BASE_FLI_SDK_DIR ?= /home/mates/src/fliusb/libfli
+BASE_FLI_SDK_DIR ?=
 
 BUILDDIR = obj-$(DEB_HOST_MULTIARCH)
 
