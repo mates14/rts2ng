@@ -798,7 +798,7 @@ Value * Daemon::duplicateValue (Value * old_value, bool withVal)
 					((ValueIntegerMinMax *) dup_val)->copyMinMax ((ValueIntegerMinMax *) old_value);
 					break;
 				default:
-					logStream (MESSAGE_ERROR) << "Undefined base type of RTS2_VALUE_MMAX (should be RTS2_VALUE_DOUBLE/RTS2_VALUE_INTEGER)" << sendLog;
+					logStream (MESSAGE_ERROR) << "Undefined base type of RTS2_VALUE_MMAX for value '" << old_value->getName () << "' (type " << old_value->getFlags () << ", should be RTS2_VALUE_DOUBLE/RTS2_VALUE_INTEGER)" << sendLog;
 			}
 			if (dup_val)
 				break;

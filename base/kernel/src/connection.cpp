@@ -2382,7 +2382,7 @@ int Connection::metaInfo (int rts2Type, std::string m_name, std::string desc)
 					new_value = new ValueIntegerMinMax (m_name, desc, rts2Type & RTS2_VALUE_FITS, rts2Type);
 					break;
 				default:
-					logStream (MESSAGE_ERROR) << "Undefined base type of RTS2_VALUE_MMAX (should be RTS2_VALUE_DOUBLE/RTS2_VALUE_INTEGER)" << sendLog;
+					logStream (MESSAGE_ERROR) << "Undefined base type of RTS2_VALUE_MMAX for value '" << m_name << "' (type " << rts2Type << ", should be RTS2_VALUE_DOUBLE/RTS2_VALUE_INTEGER) from connection '" << getName () << "'" << sendLog;
 					exit (10);
 			}
 			break;

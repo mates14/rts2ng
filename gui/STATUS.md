@@ -730,6 +730,61 @@ this session: no screen-capture tooling available here to confirm the
 graph's actual on-screen appearance, axis-availability toggling, or the
 new-image-vs-refit distinction live - needs the user's own test.
 
+## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
+
+Found during real hardware testing at ORM (`cta-n`): running bare
+`rts2-viewer` against the live WF0 (`rts2-camd-gxccd`) camera logged
+`cannot find section 'WF0'` (and, in one run, `'C0'` too - a second,
+not-currently-connected camera name from `/etc/rts2/devices`, likely a
+lingering/stale reference) on every startup. Traced to a real gap:
+`ViewerClient` never overrode `init()` to call
+`Configuration::instance()->loadFile()` - every other RTS2 client
+(`scriptexec.cpp`, classic's `focusclient.cpp`) does this itself in its
+own `init()`, since `rts2core::Client::init()` does not do it generically.
+Without it, `Configuration::instance()` stays a permanently-empty
+singleton (it's a lazy `new Configuration()` on first access, nothing
+more - see `configuration.cpp`), so `DevClientCameraImage`'s constructor
+(`kernel/src/devcliimg.cpp`), which looks up each connected camera's
+`instrume`/`telescop`/`origin`/`template` config keys by device name,
+"cannot find section" for every camera, every time, regardless of
+whether that section actually exists in `rts2.ini`.
+
+**Fixed** in `viewerclient.h`/`.cpp`: added the standard `--config` option
+(`OPT_CONFIG`, already defined in base's `option.h`) and an `init()`
+override that loads it, following the exact `scriptexec.cpp`/classic
+`focusclient.cpp` pattern (fail loudly if the file can't load, rather
+than silently continuing empty). Rebuilt clean, `ctest` still 7/7.
+
+Two other messages from the same ORM session, investigated and NOT
+porting bugs:
+- `Undefined base type of RTS2_VALUE_MMAX` (`Connection::metaInfo`,
+  `kernel/src/connection.cpp`) - calls `exit(10)`, faithfully matching
+  classic's own behavior at this exact spot (verified byte-for-byte
+  against `/home/mates/rts2/lib/rts2/connection.cpp`). Initially
+  suspected to be the same `rts2-gcnkafka`/`rtspy` bug below, but it
+  reproduced even after that daemon was killed and confirmed fully
+  disconnected from centrald (`ss -tnp` showed no live connection) - so
+  some other connected device (WF0/gxccd is the only camera; DOME/zelio,
+  WEATHER/UPS sensors, or one of imgproc/executor/selector are the other
+  candidates) is declaring a value with an `RTS2_VALUE_MMAX` ext-type and
+  an unrecognized base-type nibble. Reviewed every `ValueDoubleMinMax`/
+  `ValueIntegerMinMax` construction site in `base` (`camd.h`'s
+  `createTempSet()`, `gxccd.cpp`'s `desiredNightWindowHeating`,
+  `zelio.cpp`'s `domeTimeout`, `focusd.h`'s min/max values) against
+  classic byte-for-byte - all identical, no construction bug found.
+  Couldn't pin down the exact offending value without a live protocol
+  capture (direct raw-socket queries against the device ports didn't
+  work - device ports don't answer unauthenticated `info` queries the
+  way centrald's does). **Improved diagnostics instead**: both this call
+  site and `Daemon::duplicateValue`'s matching branch (`daemon.cpp`) now
+  log the value's name (and encoded type/flags int) alongside the error,
+  so the next occurrence is actually identifiable. Next step when this
+  recurs: capture the new log line's value name directly.
+- `cannot find section 'C0'` - once the config-load fix above lands, this
+  either resolves (if `[C0]` legitimately exists in `rts2.ini`, which it
+  does) or simply stops appearing (if `C0` isn't really a live connection
+  at all). Not independently chased further.
+
 ## Build note: AUTOMOC quirk on this host
 
 This host's CMake (4.4.0, snap package) only picks up a `Q_OBJECT` header

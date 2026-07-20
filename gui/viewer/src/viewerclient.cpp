@@ -3,6 +3,7 @@
 
 #include <app.h>
 #include <command.h>
+#include <configuration.h>
 #include <connection.h>
 #include <status.h>
 
@@ -13,6 +14,8 @@ using namespace gui;
 ViewerClient::ViewerClient (int argc, char **argv):
 	rts2core::Client (argc, argv, "rts2-viewer")
 {
+	configFile = NULL;
+	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
 }
 
@@ -20,11 +23,40 @@ int ViewerClient::processOption (int in_opt)
 {
 	switch (in_opt)
 	{
+		case OPT_CONFIG:
+			configFile = optarg;
+			break;
 		case OPT_DEVICE:
 			initialDevice = optarg;
 			break;
 		default:
 			return rts2core::Client::processOption (in_opt);
+	}
+	return 0;
+}
+
+int ViewerClient::init ()
+{
+	int ret = rts2core::Client::init ();
+	if (ret)
+		return ret;
+
+	// Every RTS2 client loads rts2.ini itself (see e.g. scriptexec.cpp,
+	// focusclient.cpp) - rts2core::Client::init() does not do this
+	// generically. Without it, Configuration::instance() stays a
+	// never-loaded empty singleton, and every per-device config lookup
+	// (DevClientCameraImage's instrume/telescop/origin/template, kernel/src/
+	// devcliimg.cpp) silently "cannot find section" for every camera,
+	// forever - found via a real ORM deployment where a camera device
+	// (WF0) triggered exactly that.
+	rts2core::Configuration *config = rts2core::Configuration::instance ();
+	ret = config->loadFile (configFile);
+	if (ret)
+	{
+		std::cerr << "Cannot load configuration file '"
+			<< (configFile ? configFile : "/etc/rts2/rts2.ini")
+			<< "'" << std::endl;
+		return ret;
 	}
 	return 0;
 }

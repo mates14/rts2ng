@@ -95,11 +95,13 @@ class ViewerClient : public QObject, public rts2core::Client
 
 	protected:
 		virtual int processOption (int in_opt) override;
+		virtual int init () override;
 		virtual rts2core::DevClient *createOtherType (rts2core::Connection *conn, int other_device_type) override;
 		virtual int idle () override;
 		virtual int progress (rts2core::Connection *conn, double start, double end) override;
 
 	private:
+		const char *configFile;
 		std::string initialDevice;
 
 		std::mutex camerasMutex;
