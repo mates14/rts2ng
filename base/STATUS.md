@@ -2140,6 +2140,41 @@ build-tree-copy override); a `rts2-andor` package bundling the vendor
 about `libmks3` redistribution, not a technical blocker); `rts2-db`/
 `rts2-httpd` packages (separate, DB-bound, out of scope for `rts2-base`).
 
+### `rts2-drivers-fli` split out of `rts2-base` (0.1.0-3)
+
+User wanted a standalone `.deb` for just the FLI (Finger Lakes
+Instrumentation) drivers, given a built `libfli` tree is available -
+same idea as the `rts2-andor` plan above, but for FLI. Rather than a new
+top-level sibling project (which would re-nest and recompile all of
+`base` again, adding to the redundant-rebuild count the user had just
+flagged), this reuses the *same* `base/debian/` source package: added a
+second binary stanza (`Package: rts2-drivers-fli`) to `debian/control`
+and split `rts2-camd-fli`/`rts2-focusd-fli`/`rts2-filterd-fli` out of
+`RTS2_BASE_BINARIES` into their own `RTS2_FLI_BINARIES` list in
+`debian/rules`, installed into `debian/rts2-drivers-fli/usr/bin/`
+instead. No extra compilation - one `dpkg-buildpackage` run now produces
+both `.deb`s from the one build tree. `Depends: rts2-base (=
+${binary:Version})` since the FLI binaries need rts2-base's config/user/
+systemd-unit scaffolding to actually run as a device.
+
+The FLI install step guards each binary with `[ -f ... ]` so a host
+without `BASE_FLI_SDK_DIR` set still builds `rts2-base` cleanly -
+`rts2-drivers-fli` just comes out empty there rather than failing the
+whole build. Found one real bug while testing this: `dh_installsystemd`
+defaults to acting on *every* binary package when called without `-p`,
+so it started failing on `rts2-drivers-fli` ("does not install unit
+'rts2.service'") the moment a second package existed - fixed by scoping
+both calls in `override_dh_installsystemd` to `-prts2-base` explicitly.
+
+Verified via a real `dpkg-buildpackage -us -uc -b -d` run (bumped to
+0.1.0-3): `rts2-drivers-fli_0.1.0-3_amd64.deb` contains exactly the three
+FLI binaries (`dpkg-deb -c`), `rts2-base_0.1.0-3_amd64.deb` no longer
+contains any of them, and the auto-detected `Depends:` on
+`rts2-drivers-fli` correctly resolved to `rts2-base (= 0.1.0-3)`. gxccd
+was deliberately left in `rts2-base` - not asked to split it, and unlike
+FLI it's one driver with no separate focuser/filter-wheel siblings to
+group.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

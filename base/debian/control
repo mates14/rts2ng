@@ -24,6 +24,24 @@ Description: Remote Telescope System 2 - core daemons and drivers
  wire protocol, rts2-mon) plus every device driver whose control library
  links statically (no bundled proprietary shared library) - dummy
  test drivers, the D50/SBT/FRAM mount, dome, focuser, filter wheel and
- sensor drivers, and the FLI and Moravian Instruments (gxccd) camera
- drivers. It does not include scheduling, the executor, or a database -
- those live in separate rts2-db/rts2-httpd packages.
+ sensor drivers, and the Moravian Instruments (gxccd) camera driver. It
+ does not include scheduling, the executor, or a database - those live
+ in separate rts2-db/rts2-httpd packages. The Finger Lakes
+ Instrumentation (FLI) drivers live in the separate rts2-drivers-fli
+ package (built from this same source, only when the vendor libfli SDK
+ is available at build time).
+
+Package: rts2-drivers-fli
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, rts2-base (= ${binary:Version})
+Description: Remote Telescope System 2 - Finger Lakes Instrumentation drivers
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains the RTS2 device drivers for Finger Lakes
+ Instrumentation (FLI) hardware: rts2-camd-fli (cameras), rts2-focusd-fli
+ (focusers), and rts2-filterd-fli (filter wheels). Built against the
+ vendor libfli SDK (see BASE_FLI_SDK_DIR in base/CMakeLists.txt) - not
+ redistributed here, so this package is only produced on a build host
+ that has it. Requires rts2-base for the surrounding configuration,
+ system user, and systemd units.

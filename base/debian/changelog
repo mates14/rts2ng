@@ -1,3 +1,17 @@
+rts2-base (0.1.0-3) UNRELEASED; urgency=medium
+
+  * debian/control, debian/rules: split the FLI (Finger Lakes
+    Instrumentation) drivers out of rts2-base into a new binary package,
+    rts2-drivers-fli (rts2-camd-fli, rts2-focusd-fli, rts2-filterd-fli).
+    Built from the same source/same dpkg-buildpackage run - no extra
+    compilation - but keeps rts2-base itself buildable on a host without
+    the (non-redistributed) vendor libfli SDK; on such a host
+    rts2-drivers-fli just comes out empty rather than failing the build.
+    gxccd stays in rts2-base for now (not asked to split, and unlike FLI
+    it's a single driver with no separate focuser/filter siblings).
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 20 Jul 2026 23:35:00 +0200
+
 rts2-base (0.1.0-2) UNRELEASED; urgency=medium
 
   * packaging/rts2.ini: set [observatory] base_path explicitly to

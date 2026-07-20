@@ -9,7 +9,10 @@
 #
 # BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR point at the proprietary vendor
 # SDKs as they exist on this build host - adjust for a different builder
-# (or drop them to build rts2-base without the gxccd/FLI camera drivers).
+# (or drop them to build rts2-base without the gxccd camera driver / the
+# rts2-drivers-fli package). The FLI binaries ship in the separate
+# rts2-drivers-fli package below (same source, same build - libfli isn't
+# redistributed, so rts2-base itself stays buildable without it).
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
@@ -38,7 +41,6 @@ RTS2_BASE_BINARIES = \
 	monitor/rts2-mon \
 	scriptexec/rts2-scriptexec \
 	camd/dummy/rts2-camd-dummy \
-	camd/fli/rts2-camd-fli \
 	camd/gxccd/rts2-camd-gxccd \
 	teld/dummy/rts2-teld-dummy \
 	teld/d50/rts2-teld-d50 \
@@ -49,9 +51,7 @@ RTS2_BASE_BINARIES = \
 	focusd/aaf/rts2-focusd-aaf \
 	focusd/optec/rts2-focusd-optec \
 	focusd/nstep/rts2-focusd-nstep \
-	focusd/fli/rts2-focusd-fli \
 	filterd/dummy/rts2-filterd-dummy \
-	filterd/fli/rts2-filterd-fli \
 	sensord/system/rts2-sensor-system \
 	sensord/nut/rts2-sensor-nut \
 	sensord/cloud4/rts2-sensor-cloud4 \
@@ -65,6 +65,16 @@ RTS2_BASE_BINARIES = \
 	dome/d50/rts2-dome-d50 \
 	dome/bart/rts2-dome-bart \
 	dome/zelio/rts2-dome-zelio
+
+# rts2-drivers-fli's binaries - only exist in $(BUILDDIR) if
+# BASE_FLI_SDK_DIR resolved to a real libfli tree (see base/CMakeLists.txt);
+# the install step below skips any that are missing rather than failing
+# the whole build, so rts2-base stays buildable on a host without libfli
+# (rts2-drivers-fli then simply comes out empty on that host).
+RTS2_FLI_BINARIES = \
+	camd/fli/rts2-camd-fli \
+	focusd/fli/rts2-focusd-fli \
+	filterd/fli/rts2-filterd-fli
 
 override_dh_auto_install:
 	install -d debian/rts2-base/usr/bin
@@ -84,10 +94,16 @@ override_dh_auto_install:
 	install -d debian/rts2-base/etc/rsyslog.d debian/rts2-base/etc/logrotate.d
 	install -m 0644 packaging/rts2-rsyslog.conf debian/rts2-base/etc/rsyslog.d/49-rts2.conf
 	install -m 0644 packaging/rts2-logrotate.conf debian/rts2-base/etc/logrotate.d/rts2-base
+	install -d debian/rts2-drivers-fli/usr/bin
+	for b in $(RTS2_FLI_BINARIES); do \
+		if [ -f $(BUILDDIR)/$$b ]; then \
+			install -m 0755 $(BUILDDIR)/$$b debian/rts2-drivers-fli/usr/bin/; \
+		fi; \
+	done
 
 override_dh_installsystemd:
-	dh_installsystemd --no-enable --no-start rts2.service
-	dh_installsystemd --no-enable --no-start "rts2@.service"
+	dh_installsystemd -prts2-base --no-enable --no-start rts2.service
+	dh_installsystemd -prts2-base --no-enable --no-start "rts2@.service"
 
 # No CMake test target exercises real hardware, and kernel/tests requires
 # a from-scratch full build - dh_auto_test would just rebuild everything
