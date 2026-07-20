@@ -853,6 +853,65 @@ are left as-is - they have a separate, pre-existing gap (don't reflect
 `bin1`/`bin2` either), out of scope for this fix, which targets the
 window-position gap specifically.
 
+---
+
+## Fli::init() - nflush defaults to -1, silently leaving the CCD unflushed before every exposure
+
+**Files:** `src/camd/fli.cpp` (`Fli` constructor, `Fli::init()`)
+**Maintainer:** Petr Kubanek
+**Severity:** medium/high (image-quality) - affects every FLI camera
+that isn't explicitly started with `-l <N>`
+
+**Bug:** the `nflush` value ("number of flushes before exposure") is
+created and defaulted to `-1`:
+
+```cpp
+createValue (nflush, "nflush", "number of flushes before exposure", true, RTS2_VALUE_WRITABLE, CAM_WORKING);
+nflush->setValueInteger (-1);
+...
+if (nflush->getValueInteger () >= 0)
+{
+    ret = FLISetNFlushes (dev, nflush->getValueInteger ());
+    ...
+}
+```
+
+`FLISetNFlushes()` is only called when `nflush >= 0`, so at `-1` (the
+default, unless `-l` is passed on the command line) it's never called
+at all - the camera is left at whatever its own firmware/EEPROM default
+happens to be, which in practice (confirmed by the user, who runs real
+FLI hardware) is 0 flushes. A CCD that isn't flushed before exposure
+accumulates dark current/residual charge from however long it sat idle,
+contaminating the frame - exactly the kind of thing a "number of
+flushes before exposure" setting exists to prevent, silently disabled
+by default.
+
+**User's domain guidance** (informed the base fix, reproduced here for
+whoever picks this up upstream): for a camera in regular use with no
+long gaps, 1 flush is enough; after a longer idle period, 2 or
+(exceptionally) 3 may be warranted for the *first* exposure - but the
+right way to handle that is a periodic idle-time CCD dump, not raising
+`nflush` (which would slow down the charge-up before every subsequent
+normal exposure, not just the first one after a gap). More broadly:
+classic `camd`'s architecture assumes the camera driver/hardware takes
+care of CCD reset autonomously between exposures - true for some
+cameras, not for FLI, and nothing in `camd` itself compensates.
+
+**Fix applied in base** (`camd/fli/fli.cpp`): defaults `nflush` to `1`
+instead of `-1` (still overridable via `-l`, including explicitly back
+to `-1` for the old "don't touch it" behavior). Also adds a new,
+FLI-specific periodic idle-flush timer (`idle_flush_period`, default
+300s, 0 disables): while the camera is idle (not exposing, not reading -
+`Camera::isIdle()`), calls the same `FLIFlushRow()` already used
+elsewhere in this file (`stopExposure()`) once per period, so the CCD
+never actually sits unflushed for the length of a "long gap" in the
+first place, and `nflush` can stay at its fast, normal-case value
+regardless of how long the camera was idle before the next exposure.
+This is new functionality with no equivalent in classic `camd` at all -
+worth considering as a generic `camd`-level mechanism upstream (per the
+user's own framing above) if other camera families turn out to have the
+same gap, rather than reimplementing it per-driver each time.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

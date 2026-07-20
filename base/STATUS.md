@@ -2299,6 +2299,53 @@ Deliberately left alone: `LTM1_1`/`LTM2_2` (a separate, pre-existing gap
 - they don't reflect `bin1`/`bin2` either, only matters for binned data,
 out of scope for this specifically-reported window-position bug).
 
+### FLI camera driver never flushes the CCD before exposure by default - fixed, plus a new idle-flush mitigation
+
+Second real bug the user reported right after the window-position one:
+`camd/fli/fli.cpp`'s `nflush` ("number of flushes before exposure")
+defaults to `-1`, which means `FLISetNFlushes()` is never called unless
+`-l <N>` is passed on the command line - the camera is left at its own
+firmware default, which in practice (on the user's real hardware) is 0
+flushes. **Confirmed identical in classic RTS2** (`src/camd/fli.cpp`,
+byte-for-byte) - full write-up in `UPSTREAM_BUGS.md`.
+
+User's guidance on what the right numbers actually are: 1 flush is
+right for a camera in regular use; after a longer idle gap, 2 or
+(exceptionally) 3 would be better for just the *first* exposure back -
+but the better fix for that case is a periodic idle-time CCD dump, not
+raising `nflush` (which would slow down every subsequent normal
+exposure's charge-up, not just the first one after a gap). They also
+flagged the deeper architectural point: classic `camd` assumes the
+driver/hardware autonomously handles CCD reset between exposures - not
+true for FLI, and nothing in `camd` compensates.
+
+**Fix, both parts in `camd/fli/fli.cpp`:**
+- `nflush` now defaults to `1` instead of `-1` (still overridable via
+  `-l`, including back to `-1` for the old behavior).
+- New, FLI-specific periodic idle-flush timer: `idle_flush_period`
+  (writable `ValueInteger`, seconds, default 300, `0` disables). Follows
+  the exact same self-rescheduling `addTimer`/`postEvent` pattern
+  already used in this file for `EVENT_TE_RAMP` (temperature ramping) -
+  a new `EVENT_IDLE_FLUSH` case in `Fli::postEvent()` calls
+  `Camera::isIdle()` (already used the same way in `temperatureCheck()`)
+  and, if idle, the same `FLIFlushRow()` call `stopExposure()` already
+  uses elsewhere in this file, then re-arms itself. Armed once from
+  `initHardware()`; `setValue()` re-arms it immediately if the period is
+  changed from disabled (`<=0`) back to a positive value at runtime,
+  since the self-rescheduling chain would otherwise have already stopped.
+
+This is genuinely new functionality with no equivalent in classic - not
+just a straight bug-for-bug port. Flagged in `UPSTREAM_BUGS.md` as worth
+generalizing to a `camd`-level mechanism if other camera families turn
+out to have the same gap, rather than reimplementing it per-driver.
+
+Builds clean (`rts2-camd-fli`, only pre-existing unrelated warnings).
+**Not empirically tested against real FLI hardware** - unlike the
+window-position fix, there's no dummy-camera equivalent for this (the
+mechanism is FLI-SDK-specific, `FLIFlushRow`/`FLISetNFlushes`), so this
+needs real-world verification at a site with actual FLI hardware
+attached before being fully trusted.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

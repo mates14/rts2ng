@@ -35,6 +35,7 @@
 #define FLIUSB_PROLINE_ID  0x0a
 
 #define EVENT_TE_RAMP         RTS2_LOCAL_EVENT + 678
+#define EVENT_IDLE_FLUSH      RTS2_LOCAL_EVENT + 679
 
 namespace rts2camd
 {
@@ -112,6 +113,7 @@ class Fli:public Camera
 
 		int fliDebug;
 		rts2core::ValueInteger *nflush;
+		rts2core::ValueInteger *idleFlushPeriod;
 };
 
 }
@@ -260,6 +262,19 @@ int Fli::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 	{
 		return FLISetCameraMode (dev, new_value->getValueInteger ()) ? -2 : 0;
 	}
+	if (old_value == idleFlushPeriod)
+	{
+		// re-arm right away if going from disabled (<=0) to enabled -
+		// otherwise the EVENT_IDLE_FLUSH chain (started once from
+		// initHardware ()) has already stopped re-arming itself and
+		// nothing would ever restart it.
+		if (old_value->getValueInteger () <= 0 && new_value->getValueInteger () > 0)
+		{
+			deleteTimers (EVENT_IDLE_FLUSH);
+			addTimer (new_value->getValueInteger (), new rts2core::Event (EVENT_IDLE_FLUSH));
+		}
+		return 0;
+	}
 	return Camera::setValue (old_value, new_value);
 }
 
@@ -294,8 +309,27 @@ Fli::Fli (int in_argc, char **in_argv):Camera (in_argc, in_argv)
 	camNum = 0;
 	camName = nullptr;
 
+	// base note: classic defaulted this to -1 ("leave FLISetNFlushes
+	// uncalled, whatever the camera's own firmware default happens to
+	// be" - which in practice is 0 flushes on the hardware actually
+	// used here). User's guidance: 1 flush before exposure is right for
+	// normal, regularly-used operation; defaulting to -1 (silently 0)
+	// made no sense. -l still overrides this, including explicitly back
+	// to 0 or to -1 to restore the old "don't touch it" behavior.
 	createValue (nflush, "nflush", "number of flushes before exposure", true, RTS2_VALUE_WRITABLE, CAM_WORKING);
-	nflush->setValueInteger (-1);
+	nflush->setValueInteger (1);
+
+	// The long-idle case (user's guidance: 2, exceptionally 3, flushes
+	// would be better right before the first exposure after a long gap)
+	// is deliberately NOT handled by bumping nflush - that would slow
+	// down every single subsequent normal exposure's charge-up, not just
+	// the first one after a gap. Instead, periodically dump the CCD
+	// while idle (see idleFlushPeriod/EVENT_IDLE_FLUSH below) so it's
+	// never actually sitting there accumulating dark current for long,
+	// and nflush can stay at its fast, normal-case value regardless of
+	// how long the camera was idle before the next exposure.
+	createValue (idleFlushPeriod, "idle_flush_period", "[s] interval between CCD dumps while idle (not exposing); 0 disables", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
+	idleFlushPeriod->setValueInteger (300);
 
 	addOption ('D', nullptr, 1, "CCD Domain (default to USB; possible values: USB|LPT|SERIAL|INET)");
 	addOption ('R', nullptr, 1, "find camera by HW revision");
@@ -348,6 +382,19 @@ void Fli::postEvent (rts2core::Event *event)
 				return;
 			}
 			break;
+		case EVENT_IDLE_FLUSH:
+			if (idleFlushPeriod->getValueInteger () <= 0)
+				break;
+			if (isIdle ())
+			{
+				LIBFLIAPI ret = FLIFlushRow (dev, getHeight (), 1);
+				if (ret)
+					logStream (MESSAGE_ERROR) << "idle CCD flush failed, ret " << ret << sendLog;
+				else
+					logStream (MESSAGE_DEBUG) << "idle CCD flush" << sendLog;
+			}
+			addTimer (idleFlushPeriod->getValueInteger (), event);
+			return;
 	}
 	Camera::postEvent (event);
 }
@@ -524,6 +571,8 @@ int Fli::initHardware ()
 		logStream (MESSAGE_DEBUG) << "fli init set Nflush to " << nflush->getValueInteger () <<	sendLog;
 	}
 
+	if (idleFlushPeriod->getValueInteger () > 0)
+		addTimer (idleFlushPeriod->getValueInteger (), new rts2core::Event (EVENT_IDLE_FLUSH));
 
 	long hwrev;
 	long fwrev;
