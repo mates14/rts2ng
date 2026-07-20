@@ -2171,9 +2171,51 @@ Verified via a real `dpkg-buildpackage -us -uc -b -d` run (bumped to
 FLI binaries (`dpkg-deb -c`), `rts2-base_0.1.0-3_amd64.deb` no longer
 contains any of them, and the auto-detected `Depends:` on
 `rts2-drivers-fli` correctly resolved to `rts2-base (= 0.1.0-3)`. gxccd
-was deliberately left in `rts2-base` - not asked to split it, and unlike
-FLI it's one driver with no separate focuser/filter-wheel siblings to
-group.
+was deliberately left in `rts2-base` at the time - not asked to split it
+yet (see below, this changed the very next round).
+
+Two follow-ups landed right after, both small: (1) `buildme.sh` and
+`debian/rules` had two different hardcoded `BASE_FLI_SDK_DIR` paths that
+had drifted apart (one per session/machine) - fixed by having
+`buildme.sh` `export BASE_FLI_SDK_DIR=...` once and dropping the
+hardcoded default in `debian/rules` (which already used `?=`, so the
+exported env var flows straight into the Make variable, then into the
+`-D` flag passed to `cmake` - verified with a real build using the
+export instead of the old default). (2) The user asked whether gxccd and
+`rts2-teld-paramount` could get the same split - see the next section
+for gxccd; paramount was explicitly deferred (the user's own call: "skip
+it for now" when asked whether a compiled `rts2-drivers-paramount` .deb
+would be okay to publish given the informal non-redistribution
+understanding around `libmks3` - see that section above for the
+authorship context). Not revisited without the user raising it again.
+
+### `rts2-drivers-gxccd` split out of `rts2-base` (0.1.0-4)
+
+Same exact pattern as the FLI split above, requested right after it:
+second binary stanza in `debian/control`, `rts2-camd-gxccd` moved out of
+`RTS2_BASE_BINARIES` into its own `RTS2_GXCCD_BINARIES` (one binary,
+unlike FLI's three - gxccd has no separate focuser/filter-wheel driver),
+installed into `debian/rts2-drivers-gxccd/usr/bin/` guarded the same
+`[ -f ... ]` way. Also dropped `BASE_GXCCD_SDK_DIR`'s hardcoded default
+(was a stale personal path, same problem `BASE_FLI_SDK_DIR` had) - both
+vendor SDK paths are now environment-sourced with no default in
+`debian/rules`, matching each other.
+
+Verified via a real `dpkg-buildpackage -us -uc -b -d` run with both
+`BASE_FLI_SDK_DIR` and `BASE_GXCCD_SDK_DIR` exported (bumped to 0.1.0-4):
+all three packages built in one run, `rts2-drivers-gxccd_0.1.0-4_amd64.deb`
+contains exactly `/usr/bin/rts2-camd-gxccd`, `rts2-base_0.1.0-4_amd64.deb`
+contains neither the gxccd nor FLI binaries, `rts2-drivers-fli` still
+correct alongside it, and `rts2-drivers-gxccd`'s auto-detected `Depends:`
+correctly resolved to `rts2-base (= 0.1.0-4)`. No new bugs found this
+time - the `dh_installsystemd` scoping fix from the FLI split already
+covers any number of extra binary packages, not just one.
+
+`buildme.sh`'s plain-`cmake` loop still doesn't pass
+`BASE_GXCCD_SDK_DIR` at all (only `BASE_FLI_SDK_DIR` was ever wired
+in there) - not changed here since the actual gxccd SDK path on the
+user's other build machines isn't known; add `export
+BASE_GXCCD_SDK_DIR=/path/to/libgxccd` there the same way if/when needed.
 
 ## Conventions being used
 

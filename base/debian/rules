@@ -9,22 +9,19 @@
 #
 # BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR point at the proprietary vendor
 # SDKs as they exist on this build host - adjust for a different builder
-# (or drop them to build rts2-base without the gxccd camera driver / the
-# rts2-drivers-fli package). The FLI binaries ship in the separate
-# rts2-drivers-fli package below (same source, same build - libfli isn't
-# redistributed, so rts2-base itself stays buildable without it).
-#
-# BASE_FLI_SDK_DIR has no hardcoded default here (unlike
-# BASE_GXCCD_SDK_DIR) - it's expected to come in from the environment
-# (`?=` below only fills it in if unset), single-sourced from
-# buildme.sh's own `export BASE_FLI_SDK_DIR=...` so the plain-cmake build
-# and this packaging build can never disagree on the path again. Export
-# it yourself before calling dpkg-buildpackage directly without
-# buildme.sh.
+# (or drop them to build rts2-base without the gxccd/FLI drivers' own
+# packages). Neither has a hardcoded default here - both are expected to
+# come in from the environment (`?=` below only fills them in if unset),
+# single-sourced from buildme.sh's own `export BASE_GXCCD_SDK_DIR=...`/
+# `export BASE_FLI_SDK_DIR=...` so the plain-cmake build and this
+# packaging build can never disagree on the path (see the git history
+# around when BASE_FLI_SDK_DIR was fixed the same way - two different
+# hardcoded paths in two different files had drifted apart). Export them
+# yourself before calling dpkg-buildpackage directly without buildme.sh.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-BASE_GXCCD_SDK_DIR ?= /home/mates/libgxccd-0.9.0
+BASE_GXCCD_SDK_DIR ?=
 BASE_FLI_SDK_DIR ?=
 
 BUILDDIR = obj-$(DEB_HOST_MULTIARCH)
@@ -49,7 +46,6 @@ RTS2_BASE_BINARIES = \
 	monitor/rts2-mon \
 	scriptexec/rts2-scriptexec \
 	camd/dummy/rts2-camd-dummy \
-	camd/gxccd/rts2-camd-gxccd \
 	teld/dummy/rts2-teld-dummy \
 	teld/d50/rts2-teld-d50 \
 	teld/gemini/rts2-teld-gemini \
@@ -84,6 +80,10 @@ RTS2_FLI_BINARIES = \
 	focusd/fli/rts2-focusd-fli \
 	filterd/fli/rts2-filterd-fli
 
+# Same reasoning as RTS2_FLI_BINARIES, for rts2-drivers-gxccd.
+RTS2_GXCCD_BINARIES = \
+	camd/gxccd/rts2-camd-gxccd
+
 override_dh_auto_install:
 	install -d debian/rts2-base/usr/bin
 	for b in $(RTS2_BASE_BINARIES); do \
@@ -106,6 +106,12 @@ override_dh_auto_install:
 	for b in $(RTS2_FLI_BINARIES); do \
 		if [ -f $(BUILDDIR)/$$b ]; then \
 			install -m 0755 $(BUILDDIR)/$$b debian/rts2-drivers-fli/usr/bin/; \
+		fi; \
+	done
+	install -d debian/rts2-drivers-gxccd/usr/bin
+	for b in $(RTS2_GXCCD_BINARIES); do \
+		if [ -f $(BUILDDIR)/$$b ]; then \
+			install -m 0755 $(BUILDDIR)/$$b debian/rts2-drivers-gxccd/usr/bin/; \
 		fi; \
 	done
 

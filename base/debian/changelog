@@ -1,3 +1,20 @@
+rts2-base (0.1.0-4) UNRELEASED; urgency=medium
+
+  * debian/control, debian/rules: split rts2-camd-gxccd out of rts2-base
+    into a new binary package, rts2-drivers-gxccd, same pattern as the
+    earlier rts2-drivers-fli split (same source, same build, no extra
+    compilation; empty on a host without BASE_GXCCD_SDK_DIR set).
+  * debian/rules: BASE_GXCCD_SDK_DIR no longer has a hardcoded default
+    (was a stale personal path) - single-sourced from the environment
+    the same way BASE_FLI_SDK_DIR already is, so buildme.sh and this
+    packaging build can't disagree on the path.
+  * rts2-teld-paramount (libmks3) was considered for the same split but
+    deliberately left out - the informal non-redistribution
+    understanding around libmks3 is about whether to publish it at all,
+    not a technical question, and that's not this package's call to make.
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 20 Jul 2026 23:58:00 +0200
+
 rts2-base (0.1.0-3) UNRELEASED; urgency=medium
 
   * debian/control, debian/rules: split the FLI (Finger Lakes
