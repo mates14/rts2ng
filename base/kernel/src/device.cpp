@@ -602,7 +602,11 @@ int Device::commandAuthorized (Connection * conn)
 				return -2;
 
 			if (!value)
-				createValue ((rts2core::ValueDouble *&)value, name, desc, false, 0);
+			{
+				rts2core::ValueDouble *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != RTS2_VALUE_DOUBLE)
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating DOUBLE value " << name << " : " << value->getValueBaseType () << sendLog;
@@ -619,7 +623,11 @@ int Device::commandAuthorized (Connection * conn)
 				return -2;
 
 			if (!value)
-				createValue ((rts2core::ValueTime *&)value, name, desc, false, 0);
+			{
+				rts2core::ValueTime *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != RTS2_VALUE_TIME)
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating TIME value " << name << " : " << value->getValueBaseType () << sendLog;
@@ -636,7 +644,11 @@ int Device::commandAuthorized (Connection * conn)
 				return -2;
 
 			if (!value)
-				createValue ((rts2core::ValueInteger *&)value, name, desc, false, 0);
+			{
+				rts2core::ValueInteger *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != RTS2_VALUE_INTEGER)
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating INTEGER value " << name << " : " << value->getValueBaseType () << sendLog;
@@ -653,7 +665,11 @@ int Device::commandAuthorized (Connection * conn)
 				return -2;
 
 			if (!value)
-				createValue ((rts2core::ValueBool *&)value, name, desc, false, 0);
+			{
+				rts2core::ValueBool *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != RTS2_VALUE_BOOL)
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating BOOLEAN value " << name << " : " << value->getValueBaseType () << sendLog;
@@ -673,7 +689,11 @@ int Device::commandAuthorized (Connection * conn)
 				return -2;
 
 			if (!value)
-				createValue ((rts2core::ValueString *&)value, name, desc, false, 0);
+			{
+				rts2core::ValueString *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != RTS2_VALUE_STRING)
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating STRING value " << name << " : " << value->getValueBaseType () << sendLog;
@@ -685,7 +705,11 @@ int Device::commandAuthorized (Connection * conn)
 		else if (!strcmp (type, "double_array"))
 		{
 			if (!value)
-				createValue ((rts2core::DoubleArray *&)value, name, desc, false, 0);
+			{
+				rts2core::DoubleArray *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != (RTS2_VALUE_ARRAY | RTS2_VALUE_DOUBLE))
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating DOUBLE ARRAY value " << name << " : " << value->getValueBaseType () << sendLog;
@@ -697,7 +721,11 @@ int Device::commandAuthorized (Connection * conn)
 		else if (!strcmp (type, "stat"))
 		{
 			if (!value)
-				createValue ((rts2core::ValueDoubleStat *&)value, name, desc, false, 0);
+			{
+				rts2core::ValueDoubleStat *nvalue;
+				createValue (nvalue, name, desc, false, 0);
+				value = nvalue;
+			}
 			else if (value->getValueType () != (RTS2_VALUE_STAT | RTS2_VALUE_DOUBLE))
 			{
 				logStream (MESSAGE_ERROR) << "Wrong type of already existing value when creating DOUBLE STAT value " << name << " : " << value->getValueBaseType () << sendLog;

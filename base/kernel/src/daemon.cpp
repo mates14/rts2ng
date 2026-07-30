@@ -1507,25 +1507,65 @@ int Daemon::createSectionValues (IniSection *sect)
 		if (suffix.length () > 0)
 		{
 			if (strcasestr (suffix.c_str (), "ia"))
-				createValue ((IntegerArray *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr(suffix.c_str (), "IA") == 0, flags);
+			{
+				IntegerArray *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr(suffix.c_str (), "IA") == 0, flags);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "da"))
-				createValue ((DoubleArray *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "DA") == 0, flags);
+			{
+				DoubleArray *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "DA") == 0, flags);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "bao"))
-				createValue ((BoolArray *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "BAO") == 0, flags | RTS2_DT_ONOFF);
+			{
+				BoolArray *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "BAO") == 0, flags | RTS2_DT_ONOFF);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "ba"))
-				createValue ((BoolArray *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "BA") == 0, flags);
+			{
+				BoolArray *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "BA") == 0, flags);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "std"))
-				createValue ((ValueDoubleStat *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "STD") == 0, flags);
+			{
+				ValueDoubleStat *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "STD") == 0, flags);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "i"))
-				createValue ((ValueInteger *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "I") == 0, flags);
+			{
+				ValueInteger *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "I") == 0, flags);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "d"))
-				createValue ((ValueDouble *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "D") == 0, flags);
+			{
+				ValueDouble *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "D") == 0, flags);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "bo"))
-				createValue ((ValueBool *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "BO") == 0, flags | RTS2_DT_ONOFF);
+			{
+				ValueBool *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "BO") == 0, flags | RTS2_DT_ONOFF);
+				val = nvalue;
+			}
 			else if (strcasestr (suffix.c_str (), "b"))
-				createValue ((ValueBool *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "B") == 0, flags);
+			{
+				ValueBool *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "B") == 0, flags);
+				val = nvalue;
+			}
 			else if (!strcasecmp (suffix.c_str (), "s"))
-				createValue ((ValueString *&) val, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "S") == 0, flags);
+			{
+				ValueString *nvalue;
+				createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), strstr (suffix.c_str (), "S") == 0, flags);
+				val = nvalue;
+			}
 			else
 			{
 				logStream (MESSAGE_ERROR) << "Do not know what to do with suffix " << suffix << "." << sendLog;
@@ -1534,7 +1574,9 @@ int Daemon::createSectionValues (IniSection *sect)
 		}
 		else
 		{
-			createValue ((ValueString *&) val, iter->getValueName ().c_str (), iter->getComment (), false, flags);
+			ValueString *nvalue;
+			createValue (nvalue, iter->getValueName ().c_str (), iter->getComment (), false, flags);
+			val = nvalue;
 		}
 		// create and set new value
 		rts2core::Value *new_value = duplicateValue (val);
