@@ -970,7 +970,7 @@ int Camera::sendReadoutData (char *data, size_t dataSize, int chan)
 	// calculated..
 	if (calculateStatistics->getValueInteger () != STATISTIC_NO)
 	{
-		int totPix;
+		int totPix = 0;
 		// update sum. min and max
 		switch (getDataType ())
 		{

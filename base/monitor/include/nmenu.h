@@ -113,6 +113,7 @@ class NSubmenu:public NSelWindow
 			return ret;
 		}
 
+		using NSelWindow::draw;
 		void draw (WINDOW * master_window);
 		void drawSubmenu ();
 		NAction *getSelAction ()

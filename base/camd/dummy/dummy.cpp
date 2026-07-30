@@ -539,7 +539,7 @@ template <typename dt> void Dummy::generateData (dt *data, size_t pixelSize)
 
 	int focPos = getFocPos ();
 	double beta = moffat_beta->getValueDouble (); // Moffat profile beta
-	double r0; // Moffat off-center parameter for defocusing
+	double r0 = 0; // Moffat off-center parameter for defocusing
 	double deFocScale = defocus_scale->getValueDouble (); // Defocusing scale, focuser shift causing large effect
 	double magSlope = mag_slope->getValueDouble (); // Slope of brightness distribution in stellar field
 
@@ -567,7 +567,7 @@ template <typename dt> void Dummy::generateData (dt *data, size_t pixelSize)
 
 	for (size_t i = 0; i < pixelSize; i++, data++)
 	{
-		double n;
+		double n = 0;
 		if (genType->getValueInteger () != 1 && genType->getValueInteger () != 2)
 			n = noiseRange->getValueDouble ();
 		// generate data

@@ -68,6 +68,7 @@ class Fork: public Telescope
 
 		virtual int updateLimits () = 0;
 
+		using Telescope::sky2counts;
 		int sky2counts (int32_t & ac, int32_t & dc);
 		int sky2counts (struct ln_equ_posn *pos, int32_t & ac, int32_t & dc, double JD);
 

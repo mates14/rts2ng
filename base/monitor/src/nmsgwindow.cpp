@@ -83,7 +83,7 @@ void NMsgWindow::draw ()
 
 		mvwprintw (getWriteWindow (), maxrow, 0, "%02i:%02i:%02i.%03i %c %s %.*s",
 				   tmesg.tm_hour, tmesg.tm_min, tmesg.tm_sec, (int) (msg.getMessageTimeUSec () / 1000),
-				   mt, msg.getMessageOName (), getScrollWidth () - 16 - strlen(msg.getMessageOName ()), msg.getMessageString ().c_str ());
+				   mt, msg.getMessageOName (), (int) (getScrollWidth () - 16 - strlen(msg.getMessageOName ())), msg.getMessageString ().c_str ());
 
 		wcolor_set (getWriteWindow (), CLR_DEFAULT, NULL);
 		maxrow++;
@@ -110,7 +110,7 @@ void NMsgWindow::draw ()
 void NMsgWindow::add (rts2core::Message & msg)
 {
 	// FIXME: Should we really only consider message types we are currently displaying?
-	while (messages.size () >= getScrollHeight ())
+	while (messages.size () >= (size_t) getScrollHeight ())
 	{
 		messages.pop_front ();
 	}

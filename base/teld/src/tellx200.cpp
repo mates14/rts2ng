@@ -342,7 +342,7 @@ int TelLX200::matchTime ()
 		logStream (MESSAGE_ERROR) << "cannot set hour offset to 0. Reply was " << rep << sendLog;
 		return -1;
 	}
-	snprintf (buf, 14, ":SL%02d:%02d:%02d#", ts.tm_hour, ts.tm_min, ts.tm_sec);
+	snprintf (buf, sizeof (buf), ":SL%02d:%02d:%02d#", ts.tm_hour, ts.tm_min, ts.tm_sec);
 	ret = serConn->writeRead (buf, strlen (buf), &rep, 1);
 	if (ret < 0)
 		return ret;
@@ -351,7 +351,7 @@ int TelLX200::matchTime ()
 		logStream (MESSAGE_ERROR) << "cannot set time. Reply was " << rep << sendLog;
 		return -1;
 	}
-	snprintf (buf, 14, ":SC%02d/%02d/%02d#", ts.tm_mon + 1, ts.tm_mday, ts.tm_year - 100);
+	snprintf (buf, sizeof (buf), ":SC%02d/%02d/%02d#", ts.tm_mon + 1, ts.tm_mday, ts.tm_year - 100);
 	ret = serConn->writeRead (buf, strlen (buf), buf, 55, '#');
 	if (ret < 0)
 		return ret;

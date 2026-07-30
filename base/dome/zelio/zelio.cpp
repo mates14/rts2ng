@@ -275,7 +275,7 @@ int Zelio::setBitsInput (uint16_t reg, uint16_t mask, bool value)
 			oldValue |= mask;
 		zelioConn->writeHoldingRegister (unitId, reg, oldValue);
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "setBitsInput " << err << sendLog;
 		return -1;
@@ -333,7 +333,7 @@ int Zelio::startOpen ()
 		zelioConn->writeHoldingRegisterMask (unitId, ZREG_J2XT1, ZI_DEADN_MASK, 0);
 		zelioConn->writeHoldingRegisterMask (unitId, ZREG_J2XT1, ZI_DEADN_MASK, 1);
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "startOpen " << err << sendLog;
 		return -1;
@@ -360,7 +360,7 @@ bool Zelio::isGoodWeather ()
 		if (haveBatteryLevel || haveHumidityOutput || zelioModel == ZELIO_ELYA)
 			zelioConn->readHoldingRegisters (unitId, ZREG_O3XT1, 1, &reg3);
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "isGoodWeather " << err << sendLog;
 		sleep (2);
@@ -371,7 +371,7 @@ bool Zelio::isGoodWeather ()
 			if (haveBatteryLevel || haveHumidityOutput || zelioModel == ZELIO_ELYA)
 				zelioConn->readHoldingRegisters (unitId, ZREG_O3XT1, 1, &reg3);
 		}
-		catch (rts2core::ConnError err2)
+		catch (rts2core::ConnError &err2)
 		{
 			logStream (MESSAGE_ERROR) << "isGoodWeather reinit failed " << err << sendLog;
 			// problem occured during opening, and we can restart connection - wait until
@@ -525,7 +525,7 @@ long Zelio::isOpened ()
 		zelioConn->readHoldingRegisters (unitId, ZREG_O1XT1, 2, regs);
 		sendSwInfo (regs);
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "isOpened " << err << sendLog;
 
@@ -542,7 +542,7 @@ long Zelio::isOpened ()
 			zelioConn->readHoldingRegisters (unitId, ZREG_O1XT1, 2, regs);
 			sendSwInfo (regs);
 		}
-		catch (rts2core::ConnError er)
+		catch (rts2core::ConnError &er)
 		{
 			logStream (MESSAGE_ERROR) << "isOpened restart " << er << sendLog;
 			return -1;
@@ -606,13 +606,13 @@ int Zelio::startClose ()
 				return 0;
 			}
 		}
-		catch (rts2core::ConnError err)
+		catch (rts2core::ConnError &err)
 		{
 			logStream (MESSAGE_WARNING) << "cannot read dome status after issuing close command" << sendLog;
 			return 0;
 		}
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		if (closeErrorReported == false)
 		{
@@ -634,7 +634,7 @@ long Zelio::isClosed ()
 		zelioConn->readHoldingRegisters (unitId, ZREG_O1XT1, 2, regs);
 		sendSwInfo (regs);
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "isClosed " << err << sendLog;
 		return -1;
@@ -775,7 +775,7 @@ void Zelio::postEvent (rts2core::Event *event)
 				{
 					zelioConn->writeHoldingRegisterMask (unitId, ZREG_J2XT1, ZI_DEADN_MASK, deadManNum);
 				}
-				catch (rts2core::ConnError err)
+				catch (rts2core::ConnError &err)
 				{
 					logStream (MESSAGE_ERROR) << "EVENT_DEADBUT " << err << sendLog;
 				}
@@ -882,7 +882,7 @@ int Zelio::info ()
 	{
 		zelioConn->readHoldingRegisters (unitId, 16, 8, regs);
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "info " << err << sendLog;
 		try
@@ -891,7 +891,7 @@ int Zelio::info ()
 			zelioConn->init ();
 			zelioConn->readHoldingRegisters (unitId, 16, 8, regs);
 		}
-		catch (rts2core::ConnError err2)
+		catch (rts2core::ConnError &err2)
 		{
 			logStream (MESSAGE_ERROR) << "info 2nd call failed " << err2 << sendLog;
 			return -1;
@@ -1051,7 +1051,7 @@ int Zelio::initHardware ()
 		zelioConn->init ();
 		zelioConn->readHoldingRegisters (unitId, 16, 8, regs);
 	}
-	catch (rts2core::ConnError er)
+	catch (rts2core::ConnError &er)
 	{
 		logStream (MESSAGE_ERROR) << "initHardware " << er << sendLog;
 		return -1;
@@ -1382,7 +1382,7 @@ int Zelio::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 			}
 		}
 	}
-	catch (rts2core::ConnError err)
+	catch (rts2core::ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << "setValue " << oldValue->getName () << " " << err << sendLog;
 		return -2;

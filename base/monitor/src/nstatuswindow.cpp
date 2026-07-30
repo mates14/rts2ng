@@ -62,7 +62,7 @@ void NStatusWindow::draw ()
 		for (std::map <rts2core::Connection *, std::vector < rts2core::Value *> >::iterator i = failed.begin (); i != failed.end (); i++)
 			f += i->second.size ();
 
-		mvwprintw (window, 0, COLS - 38, "%2i %2i", failed.size (), f);
+		mvwprintw (window, 0, COLS - 38, "%2i %2i", (int) failed.size (), f);
 		mvwprintw (window, 0, COLS - 33, "|LST %02i:%02i:%02i", hms.hours, hms.minutes, (int) hms.seconds);
 	}
 	wcolor_set (window, CLR_DEFAULT, NULL);

@@ -51,8 +51,8 @@ double getDUT1 (const char *fn, struct tm *gmdate)
 	char *line = NULL;
 	size_t n = 0;
 
-	char datepart[7];
-	snprintf (datepart, 7, "%2d%2d%2d", gmdate->tm_year - 100, gmdate->tm_mon + 1, gmdate->tm_mday);
+	char datepart[48];
+	snprintf (datepart, sizeof (datepart), "%2d%2d%2d", gmdate->tm_year - 100, gmdate->tm_mon + 1, gmdate->tm_mday);
 
 	while (getline (&line, &n, f) >= 0)
 	{

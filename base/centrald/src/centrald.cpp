@@ -382,7 +382,8 @@ int ConnCentrald::command ()
 			}
 
 			setName (centraldNum, reg_device);
-			strncpy (hostname, in_hostname, HOST_NAME_MAX);
+			strncpy (hostname, in_hostname, HOST_NAME_MAX - 1);
+			hostname[HOST_NAME_MAX - 1] = '\0';
 
 			setType (DEVICE_SERVER);
 			sendStatusInfo ();

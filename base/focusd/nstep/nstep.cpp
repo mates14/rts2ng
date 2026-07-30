@@ -54,7 +54,7 @@ class NStep:public Focusd
 		virtual int setValue (rts2core::Value *oldValue, rts2core::Value *newValue);
 
 	private:
-		char buf[15];
+		char buf[32];
 		const char *device_file;
                 rts2core::ConnSerial *NSConn; // communication port with microfocuser
 
@@ -310,7 +310,7 @@ int NStep::setTo (double num)
 	}
 
 	// compare as well strings we will send..
-	snprintf (buf, 9, ":F%c%d%03d#", (diff > 0) ? '1' : '0', 0, (int) (fabs (diff)));
+	snprintf (buf, sizeof (buf), ":F%c%d%03d#", (diff > 0) ? '1' : '0', 0, (int) (fabs (diff)));
 	return NSConn->writePort (buf, 8);
 }
 
