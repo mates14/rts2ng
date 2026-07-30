@@ -58,12 +58,12 @@ int NetworkAddress::update (int _centrald_num, const char *_name, const char *ne
 
 int NetworkAddress::getSockaddr (struct addrinfo **info)
 {
-	char s_port[10];
+	char s_port[16];
 	struct addrinfo hints = {0};
 	hints.ai_flags = 0;
 	hints.ai_family = PF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = 0;
-	sprintf (s_port, "%i", port);
+	snprintf (s_port, sizeof (s_port), "%i", port);
 	return getaddrinfo (host, s_port, &hints, info);
 }

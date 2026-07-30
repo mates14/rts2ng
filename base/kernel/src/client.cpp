@@ -59,11 +59,12 @@ int ConnClient::init ()
 		return -1;
 
 	ret = address->getSockaddr (&device_addr);
+	int saved_errno = errno;
 
 	if (ret)
 	{
-		logStream (MESSAGE_ERROR) << "NetworkAddress::getAddress getaddrinfor for host " << address->getHost ()
-			<< ": " << gai_strerror (ret) << sendLog;
+		logStream (MESSAGE_ERROR) << "NetworkAddress::getAddress getaddrinfo for host " << address->getHost ()
+			<< ": " << (ret == EAI_SYSTEM ? strerror (saved_errno) : gai_strerror (ret)) << sendLog;
 		return -1;
 	}
 	sock = socket (device_addr->ai_family, device_addr->ai_socktype,

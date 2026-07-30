@@ -733,6 +733,8 @@ int Execute::defnextCommand (rts2core::DevClient * _client, rts2core::Command **
 		if (ret)
 		{
 			logStream (MESSAGE_ERROR) << "Cannot execute script control command, ending script. Script will not be executed again." << sendLog;
+			delete connExecute;
+			connExecute = NULL;
 			return NEXT_COMMAND_STOP_TARGET;
 		}
 		client = _client;

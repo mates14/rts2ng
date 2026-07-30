@@ -318,6 +318,7 @@ int ConnFork::init ()
 	if (access (exePath, X_OK))
 	{
 		logStream (MESSAGE_ERROR) << "execution of " << exePath << " failed with error: " << strerror (errno) << sendLog;
+		initFailed ();
 		return -1;
 	}
 	int filedes[2];
