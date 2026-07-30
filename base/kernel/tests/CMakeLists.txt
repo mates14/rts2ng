@@ -1,3 +1,17 @@
+# Test binaries rely on assert() for their actual checks, so they must
+# keep asserting regardless of the overall build type - the default
+# RelWithDebInfo build defines NDEBUG, which would otherwise silently
+# turn every assert() (and the test built around it) into a no-op.
+set(RTS2_KERNEL_TESTS
+	test_hoststring
+	test_libnova_cpp
+	test_config
+	test_value_header
+	test_connection_prereqs
+	test_app
+	test_block_connection
+)
+
 add_executable(test_hoststring test_hoststring.cpp)
 target_link_libraries(test_hoststring PRIVATE base_kernel)
 add_test(NAME hoststring COMMAND test_hoststring)
@@ -25,3 +39,7 @@ add_test(NAME app COMMAND test_app)
 add_executable(test_block_connection test_block_connection.cpp)
 target_link_libraries(test_block_connection PRIVATE base_kernel)
 add_test(NAME block_connection COMMAND test_block_connection)
+
+foreach(_rts2_test ${RTS2_KERNEL_TESTS})
+	target_compile_options(${_rts2_test} PRIVATE -UNDEBUG)
+endforeach()
