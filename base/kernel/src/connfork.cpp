@@ -356,7 +356,7 @@ int ConnFork::init ()
 		}
 	}
 
-	char *home = getenv ("HOME");
+	const char *home = getenv ("HOME");
 	// FIXME: this is a quite crude workaround that should probably be done in some other way?
 	if ((!home || !*home) && (getuid () == 0))
 		home = "/root"; // Fallback for starting from root environments not providing HOME, e.g. systemd

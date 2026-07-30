@@ -224,7 +224,7 @@ void DevClientCameraImage::writeFilter (Image *img)
 	int camFilter = img->getFilterNum ();
 	char imageFilter[25];
 	memset (imageFilter, 0, 25);
-	strncpy (imageFilter, getConnection()->getValueSelection ("filter", camFilter), 25);
+	strncpy (imageFilter, getConnection()->getValueSelection ("filter", camFilter), 24);
 	img->setFilter (imageFilter);
 }
 

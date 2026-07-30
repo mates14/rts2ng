@@ -243,9 +243,11 @@ DevConnectionMaster::DevConnectionMaster (Device * _master, char *_device_host, 
 	master = _master;
 	device_host = _device_host;
 	device_port = _device_port;
-	strncpy (device_name, _device_name, DEVICE_NAME_SIZE);
+	strncpy (device_name, _device_name, DEVICE_NAME_SIZE - 1);
+	device_name[DEVICE_NAME_SIZE - 1] = '\0';
 	device_type = _device_type;
-	strncpy (master_host, _master_host, HOST_NAME_MAX);
+	strncpy (master_host, _master_host, HOST_NAME_MAX - 1);
+	master_host[HOST_NAME_MAX - 1] = '\0';
 	master_port = _master_port;
 	setCentraldNum (_serverNum);
 

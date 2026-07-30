@@ -405,7 +405,7 @@ void Image::getHeaders ()
 		getValue ("CTIME", tv.tv_sec, true);
 		getValue ("USEC", tv.tv_usec, true);
 	}
-	catch (rts2core::Error)
+	catch (rts2core::Error &)
 	{
 		try
 		{
@@ -433,7 +433,7 @@ void Image::getHeaders ()
 				}
 			}
 		}
-		catch (rts2core::Error er)
+		catch (rts2core::Error &er)
 		{
 			logStream (MESSAGE_WARNING) << "cannot get time from image " << getFileName () << ", using current time" << sendLog;
 			gettimeofday (&tv, NULL);
@@ -445,7 +445,7 @@ void Image::getHeaders ()
 	{
 		getValue ("EXPTIME", exposureLength, false);
 	}
-	catch (rts2core::Error)
+	catch (rts2core::Error &)
 	{
 		getValue ("EXPOSURE", exposureLength, verbose);
 	}
@@ -1176,9 +1176,9 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 		getValue ("DATASEC", tmp, 128, NULL, true);
 
 		std::string datasec (tmp);
-		for (i = 0; i < datasec.length (); i++)
-			if (datasec[i] == '[' || datasec[i] == ']' || datasec[i] == ':' || datasec[i] == ',')
-				datasec[i] = ' ';
+		for (size_t di = 0; di < datasec.length (); di++)
+			if (datasec[di] == '[' || datasec[di] == ']' || datasec[di] == ':' || datasec[di] == ',')
+				datasec[di] = ' ';
 
 		std::vector<std::string> split = SplitStr (datasec, " ");
 
@@ -1352,7 +1352,7 @@ template <typename bt, typename dt> void Image::getChannelPseudocolourByteBuffer
 		buf = new bt[3 * s];
 
 	double n;
-	bt nR, nG, nB;
+	bt nR = 0, nG = 0, nB = 0;
 
 	bt *k = buf;
 
@@ -1695,7 +1695,7 @@ int Image::getImgId ()
 		if (imgId < 0)
 			getTargetHeaders ();
 	}
-	catch (rts2core::Error er)
+	catch (rts2core::Error &er)
 	{
 		logStream (MESSAGE_ERROR) << "cannot read image header " << er << sendLog;
 	}
@@ -1912,7 +1912,7 @@ const void* Image::getChannelData (int chan)
 		{
 			loadChannels ();
 		}
-		catch (rts2core::Error er)
+		catch (rts2core::Error &er)
 		{
 			logStream (MESSAGE_ERROR) << er << sendLog;
 			return NULL;

@@ -102,7 +102,7 @@ int ConnSerial::init ()
 	// set blocking mode
 	fcntl (sock, F_SETFL, 0);
 
-	speed_t b_speed;
+	speed_t b_speed = B9600;
 	int ret;
 
 	ret = tcgetattr (sock, &s_termios);

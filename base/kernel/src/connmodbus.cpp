@@ -190,10 +190,10 @@ void ConnModbusTCP::exchangeData (const void *payloadData, size_t payloadSize, v
 		bcopy (reply_data + 6, reply, replySize - 6);
 		transId++;
 	}
-	catch (ConnError err)
+	catch (ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << err << sendLog;
-		throw (err);
+		throw;
 	}
 
 }
@@ -230,9 +230,9 @@ void ConnModbusRTUTCP::exchangeData (const void *payloadData, size_t payloadSize
 		}
 		bcopy (reply_data, reply, replySize - 2);
 	}
-	catch (ConnError err)
+	catch (ConnError &err)
 	{
 		logStream (MESSAGE_ERROR) << err << sendLog;
-		throw (err);
+		throw;
 	}
 }
