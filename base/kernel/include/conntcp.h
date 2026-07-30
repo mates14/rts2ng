@@ -116,11 +116,20 @@ class ConnTCP:public ConnNoSend
 		ConnTCP (rts2core::Block *_master, int _port);
 
 		/**
+		 * Init TCP/IP connection to host given at constructor. Overrides
+		 * Connection::init() (reportcon defaults to true); see the other
+		 * init() overload if the caller needs to pass reportcon explicitly.
+		 *
+		 * @return -1 on error, 0 on success.
+		 */
+		virtual int init () override;
+
+		/**
 		 * Init TCP/IP connection to host given at constructor.
 		 *
 		 * @return -1 on error, 0 on success.
 		 */
-		virtual int init (bool reportcon = true);
+		virtual int init (bool reportcon);
 
 		/**
 		 * Returns TCP/IP port.

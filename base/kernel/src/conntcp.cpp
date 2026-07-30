@@ -61,6 +61,11 @@ bool ConnTCP::checkBufferForChar (std::istringstream **_is, char end_char)
 	return false;
 }
 
+int ConnTCP::init ()
+{
+	return init (true);
+}
+
 int ConnTCP::init (bool reportConn)
 {
 	int ret;
