@@ -21,6 +21,7 @@
 
 #include <sys/time.h>
 #include <ctime>
+#include <type_traits>
 
 #include "scriptdevice.h"
 #include "imghdr.h"
@@ -1112,13 +1113,43 @@ class Camera:public rts2core::ScriptDevice
 			double tMax = max->getValueDouble ();
 			int pixNum = 0;
 			t *tData = data;
-			if (modeCountSize < (((long long unsigned int) 1) << (sizeof (t) * 8)))
+
+			// Mode (most frequent pixel value) is tracked with a histogram
+			// indexed directly by pixel value, which is only sound - and only
+			// ever needed in practice - for 16-bit unsigned data, the one
+			// format real sensor readouts here actually use. Wider (24/32-bit)
+			// or signed or floating types would need a multi-GB histogram
+			// and/or produce negative indices; for those we simply don't
+			// track mode (image_mode is reported as NAN, see sendReadoutData).
+			if constexpr (std::is_same_v<t, uint16_t>)
 			{
-				delete[] modeCount;
-				modeCountSize = ((long long unsigned int) 1) << (sizeof (t) * 8);
-				modeCount = new uint32_t[modeCountSize];
-				memset (modeCount, 0, modeCountSize * sizeof (uint32_t));
+				if (calculateStatistics->getValueInteger () != STATISTIC_NOMODE)
+				{
+					if (modeCountSize < (((long long unsigned int) 1) << (sizeof (t) * 8)))
+					{
+						delete[] modeCount;
+						modeCountSize = ((long long unsigned int) 1) << (sizeof (t) * 8);
+						modeCount = new uint32_t[modeCountSize];
+						memset (modeCount, 0, modeCountSize * sizeof (uint32_t));
+					}
+				}
+				else if (modeCount != nullptr)
+				{
+					delete[] modeCount;
+					modeCount = nullptr;
+					modeCountSize = 0;
+				}
 			}
+			else if (modeCount != nullptr)
+			{
+				// previous readout was uint16_t and left a histogram behind;
+				// it does not apply to this pixel type, drop it rather than
+				// report a stale mode value.
+				delete[] modeCount;
+				modeCount = nullptr;
+				modeCountSize = 0;
+			}
+
 			while (((char *) tData) < ((char *) data) + dataSize)
 			{
 				t tD = *tData;
@@ -1127,7 +1158,8 @@ class Camera:public rts2core::ScriptDevice
 					tMin = tD;
 				if (tD > tMax)
 				  	tMax = tD;
-				modeCount[(long) tD]++;
+				if (modeCount != nullptr)
+					modeCount[(long) tD]++;
 				tData++;
 				pixNum++;
 			}

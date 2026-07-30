@@ -1017,8 +1017,15 @@ int Camera::sendReadoutData (char *data, size_t dataSize, int chan)
 					modeNum = modeCount[i];
 				}
 			}
-			sendValueAll (image_mode);
 		}
+		else
+		{
+			// mode is only tracked for 16-bit unsigned data (see
+			// Camera::updateStatistics); report "no value" rather than a
+			// stale or meaningless number for anything else.
+			image_mode->setValueDouble (NAN);
+		}
+		sendValueAll (image_mode);
 
 		sendValueAll (average);
 		sendValueAll (max);
