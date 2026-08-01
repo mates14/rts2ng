@@ -10,6 +10,11 @@ target_link_libraries(base_camd PUBLIC base_kernel)
 
 add_subdirectory(dummy)
 
+# V4L2 webcam driver - needs only the Linux kernel UAPI header
+# (linux/videodev2.h, no separate library), so unlike the vendor SDKs below
+# there's nothing to detect: it always builds on Linux.
+add_subdirectory(v4l)
+
 # Andor is a proprietary vendor SDK (precompiled headers + .so, no source
 # available) - nobody has this hardware/SDK by accident, so unlike libnova
 # or ncurses this is never auto-searched. Point BASE_ANDOR_SDK_DIR at an
