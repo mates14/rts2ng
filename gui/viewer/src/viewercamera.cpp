@@ -109,7 +109,6 @@ namespace
 		double A = (sumY - B * sumX) / 4.0;
 
 		QImage img (width, height, QImage::Format_Grayscale8);
-		unsigned char greyMin = 255, greyMax = 0;
 		for (long y = 0; y < height; y++)
 		{
 			unsigned char *line = img.scanLine (y);
@@ -127,30 +126,6 @@ namespace
 				if (grey > 255)
 					grey = 255;
 				line[x] = (unsigned char) grey;
-				if (line[x] < greyMin)
-					greyMin = line[x];
-				if (line[x] > greyMax)
-					greyMax = line[x];
-			}
-		}
-
-		// The percentile fit above is tuned for stellar fields (a few bright
-		// points on a mostly-dark background) and can leave flatter scenes -
-		// e.g. a daytime test shot off a v4l camera - undersaturated, with
-		// its actual max sitting well below 255. Final normalization pass:
-		// if the fit's own output doesn't already reach both ends of the
-		// 0-255 range, linearly rescale it so it does. Since greyMin/greyMax
-		// are always within [0, 255] already, this can only ever widen the
-		// range the fit produced, never narrow it - a genuine full-range
-		// stellar-field result (greyMin == 0, greyMax == 255) is untouched.
-		if (greyMax > greyMin && (greyMin > 0 || greyMax < 255))
-		{
-			double scale = 255.0 / (greyMax - greyMin);
-			for (long y = 0; y < height; y++)
-			{
-				unsigned char *line = img.scanLine (y);
-				for (long x = 0; x < width; x++)
-					line[x] = (unsigned char) std::lround ((line[x] - greyMin) * scale);
 			}
 		}
 		return img;

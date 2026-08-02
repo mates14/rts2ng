@@ -730,35 +730,6 @@ this session: no screen-capture tooling available here to confirm the
 graph's actual on-screen appearance, axis-availability toggling, or the
 new-image-vs-refit distinction live - needs the user's own test.
 
-## Round 10: force full-range stretch when the logfit undershoots
-
-User reported the v4l test camera's daytime shots looked undersaturated -
-the flat, high-background daytime scene has none of a stellar field's
-"few bright points on dark sky" shape the logfit percentile fit (Round 8)
-is tuned for, so the fitted curve's actual max output on that image sat
-around grey 127 instead of 255 - correct given the fit's own math, just
-not what a viewer wants to *look* at.
-
-Fix, in `logFitGrayscale()` (`viewercamera.cpp`): track the actual min/max
-grey value the fit produces across the whole image (already clamped to
-[0, 255] by the existing per-pixel clamp), then as a final pass, if that
-observed range doesn't already touch both ends (`greyMin > 0 ||
-greyMax < 255`), linearly rescale the whole image so it does:
-`(v - greyMin) * 255 / (greyMax - greyMin)`. Because clamping already
-guarantees `greyMin`/`greyMax` stay inside `[0, 255]`, this rescale can
-only ever widen the fit's output range, never compress it - a genuine
-full-range stellar-field result (`greyMin == 0`, `greyMax == 255`, the
-common case for a real star field with a saturated peak) is left
-untouched, exactly matching the user's own framing: "check if the min->0
-or max->255 rules are not stronger and if so, apply them." Flat images
-where `greyMax == greyMin` (nothing to stretch, e.g. a genuinely blank
-frame) skip the rescale rather than dividing by zero.
-
-**Verification**: clean rebuild of the viewer sources, zero new warnings.
-No live v4l camera available in this session to re-capture the specific
-undersaturated frame the user saw - needs the user's own look to confirm
-the daytime shot now spans full black-to-white.
-
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare
