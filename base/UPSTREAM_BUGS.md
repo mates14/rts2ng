@@ -1476,6 +1476,50 @@ rts2.ini with a commented-out example of both (referenced from wherever
 per-device config options are documented) would close that gap; this fix
 only stops the log noise, it doesn't add documentation.
 
+## 🔴 PROTOCOL DESIGN NOTE - full property dump sent before login/auth completes - DO NOT TOUCH
+
+**Not a bug to fix. A characteristic of the wire protocol itself,
+written down here so nobody "improves" it without knowing what it
+touches.**
+
+**Files:** the client/device connection handshake generally
+(`lib/rts2/connection.cpp`'s `metaInfo()`/`commandValue()` and
+`lib/rts2/device.cpp`'s equivalent send side; same structure in this
+port's `kernel/src/connection.cpp`/`daemon.cpp`).
+
+A freshly-opened device connection starts receiving its full property
+(metaInfo + value) dump *before* login/authorization finishes - you
+connect, and it's already flooding you, unconditionally. Confirmed
+identical in classic RTS2, not something base introduced or could
+introduce (it's inherent to when the device-side handshake code chooses
+to start sending, on both the classic tree and this port, since neither
+changed that ordering).
+
+**Why this is worth a permanent note, not a fix**: found while chasing a
+real client-side bug in `gui`/`rts2-viewer` (see its `STATUS.md` Round 12
+- binning/cooling controls staying blank until an unrelated later
+change) - the property dump racing ahead of a client's own connection
+setup is *most likely the actual root cause* of that whole class of bug.
+A protocol that gated this dump behind a completed auth handshake would
+close the race by construction, for every client, not just this one.
+
+**Why nobody should attempt that "fix"**: this ordering is baked into
+every single RTS2 client and device that has ever been written against
+this protocol - `rts2-mon`, the executor, every camd/teld/domectrl
+driver, this port's own `gui`/`base`/`db` trees, third-party
+reimplementations (confirmed independently by the user's own experience
+writing a Python client against this same protocol). Changing *when* the
+dump is sent relative to auth is a core wire-protocol change with
+unknown blast radius across every one of those - the kind of change that
+looks small and is not. `gui/viewer` was instead made robust to the
+*current*, real ordering (cache-and-replay in `ViewerCamera`, see its
+`STATUS.md`) rather than asking the protocol to change to suit one
+client.
+
+**If this is ever revisited**: do it as its own dedicated, carefully
+scoped effort - inventory every client/device that assumes the current
+ordering first, not as a quick fix bundled into something else.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree
