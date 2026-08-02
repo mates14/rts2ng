@@ -774,6 +774,75 @@ removed. Full `gui`/`base`/`db` rebuild clean. Still needs the user's own
 live check that flipping the button to OFF in a running `rts2-viewer`
 now actually stops new files from appearing.
 
+## Round 11: configurable archive path for FLORES production deployment
+
+Prototype behaviour saved images into the process's own working
+directory - fine so far, but the FLORES PC deployment needs saved images
+to land in the shared `/images`-style archive (site array, so this is
+"free" backup/archiving), using the same base-path + expand-path
+machinery classic RTS2 already has for this - just without any target
+involved, since this viewer has no concept of one.
+
+- **`Configuration::observatoryBasePath()`** (`kernel/include/
+  configuration.h`, reads `[observatory] base_path` from rts2.ini,
+  defaulting to `/images/`) plus `image.h`'s existing `%Y`/`%N`/`%c`/...
+  expand-path syntax (`Expander`/`Image::expandVariable()`,
+  `kernel/src/expander.cpp`/`image.cpp`) already do exactly this - no new
+  path-building code needed, only wiring it into `ViewerCamera`.
+- **`ViewerCamera::createImage()`** (new override, `viewercamera.cpp`):
+  when `saveImage` is on *and* an archive expand-path expression has been
+  set (`setArchivePath()`), constructs the `Image` via the expanding
+  7-argument constructor (`image.h`, expression + expNum + connection),
+  same one `DevClientCameraExec::createImage()` (`script/src/execcli.cpp`)
+  already uses for the target-based executor path - just with no target.
+  Otherwise falls straight through to the base class's own default
+  (relative-to-cwd, unchanged from before this round).
+- **Deliberately *not* used for `saveImage=0` frames** - the whole point
+  of Round 10's create-then-delete fix was that it's harmless in a
+  scratch location, but the user was explicit this round that the shared
+  archive must never see a file appear then vanish (other tools rely on
+  it holding only definitive, kept images - backup/sync jobs, etc.).
+  `createImage()` only reaches for the archive path when `saveImage` is
+  actually true, so a saveImage=0 frame still gets its usual harmless
+  create-then-delete cycle, just in the base class's cwd-relative
+  default location, never inside the archive.
+- **Two ways to set the archive expression** (`ViewerClient`,
+  `viewerclient.cpp`), exactly as asked ("either from command line or
+  even from rts2.ini"): a new `--images <expand-expression>` option
+  (mirrors `scriptexec`'s own `-e`/`--images`-shaped option,
+  `scriptexec.cpp`), falling back to rts2.ini's `[viewer] expand_path` if
+  not given (same `[section] expand_path` convention `scriptexec.cpp`
+  itself uses for its own `[scriptexec] expand_path`), falling back in
+  turn to a built-in default: `%b%Y/%N/%c_%H%M%S-%s.fits` - e.g.
+  `/images/2026/20260802/C0_174528-970.fits`, matching the user's own
+  example layout exactly (`%Y`/`%N` are the *night*-based year/date
+  variants, not calendar-day `%y`/current date, so a frame taken just
+  after local midnight still files under the night it belongs to).
+- Every newly-discovered camera gets the same resolved path
+  (`ViewerClient::createOtherType()` calls `cam->setArchivePath
+  (imageExpandPath)` right next to the existing `setSaveImage(1)`) -
+  one archive location per viewer process, not per-camera, since nothing
+  about this deployment needs per-camera archive roots.
+- Deliberately did **not** add any explicit writable-directory check
+  before first use - `FitsFile::createFile()` already calls `mkpath()`
+  and logs a clear `MESSAGE_ERROR` if that (or the actual file creation)
+  fails, same as every other RTS2 client hitting an unwritable path; the
+  user's own note that `/images` needs to be writable by whichever user
+  runs the viewer is a deployment/permissions requirement for FLORES, not
+  something this code needs to pre-validate.
+
+**Verification**: clean rebuild of the viewer sources. Confirmed the
+expansion logic itself with a standalone test linked against the real
+`libbase_kernel.a` (not a mock), calling `Image::expandPath()` directly
+on the same `%Y/%N/%c_...` template used here - resolved `%Y` to `2026`,
+`%N` to `20260802`, exactly the requested nesting. Same permission
+constraint as Round 6 blocks a live end-to-end save through `rts2-viewer`
+itself in this environment (`/var/lib/rts2/images/`-style paths aren't
+writable by this session's user, and there's no display here anyway) -
+needs the user's own check once deployed on FLORES that `/images` is
+writable by the viewer's user and that a real exposure lands where
+expected.
+
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare

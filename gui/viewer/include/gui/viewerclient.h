@@ -104,6 +104,18 @@ class ViewerClient : public QObject, public rts2core::Client
 		const char *configFile;
 		std::string initialDevice;
 
+		/**
+		 * Expand-path expression for frames that get kept (saveImage on) -
+		 * see ViewerCamera::setArchivePath(). Populated in init(): the
+		 * --images command-line option if given, else rts2.ini's
+		 * [viewer] expand_path, else a built-in default that lands under
+		 * Configuration::observatoryBasePath() ("/images/" by default, or
+		 * whatever [observatory] base_path is set to) in per-year/
+		 * per-night subdirectories - no target involved, since this
+		 * viewer has no concept of one.
+		 */
+		std::string imageExpandPath;
+
 		std::mutex camerasMutex;
 		std::map<std::string, ViewerCamera *> cameras;
 		std::map<rts2core::Connection *, std::string> cameraNames;

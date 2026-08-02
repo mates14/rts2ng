@@ -6,6 +6,7 @@
 #include <QStringList>
 
 #include <atomic>
+#include <string>
 #include <vector>
 
 #include "devcliimg.h"
@@ -43,6 +44,19 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		 * image arrives (cameraImageReady()) to run the centroid fit.
 		 */
 		void setMeasureRegion (int x, int y, int w, int h);
+
+		/**
+		 * Expand-path expression (image.h's %b/%y/%N/... syntax) used for
+		 * frames that are actually being kept (saveImage on) - e.g.
+		 * "%b%Y/%N/%c_%H%M%S-%s.fits", which lands under the observatory's
+		 * shared archive (Configuration::observatoryBasePath(), rts2.ini's
+		 * [observatory] base_path) in per-year/per-night subdirectories, no
+		 * target involved. Set once at startup from ViewerClient (CLI
+		 * option or rts2.ini's own [viewer] expand_path) - see
+		 * createImage() override below for why this is deliberately NOT
+		 * used for saveImage=0 frames.
+		 */
+		void setArchivePath (const std::string &expandPath) { archiveExpandPath = expandPath; }
 
 		/**
 		 * Re-run the centroid/FWHM fit against the last image already
@@ -106,6 +120,17 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		void stateTextChanged (QString stateText, bool hasError);
 
 	protected:
+		/**
+		 * Only routes into the shared archive path when this frame is
+		 * actually going to be kept (saveImage on) - a saveImage=0 frame
+		 * still gets created-then-deleted (see kernel/src/devcliimg.cpp's
+		 * processCameraImage() and gui/STATUS.md), but falls through to
+		 * the base class's own scratch-cwd default instead, so that
+		 * create-then-delete cycle never happens inside the archive other
+		 * tools (backup/sync) rely on seeing only definitive images in.
+		 */
+		virtual rts2image::Image *createImage (const struct timeval *expStart) override;
+
 		virtual void cameraImageReady (rts2image::Image *image) override;
 		virtual void exposureStarted (bool expectImage) override;
 		virtual void exposureEnd (bool expectImage) override;
@@ -127,6 +152,8 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		long lastWidth = 0;
 		long lastHeight = 0;
 		int lastDataType = 0;
+
+		std::string archiveExpandPath;
 };
 
 }

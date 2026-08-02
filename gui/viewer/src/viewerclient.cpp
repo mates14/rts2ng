@@ -10,6 +10,7 @@
 using namespace gui;
 
 #define OPT_DEVICE   OPT_LOCAL + 900
+#define OPT_IMAGES   OPT_LOCAL + 901
 
 ViewerClient::ViewerClient (int argc, char **argv):
 	rts2core::Client (argc, argv, "rts2-viewer")
@@ -17,6 +18,7 @@ ViewerClient::ViewerClient (int argc, char **argv):
 	configFile = NULL;
 	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
+	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %b%Y/%N/%c_%H%M%S-%s.fits");
 }
 
 int ViewerClient::processOption (int in_opt)
@@ -28,6 +30,9 @@ int ViewerClient::processOption (int in_opt)
 			break;
 		case OPT_DEVICE:
 			initialDevice = optarg;
+			break;
+		case OPT_IMAGES:
+			imageExpandPath = optarg;
 			break;
 		default:
 			return rts2core::Client::processOption (in_opt);
@@ -58,6 +63,16 @@ int ViewerClient::init ()
 			<< "'" << std::endl;
 		return ret;
 	}
+
+	// --images already set it; otherwise fall back to rts2.ini's own
+	// [viewer] expand_path, same convention as [scriptexec] expand_path
+	// (scriptexec.cpp) - and if neither is set, a built-in default that
+	// reuses Configuration::observatoryBasePath() (%b, "/images/" unless
+	// overridden by [observatory] base_path) with per-year/per-night
+	// subdirectories, no target involved.
+	if (imageExpandPath.empty ())
+		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%b%Y/%N/%c_%H%M%S-%s.fits");
+
 	return 0;
 }
 
@@ -72,6 +87,7 @@ rts2core::DevClient *ViewerClient::createOtherType (rts2core::Connection *conn, 
 		// (kernel/src/devcliimg.cpp) - explicit here to match MainWindow's
 		// own default (Saving button starts ON), not to override it.
 		cam->setSaveImage (1);
+		cam->setArchivePath (imageExpandPath);
 
 		{
 			std::lock_guard<std::mutex> lock (camerasMutex);

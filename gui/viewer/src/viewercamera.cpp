@@ -137,6 +137,13 @@ ViewerCamera::ViewerCamera (rts2core::Connection *_connection):
 {
 }
 
+rts2image::Image *ViewerCamera::createImage (const struct timeval *expStart)
+{
+	if (saveImage && !archiveExpandPath.empty ())
+		return new rts2image::Image (archiveExpandPath.c_str (), getExposureNumber (), expStart, connection, false, writeConnection, writeRTS2Values);
+	return rts2image::DevClientCameraImage::createImage (expStart);
+}
+
 void ViewerCamera::setMeasureRegion (int x, int y, int w, int h)
 {
 	measureX.store (x);
