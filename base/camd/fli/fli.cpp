@@ -246,6 +246,9 @@ int Fli::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 			case 4:
 				ret = FLI_SHUTTER_EXTERNAL_TRIGGER_HIGH;
 				break;
+			default:
+				logStream (MESSAGE_ERROR) << "invalid shutter value " << new_value->getValueInteger () << sendLog;
+				return -2;
 		}
 		ret = FLIControlShutter (dev, ret);
 		return ret ? -2 : 0;
@@ -615,7 +618,7 @@ int Fli::initHardware ()
 		else
 			break;
 	}
-	sprintf (buf2, "%d-%s-%li.%li", sernum, buf, hwrev, fwrev);
+	sprintf (buf2, "%li-%s-%li.%li", sernum, buf, hwrev, fwrev);
 	serialNumber->setValueCharArr (buf2);
 	// example: "1--258.534",... - should give something reasonable for old and also new (and future) devices...
 
@@ -623,7 +626,8 @@ int Fli::initHardware ()
 	ret = FLIGetDeviceName (dev, &devnam);
 	if (ret)
 		return -1;
-	strncpy (buf, devnam, 100);
+	strncpy (buf, devnam, 99);
+	buf[99] = '\0';
 	for (i = strlen (buf) - 1; i>=0; i--)	// remove trailing spaces
 	{
 		if (buf[i] == ' ')
