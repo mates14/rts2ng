@@ -337,19 +337,43 @@ void ViewerCamera::valueChanged (rts2core::Value *value)
 
 	if (auto *rect = dynamic_cast<rts2core::ValueRectangle *> (value))
 	{
-		emit rectangleUpdated (name, rect->getXInt (), rect->getYInt (), rect->getWidthInt (), rect->getHeightInt ());
+		QRect r (rect->getXInt (), rect->getYInt (), rect->getWidthInt (), rect->getHeightInt ());
+		{
+			std::lock_guard<std::mutex> lock (valuesMutex);
+			lastRects[name] = r;
+		}
+		emit rectangleUpdated (name, r.x (), r.y (), r.width (), r.height ());
 	}
 	else if (auto *sel = dynamic_cast<rts2core::ValueSelection *> (value))
 	{
 		QStringList choices;
 		for (int i = 0; i < sel->selSize (); i++)
 			choices << QString::fromUtf8 (sel->getSelName (i));
-		emit valueUpdated (name, sel->getValueInteger (), choices);
+		double numericValue = sel->getValueInteger ();
+		{
+			std::lock_guard<std::mutex> lock (valuesMutex);
+			lastValues[name] = numericValue;
+			lastChoices[name] = choices;
+		}
+		emit valueUpdated (name, numericValue, choices);
 	}
 	else
 	{
-		emit valueUpdated (name, value->getValueDouble (), QStringList ());
+		double numericValue = value->getValueDouble ();
+		{
+			std::lock_guard<std::mutex> lock (valuesMutex);
+			lastValues[name] = numericValue;
+		}
+		emit valueUpdated (name, numericValue, QStringList ());
 	}
+}
+
+void ViewerCamera::snapshotValues (QMap<QString, double> &values, QMap<QString, QStringList> &choices, QMap<QString, QRect> &rects) const
+{
+	std::lock_guard<std::mutex> lock (valuesMutex);
+	values = lastValues;
+	choices = lastChoices;
+	rects = lastRects;
 }
 
 void ViewerCamera::stateChanged (rts2core::ServerState *state)

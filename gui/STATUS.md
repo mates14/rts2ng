@@ -872,6 +872,90 @@ connecting to `ClientThread`'s signals with a plain lambda, not specific
 to this test - worth remembering if `MainWindow` itself is ever
 refactored to use lambdas here instead of named slots.
 
+## Round 12: binning/cooling/etc. controls stayed blank until an unrelated external change - fixed
+
+User reported (real FLI hardware at FLORES): the control panel
+(binning, cooling checkbox, CCD temperature/set-point) offered nothing
+at all right after connecting - blank/disabled - until *any* value on
+the device changed for *any* reason (the user's own test: switching the
+whole system status to ON, which turns on the FLI's cooling loop as a
+side effect, was enough - not a change the user made in the viewer
+itself). Once any change happened, the corresponding control instantly
+became live and editable.
+
+Root cause is a genuine cross-thread race, not a protocol bug -
+confirmed by tracing (not guessing) the actual message flow:
+
+- A freshly-connecting device can send its *entire* initial metaInfo +
+  value dump (potentially dozens of values) back-to-back, all handled
+  synchronously on `ViewerClient`'s own worker thread
+  (`ViewerCamera::valueChanged()`, `viewercamera.cpp`) - this can easily
+  finish before `MainWindow::onCameraCreated()` - a *queued* cross-thread
+  slot, competing with the GUI thread's own real rendering/compositing
+  work - has even run yet.
+- `onCameraCreated()` is exactly where `connect(camera,
+  &ViewerCamera::valueUpdated, ...)` happens. Any value that arrives
+  *before* that connect() call has nothing subscribed to receive it - the
+  signal emission isn't queued for a not-yet-existing connection, it's
+  simply not delivered anywhere. Nothing crashes or errors; the value is
+  just never seen.
+- Confirmed the mechanism (not just theorized it) with a real, minimal
+  test harness: `QCoreApplication` + the actual compiled `ClientThread`/
+  `ViewerCamera` classes (no `MainWindow`/widgets at all), driven
+  headless (`QT_QPA_PLATFORM=offscreen`) against the real live
+  `rts2-camd-v4l` (C0) already running on this machine. Every value,
+  including a `ValueSelection` (`binning`), delivered correctly in this
+  harness - because `QCoreApplication` under `offscreen` has essentially
+  zero per-iteration overhead, the GUI-thread-side connect() reliably won
+  the race here. The real `rts2-viewer`, running under an actual display
+  doing actual widget rendering, has far more work per event-loop
+  iteration - enough, per the user's live report, to reliably *lose* that
+  same race for values from cameras with more of them (FLI) or slower
+  hardware init (cooling loop) than this fast local test could ever
+  reproduce.
+- One MORE real bug found *while building that verification harness*,
+  logged separately for anyone else who touches `ClientThread` signals:
+  connecting to a bare lambda with no receiver-context object resolves to
+  a *direct* (non-queued) connection delivered on the *emitting* (worker)
+  thread - which never runs a real Qt event loop (`ClientThread::run()`
+  just calls blocking `rts2core::Client::run()`) - so a `QTimer::
+  singleShot()` posted from inside such a handler silently never fires.
+  Passing an object that lives on the thread that *does* run
+  `QCoreApplication::exec()` as the context (plus an explicit
+  `Qt::QueuedConnection`) fixes it. Not a bug in the shipped code -
+  `MainWindow`'s own connects already all use named slots and are
+  therefore immune - but worth remembering if that ever changes.
+
+**Fix**: `ViewerCamera` now keeps its own thread-safe, mutex-guarded
+cache of the last value/choices/rectangle it has seen for every name
+(`viewercamera.h`/`.cpp` - `lastValues`/`lastChoices`/`lastRects`,
+updated inside `valueChanged()` unconditionally, whether or not anything
+is subscribed at that moment) and exposes it via a new `snapshotValues()`
+accessor. `MainWindow::onCameraCreated()` calls this *right after* wiring
+up the `valueUpdated`/`rectangleUpdated` connections, and replays
+whatever's already there through the exact same `onValueUpdated()`/
+`onRectangleUpdated()` handlers a live update would use - so this
+camera's state cache (and, if it's the active camera, its widgets) end up
+complete regardless of which side of the race actually won. No new
+threading primitive beyond a plain `std::mutex` guarding plain `QMap`/
+`QRect` data - no RTS2 `Value`/`Connection` object is ever touched from
+the GUI thread, keeping the existing "worker thread owns all RTS2 state"
+invariant intact.
+
+**Verification**: clean rebuild, zero new warnings, `ctest` 7/7. Ran the
+real compiled `rts2-viewer` binary headless against the real live camera
+again post-fix - connects and runs stably, no regression. Could not
+force the *specific* race to manifest in this fast local/offscreen
+environment even before the fix (matching the diagnosis above - this
+environment structurally favors the GUI thread winning), so this is a
+logic-level, not an empirically-reproduced-failure-then-fixed
+verification: the fix is that regardless of which side of the race wins,
+every value that has ever arrived is now guaranteed reachable at the
+moment `onCameraCreated()` finishes running, closing the gap by
+construction rather than by observing a flaky repro go away. Needs the
+user's own confirmation on the real FLI hardware that binning/cooling/
+temperature now populate immediately on connect.
+
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare

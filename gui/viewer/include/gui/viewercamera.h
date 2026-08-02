@@ -2,10 +2,13 @@
 
 #include <QObject>
 #include <QImage>
+#include <QMap>
+#include <QRect>
 #include <QString>
 #include <QStringList>
 
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -70,6 +73,27 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		 * gui/STATUS.md.
 		 */
 		void refit ();
+
+		/**
+		 * Thread-safe copy of every value/rectangle this camera has ever
+		 * reported via valueChanged() - see the mutex-guarded cache that
+		 * method maintains below. Exists to close a real startup race: a
+		 * freshly-connected device can flood its full metaInfo/value dump
+		 * through valueChanged() (on this object's own worker thread)
+		 * *before* MainWindow's queued onCameraCreated() slot - running on
+		 * the GUI thread, competing with all its own rendering work - has
+		 * even connected valueUpdated()/rectangleUpdated() to receive it.
+		 * Anything emitted in that window is not lost (there is no signal
+		 * connection yet to lose it from), but nothing was listening
+		 * either, so it never reached MainWindow's per-camera cache -
+		 * exactly matching a real report where binning/cooling/etc. controls
+		 * stayed blank/disabled until an unrelated later change happened to
+		 * retrigger valueChanged() for them. Call this once, right after
+		 * connecting those signals, and replay the result the same way
+		 * MainWindow already replays its own per-camera cache when
+		 * switching the active camera (see onCameraComboChanged()).
+		 */
+		void snapshotValues (QMap<QString, double> &values, QMap<QString, QStringList> &choices, QMap<QString, QRect> &rects) const;
 
 	signals:
 		void imageReady (QImage image);
@@ -154,6 +178,17 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		int lastDataType = 0;
 
 		std::string archiveExpandPath;
+
+		// Written (under lock) from valueChanged() on this object's own
+		// worker thread every time it fires, regardless of whether anyone
+		// is listening yet - read (under lock) from the GUI thread by
+		// snapshotValues(). Plain QMap/QRect data, not RTS2 Value/Connection
+		// objects, so a simple mutex is enough - no RTS2 wire-protocol state
+		// is touched from the GUI thread this way.
+		mutable std::mutex valuesMutex;
+		QMap<QString, double> lastValues;
+		QMap<QString, QStringList> lastChoices;
+		QMap<QString, QRect> lastRects;
 };
 
 }

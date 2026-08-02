@@ -362,6 +362,31 @@ void MainWindow::onCameraCreated (QString name, ViewerCamera *camera)
 	connect (camera, &ViewerCamera::rectangleUpdated, this, [this, name] (QString valueName, int x, int y, int w, int h) { onRectangleUpdated (name, valueName, x, y, w, h); }, Qt::QueuedConnection);
 	connect (camera, &ViewerCamera::fitResult, this, [this, name] (bool valid, double cx, double cy, double fwhmX, double fwhmY, double peak, double bg) { onFitResult (name, valid, cx, cy, fwhmX, fwhmY, peak, bg); }, Qt::QueuedConnection);
 
+	// Close the startup race: a freshly-connected device can flood its
+	// full metaInfo/value dump through ViewerCamera::valueChanged() (on
+	// its own worker thread) before this queued slot - competing with
+	// this thread's own rendering work - gets a chance to run and wire up
+	// the connections just above. Nothing is lost (there's no signal
+	// connection yet to lose it from), but nothing was listening either,
+	// so any value that arrived in that window would otherwise never
+	// reach this camera's state cache until an unrelated later change
+	// happened to retrigger it - exactly a real report where binning/
+	// cooling/etc. controls stayed blank until something else changed
+	// them externally. Replay whatever ViewerCamera already cached, through
+	// the exact same handlers a live update would use, so this camera's
+	// state is complete regardless of how that race went.
+	{
+		QMap<QString, double> initialValues;
+		QMap<QString, QStringList> initialChoices;
+		QMap<QString, QRect> initialRects;
+		camera->snapshotValues (initialValues, initialChoices, initialRects);
+
+		for (auto it = initialValues.constBegin (); it != initialValues.constEnd (); ++it)
+			onValueUpdated (name, it.key (), it.value (), initialChoices.value (it.key ()));
+		for (auto it = initialRects.constBegin (); it != initialRects.constEnd (); ++it)
+			onRectangleUpdated (name, it.key (), it.value ().x (), it.value ().y (), it.value ().width (), it.value ().height ());
+	}
+
 	log ("camera '" + name + "' ready");
 
 	if (cameraCombo->count () == 1)
