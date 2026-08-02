@@ -2547,6 +2547,36 @@ correctly; `-F` avoids the whole problem by getting the exact filename
 directly as an argument, no line-parsing involved, and is the
 recommended approach for this tool.
 
+### valgrind check (user-requested) turned up one real, kernel-wide leak
+
+After the crash fix above, the user asked to run `rts2-focusc` under
+`valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes`
+to check for memory issues. Ran it across four scenarios: a plain
+exposure loop with an `-F` hook, a `SIGINT` sent mid-exposure
+specifically to exercise the Ctrl-C stop-exposure fix (an earlier
+section above), the ambiguous-multi-camera path, and the single-camera
+auto-pick path.
+
+All four came back identical: a `still reachable` ~31KB (all `ncurses`/
+`libtinfo` terminfo caching plus `Configuration`'s parsed `rts2.ini` -
+both long-lived globals, not leaks) and one small `definitely lost`
+block, always the same backtrace - `FocusClient::postEvent()` re-arming
+the `EVENT_EXP_CHECK` progress timer. Nothing from any of this session's
+own additions (`armCamera`/`stopOwnedExposures`/`CommandStopExposure`/
+`warnIfSettingsAmbiguous`/`EVENT_CAMERA_CHOICE`) showed up at all.
+
+The one real finding turned out to be kernel-wide, not focusc-specific:
+`Block::~Block()` (`kernel/src/block.cpp`) never sweeps its own
+`timers` map, so any timer still pending at shutdown - which for a
+self-rescheduling timer is always exactly one, since the next firing is
+queued before the current handler returns - never gets `delete`d. Full
+write-up (including why it's safe to fix unconditionally) in
+`UPSTREAM_BUGS.md`. Confirmed identical in classic. Fixed with a
+four-line addition to `~Block()`; re-ran the same four valgrind
+scenarios afterward and all came back `definitely lost: 0 bytes in 0
+blocks`, full test suite (`ctest`, all 7 including `block_connection`)
+still green.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

@@ -98,6 +98,15 @@ Block::~Block (void)
 	blockAddress.clear ();
 	for (std::list <ConnUser *>::iterator iu = blockUsers.begin (); iu != blockUsers.end (); iu++)
 		delete *iu;
+	// Any timer still pending at shutdown never got to fire, so it never
+	// went through the postEvent() chain that would otherwise delete it
+	// (see Object::postEvent()'s doc comment) - e.g. every self-
+	// rescheduling timer (EVENT_EXP_CHECK/EVENT_TE_RAMP/...-style) has
+	// exactly one such Event outstanding at any given moment. Found via
+	// valgrind on rts2-focusc (base/UPSTREAM_BUGS.md has the full writeup).
+	for (std::map <double, Event *>::iterator it = timers.begin (); it != timers.end (); it++)
+		delete it->second;
+	timers.clear ();
 	delete[] fds;
 	blockUsers.clear ();
 }

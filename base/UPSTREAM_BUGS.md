@@ -1166,6 +1166,75 @@ shipped the image into a real running `ds9` via `xpaset -p ds9 fits
 to ds9" note in `STATUS.md` for the two working recipes and the
 relative-path gotcha that's a `ds9`/XPA quirk, not an RTS2 bug).
 
+---
+
+## Block::~Block() - never frees still-pending timer Events at shutdown
+
+**Files:** `lib/rts2/block.cpp` (`Block::~Block()`)
+**Maintainer:** Petr Kubanek
+**Severity:** low (bounded, one-time, reclaimed by the OS at process
+exit anyway) but real, and universal - every daemon and client built on
+`Block` that uses any timer is affected, not just `rts2-focusc`
+
+**Bug:** found running `rts2-focusc` under `valgrind --leak-check=full`
+(the user asked for this check after the port/review work above).
+`Block::idle()` dispatches a due timer's `Event*` through the
+`postEvent()` chain, which is what actually `delete`s it (see
+`Object::postEvent()`'s own doc comment: "every descendant... should
+call ancestor postEvent method at the end, so the event object will be
+deleted"). That only happens for timers that actually *fire*. Any timer
+still pending when the process shuts down - which for a
+self-rescheduling timer (`EVENT_EXP_CHECK` in `focusclient.cpp`,
+`EVENT_TE_RAMP` in `fli.cpp`, and presumably others following the same
+established pattern) is *always* exactly one, since the next firing is
+always queued before the current one's handler returns - never goes
+through that chain, and `~Block()` never sweeps the `timers` map
+itself:
+
+```cpp
+Block::~Block (void)
+{
+	// ...connections, blockAddress, blockUsers all cleaned up...
+	delete[] fds;
+}
+```
+
+`timers` (a `std::map<double, Event*>`) is simply never mentioned.
+Confirmed byte-for-byte identical in classic (`lib/rts2/block.cpp`).
+
+**Reproduction:** `valgrind --leak-check=full ... rts2-focusc -d C0 -e
+0.5` (or any `Block`-derived program with a running timer), interrupted
+or left to exit normally - always exactly one small "definitely lost"
+block, backtrace through whichever timer was still pending
+(`FocusClient::postEvent()`'s `EVENT_EXP_CHECK` re-arm, in this case).
+
+**Fix applied in base** (`kernel/src/block.cpp`): `~Block()` now deletes
+every remaining `Event*` in `timers` before clearing it. Safe to do
+unconditionally - `Block::idle()`'s two-phase dispatch-then-erase (via
+the `toDelete` batching in `pushToDelete()`) always completes fully
+within a single call, so by the time the destructor runs, anything
+still in `timers` is guaranteed to be a genuinely never-fired,
+never-deleted event, never one already handed off through the
+`postEvent` chain.
+
+```diff
+ 	for (std::list <ConnUser *>::iterator iu = blockUsers.begin (); iu != blockUsers.end (); iu++)
+ 		delete *iu;
++	for (std::map <double, Event *>::iterator it = timers.begin (); it != timers.end (); it++)
++		delete it->second;
++	timers.clear ();
+ 	delete[] fds;
+```
+
+Verified with valgrind before and after: `rts2-focusc` exercised across
+four scenarios (plain exposure loop with an `-F` hook, a `SIGINT`
+mid-exposure specifically to exercise the Ctrl-C stop-exposure fix
+above, the ambiguous multi-camera path, and the single-camera auto-pick
+path) all showed the identical one-block "definitely lost" before this
+fix and `definitely lost: 0 bytes in 0 blocks` / `ERROR SUMMARY: 0
+errors` after it, with the full test suite (`ctest`, including
+`block_connection`) still passing.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree
