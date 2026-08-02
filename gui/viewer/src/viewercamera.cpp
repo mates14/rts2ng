@@ -250,32 +250,55 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 		}
 	}
 
-	// 2. Subtract the background from every pixel in the box (interior
-	// included), clamp negative residuals to 0, and accumulate the
-	// intensity-weighted barycenter and second moments (dispersion) over
-	// what's left - Petr's "statistical tricks" in place of a true
-	// nonlinear Gaussian fit.
-	std::vector<double> residual (rw * rh);
-	double sumI = 0, sumIx = 0, sumIy = 0, peak = 0;
-
+	// 2+3. Subtract the background from every pixel (deliberately kept
+	// signed, not clamped to 0 - see below) and collapse straight into
+	// two independent 1D profiles - column sums for the x-axis, row sums
+	// for the y-axis - in the same pass. From each profile, take a
+	// flux-weighted mean and a flux-weighted mean *absolute* deviation
+	// about it, rather than a 2D second moment (variance): no curve is
+	// actually fitted, this measures the feature's size directly,
+	// independent of its real shape. Two deliberate improvements over the
+	// old whole-box second-moment approach (see gui/STATUS.md Round 14,
+	// which documented it inflating FWHM ~2x on synthetic data): summing
+	// along the perpendicular axis first averages out per-pixel noise
+	// before any moment is taken, and mean absolute deviation grows only
+	// *linearly* with distance from the centroid, unlike variance's
+	// quadratic weighting - so a residual noise floor scattered far from
+	// the star no longer dominates the result the way it did when every
+	// far pixel's contribution got squared. Trade-off: needs a reasonably
+	// bright, well-detected feature to work - faint ones are exactly
+	// where a squared-distance fit's extra noise sensitivity would have
+	// hurt most anyway.
+	//
+	// Not clamping negative residuals to 0 here (unlike the old code)
+	// matters more than it looks: background noise is symmetric around 0
+	// by construction (a good background estimate), so summed over many
+	// pixels its positive and negative excursions should mostly cancel.
+	// Clamping to non-negative first only lets the positive half survive,
+	// which is a real, systematic bias, not just noise - confirmed while
+	// testing this: with clamping, a synthetic noiseless-vs-noisy A/B
+	// comparison recovered FWHM further from the noiseless case's
+	// (correct, to 4 significant figures) result than without it.
+	double peak = 0;
+	std::vector<double> profileX (rw, 0.0), profileY (rh, 0.0);
 	for (int dy = 0; dy < rh; dy++)
 	{
 		int rawY = (int) height - 1 - (ry + dy);
 		for (int dx = 0; dx < rw; dx++)
 		{
-			double z = readPixel (data, dataType, width, rx + dx, rawY);
-			double r = z - background;
-			if (r < 0)
-				r = 0;
-			residual[dy * rw + dx] = r;
+			double r = readPixel (data, dataType, width, rx + dx, rawY) - background;
 			if (r > peak)
 				peak = r;
-
-			double px = rx + dx, py = ry + dy;
-			sumI += r;
-			sumIx += r * px;
-			sumIy += r * py;
+			profileX[dx] += r;
+			profileY[dy] += r;
 		}
+	}
+
+	double sumI = 0, sumIx = 0;
+	for (int dx = 0; dx < rw; dx++)
+	{
+		sumI += profileX[dx];
+		sumIx += profileX[dx] * dx;
 	}
 
 	if (sumI <= 0)
@@ -284,24 +307,34 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 		return;
 	}
 
-	double cx = sumIx / sumI;
-	double cy = sumIy / sumI;
-
-	double sumVarX = 0, sumVarY = 0;
-	for (int dy = 0; dy < rh; dy++)
+	double x0 = sumIx / sumI;
+	double y0 = 0;
 	{
-		for (int dx = 0; dx < rw; dx++)
-		{
-			double r = residual[dy * rw + dx];
-			double px = rx + dx, py = ry + dy;
-			sumVarX += r * (px - cx) * (px - cx);
-			sumVarY += r * (py - cy) * (py - cy);
-		}
+		double sumIy = 0;
+		for (int dy = 0; dy < rh; dy++)
+			sumIy += profileY[dy] * dy;
+		y0 = sumIy / sumI;
 	}
 
-	const double sigmaToFwhm = 2.3548200450309493; // 2*sqrt(2*ln2)
-	double fwhmX = std::sqrt (sumVarX / sumI) * sigmaToFwhm;
-	double fwhmY = std::sqrt (sumVarY / sumI) * sigmaToFwhm;
+	double madX = 0, madY = 0;
+	for (int dx = 0; dx < rw; dx++)
+		madX += profileX[dx] * std::abs (dx - x0);
+	madX /= sumI;
+	for (int dy = 0; dy < rh; dy++)
+		madY += profileY[dy] * std::abs (dy - y0);
+	madY /= sumI;
+
+	// Display still reports "FWHM" for continuity with the rest of the
+	// UI - convert the shape-agnostic mean absolute deviation to an
+	// equivalent Gaussian FWHM (only this last step assumes a shape):
+	// for a Gaussian, mean absolute deviation = sigma*sqrt(2/pi).
+	const double sigmaToFwhm = 2.3548200450309493;  // 2*sqrt(2*ln2)
+	const double madToSigma = 1.2533141373155003;   // sqrt(pi/2)
+	double fwhmX = madX * madToSigma * sigmaToFwhm;
+	double fwhmY = madY * madToSigma * sigmaToFwhm;
+
+	double cx = rx + x0;
+	double cy = ry + y0;
 
 	emit fitResult (true, cx, cy, fwhmX, fwhmY, peak, background);
 }

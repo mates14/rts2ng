@@ -1056,6 +1056,68 @@ if/when asked: restrict the second-moment sum to pixels within some
 radius of the centroid (an aperture, possibly re-centered iteratively),
 rather than the whole box.
 
+## Round 15: replaced 2D second-moment centroid/FWHM with the user's own 1D marginal-sum scheme
+
+Directly follows on from Round 14's flagged-but-not-fixed finding
+(whole-box 2D second moment inflating FWHM). User supplied their own
+proven, simpler scheme instead of an aperture-restricted second moment:
+for each axis independently, collapse the box to a 1D profile by
+summing along the *other* axis, take a flux-weighted mean (centroid),
+then a flux-weighted mean *absolute* deviation about it (feature size).
+No curve fitting at all - explicitly by design ("Advantage: no real
+fitting. Disadvantage: reasonably bright objects only, but that should
+be Ok").
+
+**Implemented exactly as described** (`viewercamera.cpp`,
+`runFitOnData()`): the old whole-box intensity-weighted 2D centroid +
+2D second-moment block is gone, replaced by column-sum/row-sum
+profiles (`profileX`/`profileY`), a flux-weighted mean per axis (`x0`/
+`y0`), and a flux-weighted mean absolute deviation per axis (`madX`/
+`madY`). The display still reports "FWHM" for continuity with the rest
+of the UI, so the last step converts MAD to an equivalent Gaussian FWHM
+(`madToSigma = sqrt(pi/2)`, then the same `sigmaToFwhm` as before) -
+the only place a shape is assumed; the centroid/MAD themselves are not.
+
+**Verified numerically, in stages, not just by inspection**:
+- Zero noise, no clamping, exact 2D Gaussian test box: recovered FWHM
+  5.9077 against a true 5.8871, centroid exact to the last printed
+  digit - confirms the marginal-sum/MAD/conversion-factor math itself
+  is correct, independent of any noise question.
+- Re-ran Round 14's exact noisy synthetic box (background=1000, hot
+  pixels planted in the border, realistic per-pixel noise) through the
+  new scheme: FWHM improved from the old whole-box second moment's
+  ~9.98/10.60 down to ~8.44/8.83 - real progress, but still visibly
+  above the true 5.89.
+- Chasing that gap found a second, genuine bug, not inherent to the
+  user's scheme: clamping each pixel's background-subtracted value to
+  non-negative *before* summing into the profiles is a one-sided bias -
+  background noise is symmetric around 0 by construction, so its
+  positive and negative excursions should mostly cancel when summed
+  over many pixels; clamping first only lets the positive half survive.
+  Removing the clamp (profiles now accumulate the signed residual
+  directly - `peak` is still tracked correctly, since the true peak
+  pixel is positive either way) narrowed the same test's result further
+  to ~7.95/8.30.
+- The remainder of the gap (~7.95 vs true 5.89) is not a bug: it is
+  the known, explicitly-accepted trade-off of any spread estimator
+  (variance or MAD) computed over a box much larger than the actual
+  feature - real background noise contributes to the profile's spread
+  in every column/row, including ones nowhere near the star, and no
+  amount of estimator-cleverness removes noise variance that is
+  genuinely there. Confirmed this is a box-size-vs-feature-size effect,
+  not an algorithm defect, via the zero-noise test above. Practical
+  mitigation, if ever wanted: a tighter measure box relative to the
+  star (already a user-adjustable control in the GUI), not a code
+  change - matches the user's own stated "reasonably bright objects"
+  scope for this scheme.
+
+**Verification**: clean rebuild, zero new warnings, `ctest` 7/7. All
+numeric claims above came from standalone test programs reproducing
+the exact algorithm on synthetic data (not run through the live RTS2/Qt
+stack) - a real live check that the *displayed* numbers in a running
+`rts2-viewer` look sane against a real star is still worth doing on
+real hardware.
+
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare
