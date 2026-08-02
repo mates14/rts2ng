@@ -831,17 +831,46 @@ involved, since this viewer has no concept of one.
   runs the viewer is a deployment/permissions requirement for FLORES, not
   something this code needs to pre-validate.
 
-**Verification**: clean rebuild of the viewer sources. Confirmed the
-expansion logic itself with a standalone test linked against the real
+**Verification, round 1**: clean rebuild of the viewer sources. Confirmed
+the expansion logic itself with a standalone test linked against the real
 `libbase_kernel.a` (not a mock), calling `Image::expandPath()` directly
 on the same `%Y/%N/%c_...` template used here - resolved `%Y` to `2026`,
-`%N` to `20260802`, exactly the requested nesting. Same permission
-constraint as Round 6 blocks a live end-to-end save through `rts2-viewer`
-itself in this environment (`/var/lib/rts2/images/`-style paths aren't
-writable by this session's user, and there's no display here anyway) -
-needs the user's own check once deployed on FLORES that `/images` is
-writable by the viewer's user and that a real exposure lands where
-expected.
+`%N` to `20260802`, exactly the requested nesting. Could not go further
+than that in this environment at the time (no writable archive-style
+path, no display).
+
+**Verification, round 2 - live, end to end**: FLORES reported archiving
+"doesn't work" - `FitsFile::createImage cannot create directory for
+/images/2026/20260802/FLI_205235-967.fits: Permission denied` (`~/images`
+there is `root:root`, mode `755`). To rule the code in or out, set up a
+matching `/images` (world-writable-by-`mates` this time) on this
+machine, pointed `[observatory] base_path`/`[viewer] expand_path` at it
+the same way, and drove the *real* compiled `rts2-viewer` binary against
+the actual live `rts2-camd-v4l` (device C0) already running here -
+headless (`QT_QPA_PLATFORM=offscreen` for a plain watch-only run;
+`QCoreApplication` + `ClientThread` + `QTimer::singleShot` driving
+`requestExposure()` directly, bypassing `MainWindow`/widgets entirely, to
+also exercise the real exposure-request path) - not a reimplementation,
+the actual shipped `ViewerClient`/`ViewerCamera` classes. Result:
+`/images/2026/20260802/C0_205449-214.fits` and two more, created
+correctly by the real binary on a real exposure, confirming the feature
+works exactly as designed. **FLORES's problem is a filesystem
+permission, not a bug** - `/images` (or wherever it's really pointing)
+needs to be owned by, or group-writable to, whichever user runs
+`rts2-viewer`.
+
+One real bug surfaced *while building this test harness*, unrelated to
+archiving itself: connecting `ClientThread::cameraCreated` to a bare
+lambda with no receiver-context object makes Qt deliver it via a direct
+(non-queued) connection on the *worker* thread - which never runs a real
+Qt event loop (it just calls blocking `rts2core::Client::run()`), so any
+`QTimer::singleShot()` posted from inside that handler silently never
+fires. Passing `&app` (living on the main thread, which does run
+`QCoreApplication::exec()`) as the context object, plus an explicit
+`Qt::QueuedConnection`, fixed it. This is a property of *any* code
+connecting to `ClientThread`'s signals with a plain lambda, not specific
+to this test - worth remembering if `MainWindow` itself is ever
+refactored to use lambdas here instead of named slots.
 
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
