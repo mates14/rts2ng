@@ -2577,6 +2577,45 @@ scenarios afterward and all came back `definitely lost: 0 bytes in 0
 blocks`, full test suite (`ctest`, all 7 including `block_connection`)
 still green.
 
+### Teld-dummy: parked mount flooding the log with "below horizon" - fixed
+
+Unrelated to focusc: a live `rts2-teld-dummy` (T0) had been sitting
+parked since 02:21 and had been logging "info retrieved below horizon
+position, stop move" continuously ever since, at a rate climbing from
+~1.4k lines/hour right after park to ~5k/hour by mid-afternoon (more
+pollers/monitors connecting through the day, not the mount getting
+worse). Root cause, two parts:
+
+1. `Telescope::infoUTCLST()` (`lib/rts2tel/teld.cpp`) logs that ERROR
+   on literally every `info()` poll while alt/az is below the hard
+   horizon - the `if (ret <= 0)` guard around it never actually guards
+   anything, because the base `Telescope::abortMoveTracking()` (used
+   by the dummy driver) unconditionally returns 0. No debounce, no
+   once-per-episode logging. Confirmed identical in classic
+   (`lib/rts2tel/teld.cpp`) - full write-up in `UPSTREAM_BUGS.md`.
+2. `Dummy::startPark()` (`teld/dummy/dummy.cpp`) parked to a hardcoded
+   RA=2h/Dec=2deg with no horizon awareness at all - if that arbitrary
+   point sits below the site's hard horizon (it did), the dummy just
+   sits there logging the error forever.
+
+Fixed the dummy-specific half (the general debounce issue is left as a
+documented but unaddressed upstream wart, since deliberately tracking/
+slewing through a below-horizon path is expected to be noisy - that's
+not this bug): `Dummy::startPark()` now parks to local zenith (alt=90),
+computed via the existing protected `Telescope::getEquFromHrz()`
+helper - always above any hard horizon regardless of site latitude or
+time of year. Since zenith's RA constantly shifts with sidereal time,
+`Dummy::info()` now re-locks onto the *current* zenith every poll while
+in the `TEL_PARKED` state, so it can't drift back below horizon just
+from sitting idle for hours. `startPark()` also sets `setTelTarget()` to
+the same zenith point, so `isMoving()`'s instant-teleport fast path
+(triggered whenever `move_fast` is set or the estimated slew time has
+already elapsed) lands there too instead of on a stale previous target.
+
+Verified live: isolated centrald + `rts2-teld-dummy` pair, `rts2-sendcmd
+... T0 park`, confirmed the log stopped growing new "below horizon"
+lines immediately, and stayed silent across a further 45s parked.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

@@ -56,6 +56,14 @@ class Dummy:public Telescope
 
 		virtual int info ()
 		{
+			// while parked, keep re-locking onto local zenith instead of
+			// a fixed RA/Dec - the sky rotates under a fixed equatorial
+			// point, so a stale dummyPos will eventually set below the
+			// hard horizon again and flood the log (see UPSTREAM_BUGS.md)
+			if ((getState () & TEL_MASK_MOVING) == TEL_PARKED)
+			{
+				dummyPos = getZenithEquPosn ();
+			}
 			setTelRaDec (dummyPos.ra, dummyPos.dec);
 			julian_day->setValueDouble (ln_get_julian_from_sys ());
 			return Telescope::info ();
@@ -76,8 +84,14 @@ class Dummy:public Telescope
 
 		virtual int startPark ()
 		{
-			dummyPos.ra = 2;
-			dummyPos.dec = 2;
+			// park to local zenith, not a fixed RA/Dec - zenith is always
+			// above the hard horizon regardless of site latitude or time
+			// of day, so a parked dummy never gets stuck spamming
+			// "below horizon" (also set as the target so isMoving()'s
+			// fast-teleport path lands here too, not on a stale target)
+			struct ln_equ_posn pos = getZenithEquPosn ();
+			dummyPos = pos;
+			setTelTarget (pos.ra, pos.dec);
 			return 0;
 		}
 
@@ -108,6 +122,16 @@ class Dummy:public Telescope
 		virtual int sky2counts (const double utc1, const double utc2, struct ln_equ_posn *pos, struct ln_hrz_posn *hrz_out, int32_t &ac, int32_t &dc, bool writeValues, double haMargin, bool forceShortest);
 
 	private:
+
+		struct ln_equ_posn getZenithEquPosn ()
+		{
+			struct ln_hrz_posn zenith;
+			zenith.alt = 90;
+			zenith.az = 0;
+			struct ln_equ_posn pos;
+			getEquFromHrz (&zenith, ln_get_julian_from_sys (), &pos);
+			return pos;
+		}
 
                 struct ln_equ_posn dummyPos;
                 rts2core::ValueBool *move_fast;

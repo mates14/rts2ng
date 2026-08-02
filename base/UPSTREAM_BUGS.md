@@ -1235,6 +1235,108 @@ fix and `definitely lost: 0 bytes in 0 blocks` / `ERROR SUMMARY: 0
 errors` after it, with the full test suite (`ctest`, including
 `block_connection`) still passing.
 
+## teld.cpp/dummy.cpp - parked dummy telescope floods the log forever with "below horizon"
+
+**Files:** `lib/rts2tel/teld.cpp` (`Telescope::infoUTCLST()`,
+`Telescope::abortMoveTracking()`), `src/teld/dummy.cpp`
+(`Dummy::startPark()`)
+
+`Telescope::infoUTCLST()` checks the current alt/az against the hard
+horizon on *every* `info()` call, and if it's bad:
+
+```cpp
+int ret = abortMoveTracking ();
+if (ret <= 0)
+	logStream (MESSAGE_ERROR) << "info retrieved below horizon position, stop move. alt az: " << hrpos.alt << " " << hrpos.az << sendLog;
+```
+
+The base `Telescope::abortMoveTracking()` (used by the dummy driver,
+which doesn't override it) unconditionally `return 0`s, so the `ret <=
+0` guard is not a guard at all - the ERROR fires on literally every
+poll for as long as the position stays bad, with no "log once when
+first detected" debounce. It also only calls `stopTracking()`, never
+actually aborting an in-progress *move* - a real slew that happens to
+pass below horizon keeps ticking through `isMoving()` regardless. (The
+header comment on `abortMoveTracking()` documents an escape hatch -
+subclasses can `return 1` for "temporarily allowed violation of below
+horizon" to suppress the message - `D50`/`Sitech-gem` override it to do
+something smarter; the base/dummy implementation never does.)
+
+`Dummy::startPark()` compounds this specifically for the dummy driver:
+it hardcodes the stow position to a fixed RA=2h/Dec=2deg with no
+horizon check and no `ignoreHorizon` bypass:
+
+```cpp
+virtual int startPark ()
+{
+	dummyPos.ra = 2;
+	dummyPos.dec = 2;
+	return 0;
+}
+```
+
+If that fixed point sits below the configured hard horizon for the
+site/time (common - it's an arbitrary constant, not derived from
+anything), the dummy sits parked there indefinitely, and the info-poll
+above logs the ERROR forever, at whatever rate clients happen to be
+polling `info()` (observed climbing from ~1.4k lines/hour right after
+a start-of-day park to ~5k/hour by mid-afternoon on one running
+instance, purely because more pollers/monitors had connected through
+the day - nothing about the mount itself was escalating).
+
+**Reproduction:** start `rts2-teld-dummy`, send it `park`, leave it
+sitting parked - `grep "below horizon"` on the log grows without bound.
+
+**Fix applied in base** (`teld/dummy/dummy.cpp`): park to local zenith
+(alt=90) instead of a fixed RA/Dec - zenith is always above the hard
+horizon regardless of site latitude, date, or time of day, so a parked
+dummy can never end up stuck below it. Since zenith's RA constantly
+changes with sidereal time while its alt stays fixed at 90, `info()`
+now re-locks `dummyPos` onto the *current* zenith every poll while the
+telescope is in the `TEL_PARKED` state (reusing the existing protected
+`Telescope::getEquFromHrz()` helper), so it never drifts back below
+horizon just from sitting idle:
+
+```diff
+ 		virtual int info ()
+ 		{
++			if ((getState () & TEL_MASK_MOVING) == TEL_PARKED)
++				dummyPos = getZenithEquPosn ();
+ 			setTelRaDec (dummyPos.ra, dummyPos.dec);
+ 			julian_day->setValueDouble (ln_get_julian_from_sys ());
+ 			return Telescope::info ();
+ 		}
+ ...
+ 		virtual int startPark ()
+ 		{
+-			dummyPos.ra = 2;
+-			dummyPos.dec = 2;
++			struct ln_equ_posn pos = getZenithEquPosn ();
++			dummyPos = pos;
++			setTelTarget (pos.ra, pos.dec);
+ 			return 0;
+ 		}
+```
+
+`setTelTarget()` is also set at park time so `isMoving()`'s
+already-there fast-teleport path (triggered whenever `move_fast` is set
+or the estimated slew time has already elapsed) lands on zenith too,
+rather than on whatever the previous real target happened to be.
+
+This only fixes the dummy driver's specific way of getting stuck below
+horizon forever while parked/idle - it does not address the underlying
+missing debounce in `Telescope::infoUTCLST()`/`abortMoveTracking()`
+itself, which would still flood the log once-per-poll for any driver
+(dummy or real) that's deliberately commanded to track or slew through
+a below-horizon path - that case is expected/intended to be noisy per
+poll during an active move, just not while sitting still.
+
+**Verified**: rebuilt, ran an isolated centrald + `rts2-teld-dummy`
+pair, sent `park` via `rts2-sendcmd`, confirmed the log stops growing
+new "below horizon" lines immediately after park (previously grew
+without bound), and stayed silent across a further 45s of sitting
+parked.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree
