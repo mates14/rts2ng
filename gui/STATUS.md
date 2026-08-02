@@ -1004,6 +1004,58 @@ there'd be no window for it to race ahead in. Not changed here (a
 wire-protocol-level design question, way out of scope for a GUI client
 fix) - noted for whenever the core protocol itself gets attention.
 
+## Round 14: focus fit's background estimate replaced with a robust median
+
+User observed the centroid/FWHM fit "does not return believable
+values" and correctly diagnosed why: `runFitOnData()`'s background
+step was an unweighted least-squares plane fit through the box's
+2px-wide border ring - a small sample that a single hot pixel, cosmic
+ray, or a star whose wings reach the box edge can pull around wildly,
+since OLS has no protection against outliers. Suggested fix, exactly as
+given: replace it with the median of the same border pixels - simpler,
+and far more robust to exactly that kind of contamination. Framed as
+step one of a larger cleanup ("once this part is done, the background
+can be subtracted and further games can be played") - a future x/y-tilt
+term (`bg(dx,dy) = median + a*dx + b*dy`, `a`/`b` starting at 0) was
+explicitly flagged as a possible *next* step, not requested yet.
+
+**Fix** (`viewercamera.cpp`): the ~40-line 3x3-normal-equations OLS
+plane solver (and its now-dead `det3()` helper) is gone. The same
+border-ring pixel loop now collects values into a vector and takes
+their median (`std::nth_element`, O(n), not a full sort) instead of
+fitting a plane through them. `background` replaces the old scalar `a`
+everywhere it was used (background subtraction, and the value emitted
+via `fitResult`'s last field).
+
+**Verified numerically**, not just by inspection: a standalone test
+reproducing this exact algorithm on a synthetic 32x32 box (flat
+background=1000, a Gaussian star, realistic noise, *plus two synthetic
+hot pixels planted directly in the border ring* - the specific failure
+mode described) recovered background=1003.3 against a true value of
+1000 - stable, exactly as intended, whereas the same two hot pixels
+would have dragged the old OLS plane's coefficients around
+significantly. `ctest` 7/7, clean rebuild.
+
+**Found while verifying, not yet fixed - flagged for the user rather
+than fixed unasked**: the same synthetic test's centroid recovered
+reasonably ((14.87, 15.38) vs a true (15.70, 16.30)) but FWHM came back
+roughly *double* the true value (~10 vs ~5.89). Root cause is separate
+from the background estimate: the second-moment (variance) sum that
+produces FWHM runs over *every* pixel in the whole box, not just an
+aperture around the star - background-subtracted noise, clamped to
+non-negative, has nowhere for its negative half to go, so every box
+averages out to a small but nonzero positive "signal" scattered across
+pixels that are, by construction, far from the centroid. Second moments
+weight by squared distance, so that far-flung noise floor
+systematically inflates FWHM regardless of how good the background
+estimate is - a separate, real instability in the same "huge blob of
+code" the user flagged, not fixed here since it wasn't the specific ask
+this round (the user's own message scoped this round to the background
+step alone, "further games can be played" once it landed). Likely fix
+if/when asked: restrict the second-moment sum to pixels within some
+radius of the centroid (an aperture, possibly re-centered iteratively),
+rather than the whole box.
+
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare

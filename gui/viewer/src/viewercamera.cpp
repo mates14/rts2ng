@@ -37,13 +37,6 @@ namespace
 		return readPixelAt (data, dataType, y * width + x);
 	}
 
-	double det3 (double m[3][3])
-	{
-		return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-		     - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-		     + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-	}
-
 	/**
 	 * The "logfit" display stretch - ported from the classic tree's
 	 * current src/focusc/xfitsimage.cpp (its XFitsImage::drawImage(),
@@ -216,14 +209,19 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 		return;
 	}
 
-	// 1. Fit a background plane bg(x,y) = a + b*x + c*y from the outer
-	// border-pixel-wide frame of the box only - a deliberately simple
-	// stand-in for a full 2D Gaussian fit (see gui/STATUS.md for the
-	// reasoning). Local (dx,dy) box coordinates keep the normal-equation
-	// sums small and well-conditioned regardless of where the box sits on
-	// the chip.
-	double sum1 = 0, sumx = 0, sumy = 0, sumxx = 0, sumxy = 0, sumyy = 0;
-	double sumz = 0, sumxz = 0, sumyz = 0;
+	// 1. Estimate the background level from the outer border-pixel-wide
+	// frame of the box as a plain median, not a least-squares plane fit -
+	// the border is a thin, small sample (2px wide) that a hot pixel,
+	// cosmic ray, or a star whose wings reach the box edge can pull an
+	// OLS plane's coefficients around wildly, which is exactly the kind
+	// of "does not return believable values" instability this was
+	// producing. The median of the same border pixels is far more robust
+	// against exactly that kind of outlier, and is also already the
+	// correct starting point (flat, no tilt) if an x/y-tilt term -
+	// bg(dx,dy) = median + a*dx + b*dy, a=b=0 to start - ever proves
+	// necessary; not added here, flat is enough until it isn't.
+	std::vector<double> borderPixels;
+	borderPixels.reserve (2 * border * (rw + rh));
 
 	for (int dy = 0; dy < rh; dy++)
 	{
@@ -232,41 +230,30 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 		{
 			if (!(dx < border || dx >= rw - border || dy < border || dy >= rh - border))
 				continue;
-
-			double z = readPixel (data, dataType, width, rx + dx, rawY);
-			double px = dx, py = dy;
-
-			sum1 += 1; sumx += px; sumy += py;
-			sumxx += px * px; sumxy += px * py; sumyy += py * py;
-			sumz += z; sumxz += px * z; sumyz += py * z;
+			borderPixels.push_back (readPixel (data, dataType, width, rx + dx, rawY));
 		}
 	}
 
-	double m[3][3] = { { sum1, sumx, sumy }, { sumx, sumxx, sumxy }, { sumy, sumxy, sumyy } };
-	double rhs[3] = { sumz, sumxz, sumyz };
-	double det = det3 (m);
-
-	double a = 0, b = 0, c = 0;
-	if (std::abs (det) > 1e-9)
+	double background = 0;
+	if (!borderPixels.empty ())
 	{
-		double m0[3][3] = { { rhs[0], m[0][1], m[0][2] }, { rhs[1], m[1][1], m[1][2] }, { rhs[2], m[2][1], m[2][2] } };
-		double m1[3][3] = { { m[0][0], rhs[0], m[0][2] }, { m[1][0], rhs[1], m[1][2] }, { m[2][0], rhs[2], m[2][2] } };
-		double m2[3][3] = { { m[0][0], m[0][1], rhs[0] }, { m[1][0], m[1][1], rhs[1] }, { m[2][0], m[2][1], rhs[2] } };
-		a = det3 (m0) / det;
-		b = det3 (m1) / det;
-		c = det3 (m2) / det;
-	}
-	else if (sum1 > 0)
-	{
-		// Degenerate normal equations (shouldn't happen for a real 2D
-		// border) - fall back to a flat background, the border's mean.
-		a = sumz / sum1;
+		size_t mid = borderPixels.size () / 2;
+		std::nth_element (borderPixels.begin (), borderPixels.begin () + mid, borderPixels.end ());
+		background = borderPixels[mid];
+		if (borderPixels.size () % 2 == 0)
+		{
+			// even count - nth_element already partitioned everything
+			// below mid, so its max is the other middle element, no
+			// second full sort needed for the classic two-middle average
+			double lowerMax = *std::max_element (borderPixels.begin (), borderPixels.begin () + mid);
+			background = (background + lowerMax) / 2.0;
+		}
 	}
 
-	// 2. Subtract the fitted background from every pixel in the box
-	// (interior included), clamp negative residuals to 0, and accumulate
-	// the intensity-weighted barycenter and second moments (dispersion)
-	// over what's left - Petr's "statistical tricks" in place of a true
+	// 2. Subtract the background from every pixel in the box (interior
+	// included), clamp negative residuals to 0, and accumulate the
+	// intensity-weighted barycenter and second moments (dispersion) over
+	// what's left - Petr's "statistical tricks" in place of a true
 	// nonlinear Gaussian fit.
 	std::vector<double> residual (rw * rh);
 	double sumI = 0, sumIx = 0, sumIy = 0, peak = 0;
@@ -277,7 +264,7 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 		for (int dx = 0; dx < rw; dx++)
 		{
 			double z = readPixel (data, dataType, width, rx + dx, rawY);
-			double r = z - (a + b * dx + c * dy);
+			double r = z - background;
 			if (r < 0)
 				r = 0;
 			residual[dy * rw + dx] = r;
@@ -316,7 +303,7 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 	double fwhmX = std::sqrt (sumVarX / sumI) * sigmaToFwhm;
 	double fwhmY = std::sqrt (sumVarY / sumI) * sigmaToFwhm;
 
-	emit fitResult (true, cx, cy, fwhmX, fwhmY, peak, a);
+	emit fitResult (true, cx, cy, fwhmX, fwhmY, peak, background);
 }
 
 void ViewerCamera::exposureStarted (bool expectImage)
