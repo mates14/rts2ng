@@ -375,8 +375,14 @@ int Image::createImage (bool _overwrite)
 		return -1;
 	}
 
-	// add history
+	// add history - __DATE__/__TIME__ are deliberately non-reproducible
+	// here (real build provenance in the FITS history, not a build
+	// artifact), silence the reproducible-builds warning locally rather
+	// than dropping the information or disabling the check tree-wide
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdate-time"
 	writeHistory ("Created with RTS2 version " BASE_VERSION " build on " __DATE__ " " __TIME__ ".");
+#pragma GCC diagnostic pop
 
 	flags = IMAGE_SAVE;
 	return 0;
