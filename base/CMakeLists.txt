@@ -93,6 +93,7 @@ add_subdirectory(dome)
 add_subdirectory(script)
 add_subdirectory(scriptexec)
 add_subdirectory(sendcmd)
+add_subdirectory(focusc)
 
 # Packaging assets: rts2-start/rts2-stop (the daemon-manifest-driven
 # start/stop scripts, read @BASE_CONFDIR@/rts2/{centrald,devices,services}),

@@ -612,6 +612,20 @@ class CommandCenter:public CommandCameraSettings
 };
 
 /**
+ * Interrupt an in-progress exposure/readout on a camera (PROTO "stopexpo").
+ * Needed by CLI clients (rts2-focusc) that want to hand back a camera they
+ * started an exposure on when shutting down, rather than abandoning it
+ * running with nobody left to read the result.
+ *
+ * @ingroup RTS2Command
+ */
+class CommandStopExposure:public CommandCameraSettings
+{
+	public:
+		CommandStopExposure (DevClientCamera * _camera);
+};
+
+/**
  * Queue a target on a selector's queue at a given time. Needed by
  * elementexe.cpp (the `requeue` script command) - task 25.
  *

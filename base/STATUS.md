@@ -2346,6 +2346,207 @@ mechanism is FLI-SDK-specific, `FLIFlushRow`/`FLISetNFlushes`), so this
 needs real-world verification at a site with actual FLI hardware
 attached before being fully trusted.
 
+## Focusc (base/focusc/ - rts2-focusc, command-line camera exposure client)
+
+Ported `src/focusc/focusclient.h`/`.cpp` + `focusc.cpp` as new top-level
+`base/focusc/` (`FocusClient`/`FocusCameraClient` -> executable
+`rts2-focusc`). Kept the classic name after asking the user - despite
+"focus" no longer being the primary use (per the user: it's really a
+command-line FITS-grabbing client with an optional post-exposure script
+hook; the focus-adjustment protocol exists but "in practice has not been
+used that way").
+
+Turned out to be almost entirely mechanical: the whole class hierarchy
+this client drives - `DevClientCameraFoc`/`DevClientFocusFoc`/`ConnFocus`/
+`DevClientPhotFoc` (`kernel/include/devclifoc.h`) and every `Command*`
+class it queues (`CommandBox`/`CommandCenter`/`CommandChangeFocus`/
+`CommandIntegrate`/`CommandExposure`/`CommandChangeValue`) - was already
+ported to `kernel/` by earlier tasks, for other consumers (`element.cpp`/
+scriptexec). `focusc` is the first thing to actually exercise
+`devclifoc.h`'s classes end to end.
+
+**Deliberately not ported** (out of scope, same reasoning as the earlier
+`rts2x`/`rts2-viewer` planning): `foctest.cpp` (a tiny separate smoke-test
+binary) and `xfocusc.cpp`/`xfitsimage.cpp` (the X11 GUI - superseded by
+the planned Qt5 `rts2-viewer` in a future `rts2x/` subtree, not this one).
+`focusclient.h`'s classic `EVENT_INTEGRATE_START`/`EVENT_INTEGRATE_STOP`/
+`EVENT_XWIN_SOCK` event codes were dropped for the same reason - grepping
+the classic tree shows they're only ever referenced by `xfitsimage.cpp`/
+`xfocusc.cpp`, never by `focusclient.cpp`/`focusc.cpp` itself.
+`EVENT_EXP_CHECK` (drives the live exposure/readout progress bar) is kept.
+
+The one piece of real porting work: the classic autotools build picked
+between `<curses.h>`/`<ncurses/curses.h>` via `RTS2_HAVE_CURSES_H`/
+`RTS2_HAVE_NCURSES_CURSES_H` feature-detection macros that no longer exist
+in this tree (base targets modern Linux only). Replaced with a direct
+`<curses.h>`/`<term.h>` include and a `pkg_check_modules(NCURSES REQUIRED
+ncurses)` in `focusc/CMakeLists.txt`, copying `rts2-mon`'s already-proven
+ncurses CMake pattern (`base/monitor/CMakeLists.txt`) rather than
+inventing a new one. `ProgressIndicator` (`kernel/include/utilsfunc.h`)
+lives in the global namespace, not `rts2core` - a one-line fix once the
+build caught it.
+
+Builds clean, no warnings. **Verified empirically**: stood up a real
+throwaway `centrald` + `rts2-camd-dummy` chain and ran `rts2-focusc
+--server localhost --port <port> -d C0 -e 0.5` against it - logged in,
+took repeated exposures, printed each written filename to stdout exactly
+like classic, rendered the live `EXPOSING`/`READING` progress bar
+correctly, and produced valid FITS files (`astropy.io.fits` confirmed
+`NAXIS1`/`NAXIS2`/`EXPOSURE`/`CCD_NAME` all correct).
+
+Wired into Debian packaging: added `focusc/rts2-focusc` to
+`RTS2_BASE_BINARIES` in `base/debian/rules`. Also added
+`sendcmd/rts2-sendcmd`, which was already fully ported and buildable but
+had been missed from the packaging list until now - a pre-existing
+omission noticed while touching this file, not something introduced by
+this task.
+
+### Code review follow-up: Ctrl-C didn't stop exposures, and omitting -d silently touched every camera
+
+The user asked two review questions right after the port landed: does
+Ctrl-C stop an in-progress exposure and disconnect politely, and what
+happens if you run `rts2-focusc` with no `-d` at all? Both turned out
+to be genuine bugs, confirmed identical in classic (full write-up in
+`UPSTREAM_BUGS.md`, this is just the base-side summary):
+
+1. **Ctrl-C did nothing but close the socket.** Neither `FocusClient`
+   nor `FocusCameraClient` overrode any shutdown hook - `Connection::
+   ~Connection()` just calls `close(sock)`, no "stop exposure" message
+   of any kind. Verified: a 20s exposure SIGINT'd at ~40% ran to full
+   completion regardless (dummy camd logged `end exposure without
+   exposure connection, state 1` - tolerated gracefully, but nothing
+   ever asked it to stop).
+
+2. **Omitting `-d` wasn't a no-op** - `initFocCamera()` applied window/
+   exposure-time/binning/dark-shutter settings to *every* connected
+   camera unconditionally, gating only the final exposure-trigger
+   command on a name match. Verified: `-X 10 -Y 10 -W 50 -H 50` with no
+   `-d` produced no visible output, but a *separate*, later `-d C0 -e
+   0.3` invocation (no window options at all) came back windowed to
+   50x50 anyway - the earlier "no-op" had silently left that window on
+   the camera.
+
+**Fixes:**
+- New `rts2core::CommandStopExposure` (`kernel/include/command.h`/
+  `command.cpp`, mirrors the existing `CommandBox`/`CommandCenter`
+  pattern - sends `stopexpo`). `FocusClient::run()` now calls a new
+  `stopOwnedExposures()` after `Client::run()`'s loop exits for any
+  reason: scans live connections for cameras this process itself armed
+  (tracked in a new `armedCameras` list - never a camera it's only
+  passively watching), sends `CommandStopExposure` to any still
+  `CAM_WORKING`, and pumps `oneRunLoop()` for up to 2s to let it
+  actually land before the sockets close.
+- `initFocCamera` split into `armCamera()` (settings + exposure-trigger,
+  only ever called for a camera this process has decided it owns) plus
+  an explicit, gated decision for what "-d not given" means, per the
+  user's own suggested policy (there's no concept of a default camera
+  in RTS2 - `rts2.ini`'s `imgproc.astrometry_devices` is a
+  special-purpose astrometry hint, not a general default, and would be
+  a weird thing to repurpose): after a 1s settle delay
+  (`CAMERA_CHOICE_DELAY`, new `EVENT_CAMERA_CHOICE`) for centrald to
+  report every connected device - exactly one camera -> use it (with a
+  printed note); zero -> stay passive; more than one -> print every
+  connected camera's name, ask for `-d <name>`, touch nothing.
+
+**Verified empirically**, three scenarios:
+- Real hardware (this sandbox's live `rts2-camd-v4l`): a 20s exposure
+  SIGINT'd after ~3s aborted immediately instead of running to
+  completion; the live `rts2-executor` also watching that camera logged
+  `detected exposure failure. Continuing with the script` - noticed and
+  recovered gracefully.
+- No `-d`, exactly one camera connected (same live instance): printed
+  `no -d given and exactly one camera (C0) connected - using it` and
+  exposed it correctly.
+- No `-d`, two cameras connected (throwaway dummy pair): printed `no -d
+  given and more than one camera connected (C0, C1) - pass -d <name> to
+  pick one; nothing was touched`, exited cleanly (not killed), no FITS
+  file, no settings changed on either camera.
+
+Same Ctrl-C gap exists in `xfocusc.cpp` (not yet ported, see the
+`rts2x`/`rts2-viewer` plan) - worth carrying the same fix over then.
+
+### Follow-up: -e/-b/-X/-Y/-W/-H aren't scoped per -d camera either
+
+Third review question from the user, about a command line like
+`rts2-focusc -d C0 -e 1 -b 0 -d C1 -e 5 -b 1`: is this actually
+per-camera (each `-d` "owning" the settings that follow it), or could
+it silently do something else? Confirmed the latter (full write-up in
+`UPSTREAM_BUGS.md`) - `-e`/`-b`/`-X`/`-Y`/`-W`/`-H` are plain scalars,
+last-value-wins, applied identically to *every* named camera regardless
+of position relative to `-d`. Verified: that exact command line gave
+**both** C0 and C1 `EXPOSURE=5.0`/`BINNING=2x2`, not the per-camera
+1s/1x1 and 5s/2x2 it visually suggests.
+
+Asked the user how to handle it (real per-camera settings scoping would
+mean reworking the option parser into per-name groups - a materially
+bigger change than anything else in this file); they chose the cheapest
+option: warn, don't redesign. Added per-flag occurrence counters and
+`warnIfSettingsAmbiguous()` (called once from `init()`): if more than
+one camera is named *and* any of those flags was given more than once,
+prints a clear warning explaining the real semantics. Deliberately
+narrow - `-d C0 -d C1 -e 5` (shared settings, completely unambiguous)
+and repeating `-e` with only one camera named (ordinary CLI behavior)
+both correctly stay silent. Verified all three cases empirically.
+
+### Hooking rts2-focusc up to ds9 via XPA (`-F`), and a real crash found along the way
+
+The user asked whether a finished FITS file could be shipped to `ds9`
+via XPA, "even a hook-on script is a valid solution." It already was -
+`-F <script>` (the `ConnFocus` mechanism, already ported to
+`kernel/devclifoc.cpp`) execs a script with the completed image's path
+as `argv[1]` after every exposure with the shutter open, no new code
+needed. Verified for real against this sandbox's actual `ds9` (XPA
+reachable, confirmed via `xpaaccess ds9`):
+
+```sh
+#!/bin/sh
+# must stay silent on stdout - see the crash/parsing note below
+xpaset -p ds9 fits "$(readlink -f "$1")" >/dev/null 2>&1
+```
+```
+rts2-focusc -d C0 -e 0.5 -F /path/to/that/script.sh
+```
+
+Two gotchas surfaced, one a real bug and one just a usage note:
+
+- **Real crash, fixed** (full write-up in `UPSTREAM_BUGS.md`):
+  `ConnFocus`'s destructor posts `EVENT_CHANGE_FOCUS` whenever the
+  script doesn't itself print a `change <id> <val>` line - true for any
+  non-focusing hook script, including this one.
+  `DevClientCameraFoc::postEvent()` handles that by looking up
+  `getValueChar("focuser")`, which is `nullptr` on any camera without a
+  paired focuser (the dummy camera, `v4l`, most single-camera setups),
+  and passes that straight into `Block::getOpenConnection()` ->
+  `Connection::isName()`, which did a raw `strcmp()` against it -
+  deterministic SIGSEGV on literally the first completed exposure.
+  Confirmed identical in classic. Caught live under `gdb`, fixed with a
+  one-line null-guard in `isName()` (`kernel/include/connection.h`) -
+  fixed at that layer rather than just the call site, since
+  `getOpenConnection(nullptr)` has no sensible meaning for any caller.
+  Re-verified clean after the fix: multiple exposures in a row, no
+  crash, hook fires every time.
+- **Hook script must stay silent on stdout.** `ConnFocus` parses the
+  script's stdout as protocol data (`change <id> <val>` or six
+  sextractor-style numbers) - any other output gets logged as a
+  `MESSAGE_ERROR "Get line: ..."`. `xpaset` is silent on success, so
+  redirecting its output away is enough.
+- **Relative paths don't work** - not an RTS2 bug, a `ds9`/XPA quirk:
+  the path `rts2-focusc` hands the hook is relative to the directory it
+  was run from, but `ds9` resolves relative paths against its own
+  process's cwd, not the caller's. `readlink -f` (as above) fixes it.
+
+Also confirmed the alternative, classic-documented idiom (piping
+filenames on stdout through a shell loop to `xpaset`, as
+`scriptexec --help` itself suggests) needs a tweak for `rts2-focusc`
+specifically: unlike `scriptexec` (which deliberately dropped its live
+progress bar - see the scriptexec section above), `rts2-focusc` keeps
+one, and its `\r`-redrawn progress segments share stdout "lines" (as
+seen by a plain newline-based reader) with the actual filenames. Piping
+through `tr '\r' '\n' | grep '\.fits$'` first isolates the filenames
+correctly; `-F` avoids the whole problem by getting the exact filename
+directly as an argument, no line-parsing involved, and is the
+recommended approach for this tool.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

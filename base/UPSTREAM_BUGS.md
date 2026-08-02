@@ -912,6 +912,260 @@ worth considering as a generic `camd`-level mechanism upstream (per the
 user's own framing above) if other camera families turn out to have the
 same gap, rather than reimplementing it per-driver each time.
 
+---
+
+## focusclient.cpp/xfocusc.cpp - Ctrl-C never stops an exposure the client itself started
+
+**Files:** `src/focusc/focusclient.cpp` (`FocusClient`/`FocusCameraClient`), same gap in `src/focusc/xfocusc.cpp`
+**Maintainer:** Petr Kubanek
+**Severity:** medium - wastes a real exposure and, per the user's
+concern below, is the kind of impoliteness the RTS2 wire protocol has
+no protocol-level defense against, only client-side discipline
+
+**Bug:** neither `FocusClient` nor `FocusCameraClient` override any
+shutdown hook. On SIGINT/SIGTERM, `App`'s signal handler calls
+`Block::endRunLoop()`, which just sets the `end_loop` flag - the
+`while (!getEndLoop())` loop in `Client::run()` exits, destructors run,
+and `Connection::~Connection()` does nothing but `close(sock)`. No
+"stop exposure"/logout message of any kind is sent. There is no
+`CommandStopExposure`-equivalent client-side class anywhere in the
+classic tree at all - the only stop mechanism that exists (`stopexpo`,
+handled server-side in `camd.cpp`; `killAll`/`CommandKillAll`
+client-side) is used by the script-execution machinery
+(`rts2script/devscript.cpp`), never by this client.
+
+Net effect: Ctrl-C during an exposure this tool itself commanded leaves
+the camera exposing with nobody left to read the result out. Verified
+empirically (base's dummy camd): a 20s exposure interrupted with SIGINT
+at ~40% ran to full completion regardless, logging `end exposure
+without exposure connection, state 1` - the dummy driver tolerates this
+gracefully, but nothing ever asked it to stop, and there's no guarantee
+every real driver copes as cleanly (this is exactly the "modules need
+to be polite to each other" concern the user raised - the protocol
+doesn't yet enforce this, so well-behaved clients have to).
+
+**Fix applied in base**: added a generic `rts2core::CommandStopExposure`
+class (`kernel/include/command.h`/`command.cpp`, mirrors the existing
+`CommandBox`/`CommandCenter` pattern - just sends `stopexpo`). `focusc`
+now overrides `FocusClient::run()` to call a new `stopOwnedExposures()`
+after `Client::run()`'s loop exits (for any reason, not just Ctrl-C):
+it scans live connections for cameras this specific process itself
+armed (tracked in a new `armedCameras` list, populated only by
+`armCamera()` - see the next entry), and for any of those still
+`CAM_WORKING`, sends `CommandStopExposure` and pumps `oneRunLoop()` for
+up to 2 seconds to give it a chance to actually reach the device and be
+acknowledged before the process's sockets close for good. Only ever
+touches cameras this process itself commanded to expose - never a
+camera it's just passively watching (autoSave watches and saves images
+from *any* connected camera, started by anyone).
+
+Verified against real hardware (this sandbox's live `rts2-camd-v4l`
+device): a 20s exposure sent SIGINT-equivalent (`timeout -s INT`) after
+~3s aborted immediately instead of running to completion, and the
+live `rts2-executor` also attached to that camera logged `detected
+exposure failure. Continuing with the script` - it noticed and
+recovered gracefully, exactly as a well-behaved client should.
+
+Same gap exists in `xfocusc.cpp`/`XFocusClient` (not yet ported - see
+the separate `rts2x`/`rts2-viewer` plan) - worth carrying this same fix
+over when that tool is built.
+
+---
+
+## focusclient.cpp - omitting -d silently mutates every connected camera's settings without ever exposing one
+
+**Files:** `src/focusc/focusclient.cpp` (`FocusClient::initFocCamera`)
+**Maintainer:** Petr Kubanek
+**Severity:** medium - a genuine footgun: produces no visible output
+and no error, but silently changes shared device state
+
+**Bug:** `FocusClient::initFocCamera()` applies the window (`-X/-Y/-W/-H`),
+exposure-time (`-e`), binning (`-b`), and dark-shutter (`--dark`)
+settings to **every currently connected camera unconditionally** - none
+of that code is gated on `-d`/`cameraNames` at all. Only the final
+`CommandExposure` trigger, at the very end of the function, is gated by
+a name match. Consequences, both confirmed empirically against a real
+two-camera dummy setup:
+
+- Omit `-d` entirely and the tool looks like a no-op (no output, no
+  FITS file) - but any settings passed on the command line get written
+  to *every* connected camera anyway. Reproduced: ran `rts2-focusc -X
+  10 -Y 10 -W 50 -H 50` (no `-d`) - produced nothing visible; a
+  subsequent, separate `rts2-focusc -d C0 -e 0.3` (no window options at
+  all) then came back with a **50x50 windowed frame**, because the
+  earlier "no-op" run had quietly left that window on the camera.
+- Even *with* `-d C0` given explicitly, if an unrelated `C1` also
+  happens to be connected, `C1`'s exposure time/binning/window/shutter
+  get silently changed too - it just never gets an actual exposure
+  command, so nothing ever surfaces the change to the user.
+
+**Fix applied in base**: split `initFocCamera` into `armCamera()` (the
+actual settings + exposure-trigger logic, applied only to a camera the
+process has decided it owns) and made the "which camera(s) do we own"
+decision explicit and gated in all cases - see the "no default camera"
+design note below for what "-d not given" now means. `setSaveImage()`
+(passive image-watching, non-mutating) still applies to every connected
+camera as before - only the state-*mutating* commands are now gated.
+
+### Design note: what should "-d not given" mean? (no default camera in RTS2)
+
+Raised by the user: RTS2 has no notion of a "default camera" - the
+closest thing, `rts2.ini`'s `imgproc.astrometry_devices`, is a
+special-purpose astrometry-processing hint, not a general default, and
+would be a weird thing to repurpose here. Adopted policy, matching the
+user's own suggested shape for this: after a short settle delay (1s,
+`CAMERA_CHOICE_DELAY`) to let centrald report every currently connected
+device -
+- **exactly one** camera connected -> use it, printing a visible note
+  that this happened (so it's never a silent guess);
+- **zero** cameras connected -> stay passive (matches the tool's
+  existing "just watch and save whatever comes in" behavior when idle);
+- **more than one** -> refuse to guess. Print every connected camera's
+  name and ask for `-d <name>`; touch nothing. Verified empirically:
+  produced `no -d given and more than one camera connected (C0, C1) -
+  pass -d <name> to pick one; nothing was touched`, exited cleanly, no
+  FITS file, no settings changed on either camera.
+
+The 1-second settle delay is a pragmatic choice, not a protocol
+guarantee - there's no explicit "device discovery complete" signal in
+the client protocol to wait on instead (devices are reported to a
+freshly-logged-in client incrementally as `addAddress()` messages, with
+no terminating marker); a fixed short grace period is the same kind of
+approach already used elsewhere in this codebase (e.g. the 0.1s
+`CHECK_TIMER` progress-poll).
+
+---
+
+## focusclient.cpp - -e/-b/-X/-Y/-W/-H are not scoped per -d camera, despite reading that way
+
+**Files:** `src/focusc/focusclient.cpp` (`FocusClient::processOption`, `FocusClient::initFocCamera`)
+**Maintainer:** Petr Kubanek
+**Severity:** medium - no data loss, but a command line that visually
+implies per-camera settings silently does something else
+
+**Bug:** raised by the user, who correctly guessed the mechanism before
+it was confirmed: `-e`/`-b`/`-X`/`-Y`/`-W`/`-H` are each a single plain
+scalar member (`defExposure`/`defBin`/`xOffset`/`yOffset`/`imageWidth`/
+`imageHeight`), overwritten every time `getopt_long` parses that flag,
+and read only once each, later, whenever a named camera actually
+connects. There is no association between an option and the `-d` it
+visually follows - `getopt_long` has no concept of "groups" at all, it
+just processes flags left to right and the *last* value for each one
+wins, applied identically to *every* camera named anywhere in
+`cameraNames`.
+
+Reproduced against two real dummy cameras: `rts2-focusc -d C0 -e 1 -b 0
+-d C1 -e 5 -b 1` visually reads as "C0 gets 1s/1x1, C1 gets 5s/2x2" -
+both `EXPOSURE` and `BINNING` FITS headers came back identical
+(`5.0`/`2x2`) for **both** C0 and C1. An `-e` given before any `-d` at
+all fares no better - it doesn't become "the default for cameras that
+don't specify their own" (a reasonable guess); it's simply overwritten
+by any later `-e`, with zero per-camera memory.
+
+Genuinely fixing this (real per-`-d`-group settings scoping) would mean
+reworking the option parser to snapshot settings into a map keyed by
+camera name as `-d` is encountered, plus settling new semantics for
+settings given before any `-d` - a materially bigger change than
+anything else in this file. Given the user's own stated preference
+(warn, don't silently redesign the parser), **not attempted** here.
+
+**Fix applied in base**: added per-flag occurrence counters
+(`optExposureCount`/`optBinCount`/`optXCount`/`optYCount`/
+`optWidthCount`/`optHeightCount`, incremented in `processOption`) and a
+`warnIfSettingsAmbiguous()` check, run once from `init()`: if more than
+one camera is named (`cameraNames.size() > 1`) *and* any of those flags
+was given more than once, prints a clear warning explaining the actual
+(shared, last-value-wins) semantics and suggesting one `rts2-focusc`
+invocation per camera instead. Deliberately narrow trigger condition -
+`-d C0 -d C1 -e 5` (one `-e`, two cameras, meaning "expose both
+identically") is completely unambiguous and does **not** warn; neither
+does repeating `-e` with only one camera named (ordinary CLI
+last-value-wins, not a footgun). Verified all three cases empirically.
+
+---
+
+## Connection::isName() - null pointer crashes DevClientCameraFoc's focus-hook path on any camera without a focuser
+
+**Files:** `include/connection.h` (`Connection::isName()`), reached via
+`lib/rts2fits/devclifoc.cpp` (`DevClientCameraFoc::postEvent()`,
+`EVENT_CHANGE_FOCUS`)
+**Maintainer:** Petr Kubanek
+**Severity:** high - deterministic crash (SIGSEGV), triggered by entirely
+ordinary use of a long-standing, documented feature
+
+**Bug:** found while testing whether `rts2-focusc`'s `-F <script>`
+option (runs a script per completed image, via `ConnFocus`) could be
+used to ship images into `ds9` via XPA - a real, wanted use case, not a
+synthetic test. `ConnFocus::~ConnFocus()` posts `EVENT_CHANGE_FOCUS`
+whenever the script never printed a `change <id> <val>` line (the
+normal case for any script that isn't itself doing focus analysis - a
+`ds9`-display hook has no reason to). `DevClientCameraFoc::postEvent()`
+handles that event unconditionally:
+
+```cpp
+case EVENT_CHANGE_FOCUS:
+	eventConn = (ConnFocus *) event->getArg ();
+	focus = connection->getMaster ()->getOpenConnection (getConnection ()->getValueChar ("focuser"));
+	if (eventConn && eventConn == focConn)
+	{
+		focusChange (focus);
+		focConn = NULL;
+	}
+	break;
+```
+
+`getValueChar ("focuser")` returns `nullptr` whenever the camera has no
+`"focuser"` value at all - true for essentially any camera not
+explicitly paired with a focuser device (the dummy camera, `v4l`, and
+by extension most real single-camera setups). That `nullptr` is passed
+straight into `Block::getOpenConnection()` -> `Connection::isName()`:
+
+```cpp
+int isName (const char *in_name) { return (!strcmp (getName (), in_name)); }
+```
+
+`strcmp()` with a null second argument is undefined behavior -
+observed as a deterministic SIGSEGV inside `__strcmp_avx2` on this
+system, on every single completed exposure once any `-F`/`ConnFocus`
+script is in use on a camera without a focuser. Confirmed
+byte-for-byte identical in classic (`include/connection.h`,
+`lib/rts2fits/devclifoc.cpp`) - this is not a porting-introduced bug,
+it's a landmine in a genuinely useful, documented feature that appears
+to have simply never been exercised against a focuser-less camera
+before.
+
+**Reproduction:** `rts2-focusc -d C0 -e 0.5 -F <any script>` against a
+dummy or v4l camera (no `focdev`/paired focuser configured) -
+segfaults immediately after the first completed exposure, caught live
+under `gdb`:
+```
+Program received signal SIGSEGV, Segmentation fault.
+__strcmp_avx2 () at ../sysdeps/x86_64/multiarch/strcmp-avx2.S:287
+#1  rts2core::Block::getOpenConnection(char const*) (block.cpp:837)
+#2  rts2image::DevClientCameraFoc::postEvent (devclifoc.cpp:48)
+...
+#5  rts2image::ConnFocus::~ConnFocus (devclifoc.cpp:144)
+```
+
+**Fix applied in base** (`kernel/include/connection.h`): `isName()`
+now short-circuits on a null `in_name` instead of dereferencing it:
+
+```diff
+-int isName (const char *in_name) { return (!strcmp (getName (), in_name)); }
++int isName (const char *in_name) { return in_name && !strcmp (getName (), in_name); }
+```
+
+Fixed at this layer (not just the `devclifoc.cpp` call site) because
+`getOpenConnection(nullptr)` has no sensible meaning for *any* caller -
+"no device is named `(null)`" should safely return "not found," not
+crash, no matter how a caller ends up passing it. Verified: the same
+`-d C0 -e 0.5 -F <ds9-hook>` reproduction now runs cleanly, exposure
+after exposure, no crash - and the hook script itself successfully
+shipped the image into a real running `ds9` via `xpaset -p ds9 fits
+<path>` once pointed at an absolute path (see the "hooking rts2-focusc
+to ds9" note in `STATUS.md` for the two working recipes and the
+relative-path gotcha that's a `ds9`/XPA quirk, not an RTS2 bug).
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

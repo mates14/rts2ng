@@ -327,7 +327,17 @@ class Connection:public Object
 		void getAddress (char *addrBuf, int _buf_size);
 		int getLocalPort () { return port; }
 		const char *getName () { return name.c_str (); };
-		int isName (const char *in_name) { return (!strcmp (getName (), in_name)); }
+		// base note: in_name == nullptr is a real, reachable case - e.g.
+		// DevClientCameraFoc::postEvent()'s EVENT_CHANGE_FOCUS handler
+		// looks up getValueChar("focuser") and passes the result straight
+		// through to Block::getOpenConnection() -> isName() unchecked;
+		// getValueChar() returns nullptr whenever the device has no
+		// "focuser" value at all (i.e. any camera not paired with a
+		// focuser - the common case). Without this guard that's a
+		// deterministic crash in strcmp() on every completed exposure once
+		// an -F/ConnFocus script is in use - confirmed identical in
+		// classic (lib/rts2/connection.h), see UPSTREAM_BUGS.md.
+		int isName (const char *in_name) { return in_name && !strcmp (getName (), in_name); }
 		void setName (int _centrald_num, const char *in_name)
 		{
 			centrald_num = _centrald_num;

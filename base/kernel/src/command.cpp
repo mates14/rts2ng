@@ -536,6 +536,11 @@ CommandCenter::CommandCenter (DevClientCamera * _camera, int width, int height):
 	setCommand (_os);
 }
 
+CommandStopExposure::CommandStopExposure (DevClientCamera * _camera):CommandCameraSettings (_camera)
+{
+	setCommand ("stopexpo");
+}
+
 CommandQueueAt::CommandQueueAt (Block * _master, const char *queue, int tar_id, double t_start, double t_end):Command (_master)
 {
 	std::ostringstream _os;

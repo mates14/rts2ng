@@ -45,6 +45,8 @@ RTS2_BASE_BINARIES = \
 	centrald/rts2-centrald \
 	monitor/rts2-mon \
 	scriptexec/rts2-scriptexec \
+	sendcmd/rts2-sendcmd \
+	focusc/rts2-focusc \
 	camd/dummy/rts2-camd-dummy \
 	camd/v4l/rts2-camd-v4l \
 	teld/dummy/rts2-teld-dummy \
