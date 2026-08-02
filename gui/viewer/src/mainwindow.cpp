@@ -664,10 +664,21 @@ void MainWindow::onProgressTick ()
 
 	const CameraState &state = cameraStates[activeCamera];
 
-	if (!state.exposing || std::isnan (state.progressStart) || std::isnan (state.progressEnd) || state.progressEnd <= state.progressStart)
+	// Gating on state.exposing here (rather than "is the device doing
+	// anything with a live progress window") used to make the bar snap
+	// back to "ready" the instant the shutter closed - exposing turns
+	// false right as exposure ends, but the device keeps broadcasting a
+	// fresh PROTO_PROGRESS window for readout right after (same
+	// Daemon::maskState()/sendProgressAll() mechanism, just for the
+	// CAM_READING phase instead of CAM_EXPOSING - rts2-mon shows both for
+	// the same reason). stateText already classifies exactly this
+	// (ViewerCamera::stateChanged(), status.h's CAM_* bits) - "Idle" is
+	// the only phase with nothing to show progress for.
+	bool busy = !state.stateText.isEmpty () && state.stateText != "Idle" && !state.hasError;
+	if (!busy || std::isnan (state.progressStart) || std::isnan (state.progressEnd) || state.progressEnd <= state.progressStart)
 	{
 		progressBar->setValue (0);
-		progressBar->setFormat (state.exposing ? "exposing..." : "ready");
+		progressBar->setFormat (busy ? (state.stateText.toLower () + "...") : "ready");
 		elapsedLabel->setText ("--:--:--");
 		remainingLabel->setText ("--:--:--");
 		return;

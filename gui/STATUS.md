@@ -956,6 +956,54 @@ construction rather than by observing a flaky repro go away. Needs the
 user's own confirmation on the real FLI hardware that binning/cooling/
 temperature now populate immediately on connect.
 
+## Round 13: progress bar disappeared during readout - fixed
+
+User reported: the progress bar tracks exposure fine, but goes blank
+the moment readout starts, even though `rts2-mon` shows progress for
+both phases against the same device.
+
+Root cause was a plain over-narrow gate, not a protocol issue:
+`MainWindow::onProgressTick()` only drew the bar when `CameraState::
+exposing` was true, and `ViewerCamera::exposureEnd()` flips that false
+the instant the shutter closes - exactly when readout begins. The
+device keeps broadcasting a fresh `PROTO_PROGRESS` window for readout
+right after (`Daemon::maskState()`/`sendProgressAll()`, `kernel/src/
+daemon.cpp` - same mechanism for every state with a real start/end,
+`CAM_READING` included, which is why `rts2-mon` shows it fine), so
+`onProgressUpdated()` was receiving perfectly good readout progress the
+whole time - `onProgressTick()` was just refusing to display it.
+
+Fixed by gating on `CameraState::stateText` instead (`ViewerCamera::
+stateChanged()`'s already-existing phase classification -
+"Exposing"/"Reading"/"Shifting"/"Frame transfer"/"Idle"/"HW error",
+`status.h`'s `CAM_*` bits) - anything other than "Idle" (and no error)
+now shows progress if a valid window exists, with the format label
+switching to match ("reading...", "shifting...", etc.) instead of a
+hardcoded "exposing...". `exposing` itself is untouched/still set from
+`exposureStateChanged` - it just isn't be the right signal for "is
+there something progressing" any more (it never covered readout to
+begin with).
+
+**Verification**: clean rebuild, zero new warnings, `ctest` 7/7. Pure
+UI-logic change (a display gate, not new protocol/threading code) -
+same reasoning-level confidence as the other fixes this round, not a
+live-observed repro (needs a display to actually watch a progress bar).
+
+### Aside: RTS2 sends its full property dump before authorization completes
+
+While discussing Round 12's race (also raised independently from the
+user's own experience implementing the RTS2 wire protocol in Python):
+the device apparently pushes its
+entire metaInfo/value dump to a freshly-opened connection *before* the
+login/authorization handshake finishes - you connect, and it's already
+flooding you. This is arguably a genuine protocol quirk/smell (most
+protocols gate any real data behind a completed auth step), and it's
+very likely *why* Round 12's race exists in the first place - if the
+dump only started once the client had fully finished its own setup,
+there'd be no window for it to race ahead in. Not changed here (a
+wire-protocol-level design question, way out of scope for a GUI client
+fix) - noted for whenever the core protocol itself gets attention.
+
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare
