@@ -46,6 +46,7 @@ RTS2_BASE_BINARIES = \
 	monitor/rts2-mon \
 	scriptexec/rts2-scriptexec \
 	camd/dummy/rts2-camd-dummy \
+	camd/v4l/rts2-camd-v4l \
 	teld/dummy/rts2-teld-dummy \
 	teld/d50/rts2-teld-d50 \
 	teld/gemini/rts2-teld-gemini \
