@@ -315,12 +315,18 @@ class Configuration:public IniParser
 		/**
 		 * Returns vector of environment variables, which shall be recorded in FITS header.
 		 *
+		 * This is a rarely-used, opt-in feature (see UPSTREAM_BUGS.md) - most
+		 * devices have no "environment" entry at all, so the lookup is
+		 * explicitly non-verbose (unlike getStringVector()'s own verbose-by-
+		 * default parameter) to avoid a spurious "cannot find value" warning
+		 * on every device that simply isn't using it.
+		 *
 		 * @param deviceName   Device for which environmental list is returned.
 		 * @param ret Vector of environmental variables names.
 		 */
 		void deviceWriteEnvVariables (const char *deviceName, std::vector <std::string> &ret)
 		{
-			getStringVector (deviceName, "environment", ret);
+			getStringVector (deviceName, "environment", ret, false);
 		}
 
 		/**

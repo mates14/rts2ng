@@ -2616,6 +2616,46 @@ Verified live: isolated centrald + `rts2-teld-dummy` pair, `rts2-sendcmd
 ... T0 park`, confirmed the log stopped growing new "below horizon"
 lines immediately, and stayed silent across a further 45s parked.
 
+### DevClientCameraImage: bogus "cannot find value" warning on every camera connect - fixed
+
+User asked why the FLORES deployment's log complained about
+`instrume`/`telescop`/`origin`/`template`/`environment` "missing from the
+camera section" - and, more pointedly, why an admittedly-obscure,
+undocumented, opt-in feature (`template`/`environment`) gets to announce
+itself with a warning on every single camera connection just because it
+isn't being used, rather than simply staying quiet when absent.
+
+Root cause: `DevClientCameraImage`'s constructor (`kernel/src/
+devcliimg.cpp`) looked up `instrume`/`telescop`/`origin`/`template` via
+the bare 3-arg `IniParser::getString()` (no default, always logs
+`MESSAGE_WARNING` if the key is missing), and `deviceWriteEnvVariables()`
+(`kernel/include/configuration.h`) called `getStringVector()` without
+passing `verbose=false`, defaulting it to `true` - same loud path. All
+five values already resolved correctly to "empty/unset" either way; only
+the lookup method was ever wrong. `IniParser` already has a quiet,
+optional-with-default lookup used everywhere else for genuinely optional
+settings (4-arg `getString(section, name, buf, defVal)`, which wraps the
+call in `clearVerboseEntry()`/`setVerboseEntry()`) - these five call
+sites were simply never routed through it. Confirmed identical in
+classic RTS2 - a real, long-standing upstream defect, not port-introduced
+(full write-up in `UPSTREAM_BUGS.md`).
+
+Fixed by switching all five lookups to their existing quiet forms - net
+effect is identical resolved values, warning gone. Verified with a
+standalone test linked against the real `libbase_kernel.a`: loaded a
+scratch rts2.ini with a section missing all five keys, ran the old and
+new lookup code side by side - old path reproduced the exact
+`cannot find value 'instrume' in section 'TESTCAM'.`/`'environment'...`
+warnings, new path was silent with the same resolved empty values. Full
+rebuild clean, `ctest` 7/7.
+
+Also flagged (not fixed - a docs gap, not a code bug): neither
+`template` nor `environment` has any example anywhere a user would find
+it before hitting this warning - the user who reported this had never
+heard of either feature despite years of RTS2 experience. Worth a model
+rts2.ini with both commented-out and explained, next time someone's
+looking for a small documentation task.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

@@ -40,9 +40,16 @@ DevClientCameraImage::DevClientCameraImage (rts2core::Connection * in_connection
 	instrume[0] = '\0';
 	origin[0] = '\0';
 
-	config->getString (connection->getName (), "instrume", instrume);
-	config->getString (connection->getName (), "telescop", telescop);
-	config->getString (connection->getName (), "origin", origin);
+	// 4-arg getString (with a default) runs quiet - see
+	// IniParser::getString(section,name,buf,defVal), which wraps the
+	// lookup in clearVerboseEntry()/setVerboseEntry() - unlike the bare
+	// 3-arg form used here previously, which always logged a
+	// MESSAGE_WARNING "cannot find value ... in section ..." the moment
+	// any of these were left out of a device's ini section, even though
+	// all of them are genuinely optional (see UPSTREAM_BUGS.md).
+	config->getString (connection->getName (), "instrume", instrume, "");
+	config->getString (connection->getName (), "telescop", telescop, "");
+	config->getString (connection->getName (), "origin", origin, "");
 
 	writeConnection = true;
 	writeRTS2Values = true;
@@ -50,7 +57,7 @@ DevClientCameraImage::DevClientCameraImage (rts2core::Connection * in_connection
 	// load template file..
 	if (templateFile.length () == 0)
 	{
-		config->getString (connection->getName (), "template", templateFile);
+		config->getString (connection->getName (), "template", templateFile, "");
 		if (templateFile.length () > 0)
 		{
 			writeConnection = !(config->getBoolean (connection->getName (), "no-metadata", true));

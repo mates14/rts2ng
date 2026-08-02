@@ -1418,6 +1418,64 @@ rebuild clean. Not yet re-verified through the live GUI toggle itself
 flipping "Saving: ON" to "OFF" in `rts2-viewer` now actually stops new
 FITS files from appearing on disk.
 
+## DevClientCameraImage - bogus "cannot find value" warning for genuinely optional per-device config
+
+**Affected files**: `base/kernel/src/devcliimg.cpp`, `base/kernel/include/
+configuration.h` (and, confirmed identical, classic `lib/rts2fits/
+devcliimg.cpp`/`include/configuration.h`).
+
+Found via a real deployment report: every time a camera device connects,
+`DevClientCameraImage`'s constructor logs a `MESSAGE_WARNING` "cannot find
+value 'instrume'/'telescop'/'origin'/'template' in section '<device>'"
+for any of those four keys the device's own rts2.ini section doesn't
+define, and separately `deviceWriteEnvVariables()` does the same for
+`environment`. All five are optional (`instrume`/`telescop`/`origin`
+default to an empty string if unset; `template`/`environment` are opt-in
+features - a custom FITS-header template file and a list of OS
+environment variables to copy into the header, respectively). None of
+this is documented anywhere a user would find it before hitting the
+warning, and the log entry gives no hint that "leave it out" is a normal,
+supported choice - it reads exactly like a misconfiguration.
+
+Root cause: `IniParser` already has a "quiet, optional-with-default"
+lookup path used everywhere else in the codebase for genuinely optional
+settings - the 4-arg `getString(section, name, buf, defVal)` wraps the
+lookup in `clearVerboseEntry()`/`setVerboseEntry()` (`kernel/src/
+iniparser.cpp`), and `getStringVector()` takes an explicit `verbose`
+parameter for the same purpose. `DevClientCameraImage`'s constructor used
+the bare 3-arg `getString(section, name, buf)` (no default, always
+verbose) for `instrume`/`telescop`/`origin`/`template`, and
+`deviceWriteEnvVariables()` called `getStringVector()` without passing
+`verbose=false`, defaulting it to `true`. Neither call site is wrong
+about what value ends up in `buf`/`ret` (both correctly resolve to
+empty on a missing key either way) - only the loud lookup was ever a
+mistake here, not the resulting behavior.
+
+**Fix applied**: switched all four `getString()` calls in `devcliimg.cpp`
+to the quiet 4-arg form with an empty-string default, and
+`deviceWriteEnvVariables()` (`configuration.h`) to explicitly pass
+`verbose=false` - net effect is identical resolved values on a missing
+key (empty string / empty vector), with the spurious per-camera-startup
+warning gone.
+
+**Verified**: standalone test linked directly against the real
+`libbase_kernel.a`, loading a scratch rts2.ini with a `[TESTCAM]` section
+containing none of the five keys, calling both the old and new code
+paths side by side - the old bare 3-arg `getString()`/default-`verbose`
+`getStringVector()` reproduced the exact warning text
+(`cannot find value 'instrume' in section 'TESTCAM'.`,
+`cannot find value 'environment' in section 'TESTCAM'.`); the new
+4-arg/`verbose=false` forms were completely silent and resolved to the
+same empty values. Full `base` rebuild clean, `ctest` 7/7.
+
+Not fixed here (out of scope for this pass, flagged for whoever owns
+user-facing docs): there is still no example/documented rts2.ini section
+showing what `template`/`environment` are for or how to use them - the
+user who reported this had never heard of either feature. A model
+rts2.ini with a commented-out example of both (referenced from wherever
+per-device config options are documented) would close that gap; this fix
+only stops the log noise, it doesn't add documentation.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree
