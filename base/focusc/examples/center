@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+#
+# Tiny wrapper around target-offset-hook.py's --radec/--polar setup step,
+# meant to be the one command a student actually types at the telescope
+# in the middle of the night:
+#
+#   center M31
+#   center 00:42:44.3 +41:16:09
+#   center 10.6847 41.2688
+#   center --polar
+#
+# Written for a manual-control student telescope project: there is no
+# slew command here and nothing here moves the mount - a human is always
+# the one turning the controls, watching the offset target-offset-hook.py
+# draws in ds9 shrink. This wrapper only resolves what "RA Dec" means (a
+# name via Simbad/Sesame, sexagesimal, or plain decimal degrees) and
+# writes it to the same config file target-offset-hook.py already reads -
+# it does not touch rts2-focusc at all.
+#
+# Expected nightly workflow: start rts2-focusc ONCE, at the beginning of
+# the session, running continuously in its own terminal/screen:
+#
+#   rts2-focusc -d C0 -e 5 -F /path/to/target-offset-hook.py
+#
+# Then, in another terminal, re-point as often as needed during the
+# night just by running this wrapper - no restart of rts2-focusc needed,
+# since target-offset-hook.py re-reads its config fresh on every
+# completed exposure, so a new target takes effect within one exposure
+# cycle:
+#
+#   center M31
+#   ... watch ds9, turn the mount, offset shrinks ...
+#   center Polaris --polar   # or just: center --polar
+#
+# This is a starting point / sketch, not a shipped/installed tool - not
+# built by CMakeLists.txt, not packaged, not covered by any test. Same
+# directory as target-offset-hook.py/ds9-hook.sh, which it wraps.
+#
+# Copyright (C) 2026 Martin Jelinek
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or (at
+# your option) any later version.
+
+import argparse
+import os
+import subprocess
+import sys
+
+import astropy.units as u
+from astropy.coordinates import SkyCoord
+
+HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+	"target-offset-hook.py")
+
+
+def resolve_radec(tokens):
+	"""tokens is whatever's left on the command line after --polar/--dec-
+	sign are stripped out. Two tokens that parse as coordinates (either
+	decimal degrees or sexagesimal HMS/DMS) win; otherwise the tokens are
+	joined back into a name and resolved via Simbad/Sesame (works for
+	multi-word names too, e.g. "center Andromeda Galaxy").
+
+	Plain decimal degrees MUST be tried before sexagesimal - SkyCoord's
+	hourangle parser happily accepts a bare number like "10.6847" as
+	10.6847 *hours* (i.e. silently multiplies it by 15) instead of
+	raising, so trying it first would misinterpret every plain-degree
+	input rather than falling through to the right parser."""
+	if len(tokens) == 2:
+		try:
+			return float(tokens[0]), float(tokens[1])
+		except ValueError:
+			pass
+		try:
+			c = SkyCoord(tokens[0], tokens[1], unit=(u.hourangle, u.deg))
+			return c.ra.deg, c.dec.deg
+		except Exception:
+			pass
+
+	name = " ".join(tokens)
+	if not name:
+		print(f"center: don't know what to do with {tokens!r}", file=sys.stderr)
+		sys.exit(1)
+	print(f"center: resolving '{name}' via Simbad/Sesame...")
+	try:
+		c = SkyCoord.from_name(name)
+	except Exception as e:
+		print(f"center: could not resolve '{name}': {e}", file=sys.stderr)
+		sys.exit(1)
+	return c.ra.deg, c.dec.deg
+
+
+def main():
+	parser = argparse.ArgumentParser(
+		description="Point target-offset-hook.py at a new target - name, "
+			"coordinates, or the celestial pole.")
+	parser.add_argument("--polar", action="store_true",
+		help="target the celestial pole instead of a name/coordinates")
+	parser.add_argument("--dec-sign", type=float, choices=(1.0, -1.0), default=None,
+		help="with --polar: +1 north / -1 south (default: auto per image)")
+	parser.add_argument("target", nargs="*",
+		help="object name (e.g. M31), or RA Dec as two tokens "
+			"(decimal degrees or sexagesimal HMS/DMS)")
+	args = parser.parse_args()
+
+	if args.polar:
+		cmd = [HOOK, "--polar"]
+		if args.dec_sign is not None:
+			cmd += ["--dec-sign", str(args.dec_sign)]
+		subprocess.run(cmd, check=True)
+		print("center: now targeting the celestial pole")
+		return
+
+	if not args.target:
+		parser.error("give an object name, RA Dec, or --polar")
+
+	ra, dec = resolve_radec(args.target)
+	subprocess.run([HOOK, "--radec", str(ra), str(dec)], check=True)
+	print(f"center: now targeting RA={ra:.4f} Dec={dec:.4f}")
+
+
+if __name__ == "__main__":
+	main()

@@ -53,6 +53,13 @@
 #       RTS2_TARGET_RADEC="10.6833 41.2692" \
 #       rts2-focusc -d C1 -e 1 -F /path/to/target-offset-hook.py
 #
+# For interactive re-targeting during a session (the expected case for a
+# manual-control telescope - see `center` in this same directory), option
+# 1 is the one that matters in practice: `center M31` just re-runs
+# `target-offset-hook.py --radec ...` under the hood, so the already-
+# running rts2-focusc -F loop from option 1 picks up the new target on
+# its very next completed exposure, no restart needed.
+#
 # This is a starting point / sketch, not a shipped/installed tool - not
 # built by CMakeLists.txt, not packaged, not covered by any test. See
 # ds9-hook.sh in this same directory for the simpler seed this grew from,
