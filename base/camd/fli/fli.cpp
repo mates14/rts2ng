@@ -78,6 +78,8 @@ class Fli:public Camera
 			addBinning2D (1, 4);
 			addBinning2D (1, 8);
 			addBinning2D (1, 16);
+			addBinning2D (8, 2);
+			addBinning2D (16, 2);
 		}
 
 		virtual int info ();
