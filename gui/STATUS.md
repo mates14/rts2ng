@@ -730,6 +730,50 @@ this session: no screen-capture tooling available here to confirm the
 graph's actual on-screen appearance, axis-availability toggling, or the
 new-image-vs-refit distinction live - needs the user's own test.
 
+## Round 10: "Save to disk" OFF never actually stopped saving - fixed, default flipped to ON
+
+User reported the Round 6 toggle button didn't work: images kept getting
+saved to disk regardless of the button's state.
+
+Root cause is in shared kernel code, not this project's own
+`viewercamera.cpp`/`mainwindow.cpp` - `DevClientCameraImage::
+processCameraImage()`'s `if (saveImage) { ci->image->saveImage(); }`
+guard (`base/kernel/src/devcliimg.cpp`) never prevented anything. By the
+time that runs, the FITS file has already been created on disk with real
+pixel data in it (`createImage()` calls `fits_create_file()` immediately,
+`writeData()` streams pixels in as they arrive, both independent of this
+flag) - and `Image::~Image()` unconditionally calls `saveImage()` again on
+destruction regardless of the flag. So `saveImage=0` only ever skipped one
+redundant explicit close, never the actual persistence. Confirmed
+identical in classic `rts2fits/devcliimg.cpp` too - a genuine long-standing
+upstream bug, not a porting mistake; full writeup in `base/UPSTREAM_BUGS.md`.
+
+- **Fix** (`base/kernel/src/devcliimg.cpp`): added the missing `else`
+  branch, `ci->image->deleteImage()` - closes and unlinks the file,
+  mirroring what `~CameraImage()` already does for images that never
+  received any data at all.
+- **Default flipped from off to on**, per explicit user request this
+  round ("ON is good and it should be the default, but if they are not to
+  be saved, it should work"): `ViewerClient::createOtherType()`'s
+  `setSaveImage(1)` (was `0`), `CameraState::saveEnabled` now defaults to
+  `true`, and the "Saving" button now starts checked/green. This reverses
+  Round 6's original off-by-default policy choice - reasonable at the
+  time, but it happened to closely resemble the buggy always-saves
+  behavior closely enough that the underlying bug went unnoticed until
+  the user actually tried turning it off.
+
+**Verified without needing the GUI or the permission-restricted
+`/var/lib/rts2/images/` path that blocked Round 6's own end-to-end check**:
+a standalone test program, linked directly against the real
+`libbase_kernel.a` (not a mock), using `Image`'s actual constructor and
+destructor - confirmed a file created and then merely left to go out of
+scope with no explicit `saveImage()`/`deleteImage()` call (the exact old
+code path when `saveImage` was 0) is still on disk afterward, and that
+adding the explicit `deleteImage()` call (the fix) removes it and keeps it
+removed. Full `gui`/`base`/`db` rebuild clean. Still needs the user's own
+live check that flipping the button to OFF in a running `rts2-viewer`
+now actually stops new files from appearing.
+
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare

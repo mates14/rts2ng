@@ -1337,6 +1337,87 @@ new "below horizon" lines immediately after park (previously grew
 without bound), and stayed silent across a further 45s of sitting
 parked.
 
+## DevClientCameraImage::processCameraImage() - saveImage=0 never actually skipped saving
+
+**Affected files**: `base/kernel/src/devcliimg.cpp` (and, confirmed identical,
+classic `lib/rts2fits/devcliimg.cpp`), plus `base/kernel/src/image.cpp`.
+
+Found while chasing a `gui`/`rts2-viewer` report: the viewer's "Save to
+disk" toggle sets client-side `DevClientCameraImage::saveImage` to 0/1
+(`setSaveImage()`), and `processCameraImage()` guards the actual write:
+
+```cpp
+if (saveImage)
+{
+	// set filter..
+	// save us to the disk..
+	ci->image->saveImage ();
+}
+```
+
+This guard is a no-op. `Image::saveImage()` is just `closeFile()` - by the
+time `processCameraImage()` runs, the FITS file has *already* been created
+on disk and had real pixel data streamed into it: `DevClientCameraImage::
+createImage()` constructs the `Image` via the constructor that calls
+`createImage(filename, overwrite)` -> `FitsFile::createFile()` ->
+`fits_create_file()` immediately (not deferred, and not the in-memory
+`memFile` path - a real filename is given), and `CameraImage::writeData()`
+streams the received pixel data into that same open file as it arrives.
+Skipping the `if (saveImage)` branch above only skips one final explicit
+`closeFile()` call - it does not stop the file from existing with real
+data in it. Worse, `Image::~Image()` (`image.cpp`) unconditionally calls
+`saveImage()` again:
+
+```cpp
+Image::~Image (void)
+{
+	saveImage ();
+	...
+```
+
+so even the class's own destructor re-triggers the "save" regardless of
+the flag. Net effect: toggling `saveImage` to 0 has never actually
+prevented a FITS file from being written and kept, in this project or in
+classic - the flag only ever changed *when* the final close happened, not
+*whether* the file survived.
+
+**Fix applied** (`base/kernel/src/devcliimg.cpp`, `processCameraImage()`):
+added the missing `else` branch, calling `ci->image->deleteImage()` -
+which closes and unlinks the file - mirroring what `~CameraImage()`
+(`cameraimage.cpp`) already does for the unrelated case of an image that
+never received any pixel data at all:
+
+```cpp
+if (saveImage)
+{
+	ci->image->saveImage ();
+}
+else
+{
+	ci->image->deleteImage ();
+}
+```
+
+Also changed `gui/viewer`'s own default from off to on (`ViewerClient::
+createOtherType()`'s `setSaveImage(1)`, `MainWindow`'s `CameraState::
+saveEnabled = true` and the Saving button starting checked) per the
+user's explicit request - previously the viewer started with saving off
+by policy choice, which had been masking this bug since the "off" default
+matched the buggy "always saves anyway" behavior closely enough that
+nobody noticed images were being kept regardless of the toggle.
+
+**Verified**: standalone test linked directly against `libbase_kernel.a`,
+using the real `Image` constructor/destructor (not a mock) - confirmed a
+file created then merely left to go out of scope without any explicit
+`saveImage()`/`deleteImage()` call (the old code's actual behavior when
+`saveImage` was 0) is still present on disk after the destructor runs
+("BUG: saved anyway"), and that adding the explicit `deleteImage()` call
+(the fix) removes it and it stays removed. Full `gui`/`base`/`db`
+rebuild clean. Not yet re-verified through the live GUI toggle itself
+(no display in this environment) - needs the user's own check that
+flipping "Saving: ON" to "OFF" in `rts2-viewer` now actually stops new
+FITS files from appearing on disk.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

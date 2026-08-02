@@ -59,9 +59,10 @@ struct CameraState
 	QString stateText;
 	bool hasError = false;
 	// Mirrors DevClientCameraImage::saveImage - see
-	// ViewerClient::createOtherType(), which forces every newly-created
-	// camera to start with saving off.
-	bool saveEnabled = false;
+	// ViewerClient::createOtherType(), which sets every newly-created
+	// camera to start with saving on (the default a real acquisition run
+	// wants; casual use can turn it off explicitly).
+	bool saveEnabled = true;
 
 	// Full chip geometry ("SIZE" ValueRectangle) - what "windowing off"
 	// resets WINDOW to. Invalid (QRect()) until the device has reported it.

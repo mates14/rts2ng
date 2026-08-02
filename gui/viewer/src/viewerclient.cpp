@@ -68,11 +68,10 @@ rts2core::DevClient *ViewerClient::createOtherType (rts2core::Connection *conn, 
 		std::string devName = conn->getName ();
 		ViewerCamera *cam = new ViewerCamera (conn);
 
-		// DevClientCameraImage defaults to saveImage=1 (kernel/src/
-		// devcliimg.cpp) - a viewer used for casual framing/focusing
-		// shouldn't silently start writing FITS files until the user
-		// explicitly turns saving on (see MainWindow's Saving button).
-		cam->setSaveImage (0);
+		// DevClientCameraImage already defaults to saveImage=1
+		// (kernel/src/devcliimg.cpp) - explicit here to match MainWindow's
+		// own default (Saving button starts ON), not to override it.
+		cam->setSaveImage (1);
 
 		{
 			std::lock_guard<std::mutex> lock (camerasMutex);

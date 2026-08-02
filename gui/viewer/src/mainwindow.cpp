@@ -167,12 +167,13 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	exposeForm->addRow (exposeButton, runButton);
 
 	// Saving is purely client-side (DevClientCameraImage::saveImage,
-	// ViewerClient::requestSaveToggle()) - off by default (see
-	// ViewerClient::createOtherType()), so casual framing/focusing
-	// doesn't silently fill the disk with FITS files until the user
-	// deliberately turns it on for a real acquisition.
+	// ViewerClient::requestSaveToggle()) - on by default (see
+	// ViewerClient::createOtherType()), matching the CameraState default;
+	// turn it off explicitly for casual framing/focusing you don't want
+	// filling the disk with FITS files.
 	saveButton = new QPushButton ("Saving: OFF", exposeBox);
 	saveButton->setCheckable (true);
+	saveButton->setChecked (true);
 	exposeForm->addRow ("Save to disk:", saveButton);
 	updateSaveButton ();
 

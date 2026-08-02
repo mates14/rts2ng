@@ -568,6 +568,19 @@ void DevClientCameraImage::processCameraImage (CameraImages::iterator cis)
 			// save us to the disk..
 			ci->image->saveImage ();
 		}
+		else
+		{
+			// createImage()/writeData() already created the FITS file on
+			// disk and streamed real pixel data into it via cfitsio, well
+			// before this saveImage flag is ever consulted - and
+			// Image::~Image() unconditionally calls saveImage() (closeFile())
+			// regardless of this flag, so simply skipping the explicit
+			// saveImage() call above left the file on disk anyway (this
+			// flag never actually prevented a save). deleteImage() closes
+			// and unlinks it, same as ~CameraImage()'s own handling of an
+			// image that never received any data at all.
+			ci->image->deleteImage ();
+		}
 
 		// do basic processing
 		imageProceRes res = processImage (ci->image);
