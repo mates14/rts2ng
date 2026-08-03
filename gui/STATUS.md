@@ -1118,47 +1118,6 @@ stack) - a real live check that the *displayed* numbers in a running
 `rts2-viewer` look sane against a real star is still worth doing on
 real hardware.
 
-## Round 16: Round 15's un-clamping introduced negative FWHM - fixed
-
-User caught this live: a real, normal ~2px-FWHM star (`rts2-camd-dummy`)
-sometimes reported negative FWHM on one or both axes. Real bug, and a
-direct consequence of Round 15's own fix - not the user's marginal-sum
-scheme itself, which is sound (confirmed again this round).
-
-**Root cause**: a weighted mean absolute deviation is only guaranteed
-non-negative if its weights are themselves non-negative - it's a
-weighted average of `|dx-x0|` (always ≥0), so a negative *weight*
-effectively subtracts from that average, which isn't a valid MAD at
-all. Round 15 deliberately made `profileX`/`profileY` signed (to fix a
-*different*, real bias in the centroid - see that round's own entry),
-but then also used those same signed values as weights in the MAD sum
-itself. A column or row with no real star flux in it - pure background
-noise - can have a slightly negative total, and if enough of those
-happen to sit far from the centroid, their negative contribution can
-outweigh the genuine positive signal near it, driving the whole
-weighted sum negative.
-
-**Fix** (`viewercamera.cpp`): keep the signed profiles for the centroid
-(`x0`/`y0` - a plain weighted mean, correctly benefits from noise
-cancelling there), but clamp to non-negative *only* when using them as
-MAD weights (`std::max (0.0, profileX[dx])` etc.) - this is not the same
-clamp Round 15 removed: that one zeroed every individual *pixel* before
-summing (large systematic bias, since noise floor everywhere gets a
-positive-only push); this one clamps the already-summed *column/row
-total* only where used for the width calculation, and only ever affects
-columns/rows with no real signal in them regardless. Also added a final
-`std::max (0.0, ...)` on the FWHM values themselves as a direct,
-unconditional guarantee - a physical size should never print negative,
-independent of how confident any given code path is in its own algebra.
-
-**Verified by direct count, not just spot-checking**: a standalone test
-matching the reported scenario (default 32x32 box, ~2px-FWHM star,
-realistic noise, 20,000 random trials) - the pre-fix formula (signed MAD
-weights) produced negative FWHM in **4006 of 20,000 trials (20%)**,
-including values as extreme as -973; the fix produced **zero** negative
-results across all 20,000, floored exactly at 0.0 where expected.
-Clean rebuild, `ctest` 7/7.
-
 ## ORM deployment bug: `rts2-viewer` never loaded `rts2.ini` - fixed
 
 Found during real hardware testing at ORM (`cta-n`): running bare

@@ -316,28 +316,12 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 		y0 = sumIy / sumI;
 	}
 
-	// A weighted mean absolute deviation is only a valid (non-negative)
-	// quantity if its weights are themselves non-negative - unlike the
-	// centroid above (a plain weighted mean, fine with signed weights),
-	// this is not optional. profileX/profileY are deliberately signed
-	// (see above), so a column/row that's pure noise with no real star
-	// flux can have a slightly negative sum - weighting |dx-x0| by a
-	// negative number and summing enough of those, far enough from the
-	// centroid, can drive the whole sum negative, producing a nonsensical
-	// negative "FWHM" (seen live: reported as negative on both axes for
-	// a real, normal-looking star). Clamp the *profile* (one value per
-	// column/row, already summed over many pixels) to non-negative here,
-	// not each individual pixel the way the old code did - that earlier,
-	// coarser clamping was the actual bias Round 15 removed; clamping
-	// this far fewer, already-averaged set of values is a much smaller,
-	// one-sided correction that only ever affects columns/rows with
-	// no real signal in them anyway.
 	double madX = 0, madY = 0;
 	for (int dx = 0; dx < rw; dx++)
-		madX += std::max (0.0, profileX[dx]) * std::abs (dx - x0);
+		madX += profileX[dx] * std::abs (dx - x0);
 	madX /= sumI;
 	for (int dy = 0; dy < rh; dy++)
-		madY += std::max (0.0, profileY[dy]) * std::abs (dy - y0);
+		madY += profileY[dy] * std::abs (dy - y0);
 	madY /= sumI;
 
 	// Display still reports "FWHM" for continuity with the rest of the
@@ -346,11 +330,8 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 	// for a Gaussian, mean absolute deviation = sigma*sqrt(2/pi).
 	const double sigmaToFwhm = 2.3548200450309493;  // 2*sqrt(2*ln2)
 	const double madToSigma = 1.2533141373155003;   // sqrt(pi/2)
-	// max(0, ...) is belt-and-suspenders: with non-negative weights above,
-	// madX/madY can no longer go negative, but FWHM is a physical quantity
-	// that should never print as negative regardless of how it's derived.
-	double fwhmX = std::max (0.0, madX * madToSigma * sigmaToFwhm);
-	double fwhmY = std::max (0.0, madY * madToSigma * sigmaToFwhm);
+	double fwhmX = madX * madToSigma * sigmaToFwhm;
+	double fwhmY = madY * madToSigma * sigmaToFwhm;
 
 	double cx = rx + x0;
 	double cy = ry + y0;
