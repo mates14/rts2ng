@@ -87,6 +87,12 @@ class GeminiUDP:public Telescope
 		virtual int isParking ();
 		virtual int endPark ();
 
+		// sync (not slew) - tells the mount it's currently at (set_ra,
+		// set_dec). Realizes the "setto"/"synccorr" client commands
+		// (Telescope::setTo() defaults to -1/unimplemented) - see
+		// GeminiCaringLoop::syncTo()'s doc comment for the command choice.
+		virtual int setTo (double set_ra, double set_dec);
+
 		// tracking-limit flip-or-park decision, see armLimitAction()'s doc
 		// comment for the whole scheme
 		virtual void setFullBopState (rts2_status_t new_state);
@@ -600,6 +606,28 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 	std::string err;
 	if (!caring->gotoRaDec (corrRa, corrDec, err, 3.0))
 		logStream (MESSAGE_ERROR) << "GeminiUDP: model-corrected retarget was refused: " << err << sendLog;
+}
+
+int GeminiUDP::setTo (double set_ra, double set_dec)
+{
+	if (caring == nullptr)
+		return -1;
+
+	std::string err;
+	if (!caring->syncTo (set_ra, set_dec, err, 3.0))
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: sync refused: " << err << sendLog;
+		return -1;
+	}
+
+	// re-anchoring to a known-true position makes any previously
+	// accumulated incremental correction stale/double-counted - same as
+	// gemini2ser.cpp's setTo() calling zeroCorrRaDec() up front
+	zeroCorrRaDec ();
+	setTelRaDec (set_ra, set_dec);
+
+	logStream (MESSAGE_INFO) << "GeminiUDP: synced to RA=" << set_ra << " Dec=" << set_dec << sendLog;
+	return 0;
 }
 
 int GeminiUDP::isMoving ()

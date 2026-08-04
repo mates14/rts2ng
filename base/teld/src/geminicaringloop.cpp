@@ -406,6 +406,37 @@ bool GeminiCaringLoop::matchTimeUtc (std::string &errorMessage, double waitTimeo
 	return true;
 }
 
+bool GeminiCaringLoop::syncTo (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec)
+{
+	std::string sr, sd;
+	if (!formatTargetCommands (raDeg, decDeg, sr, sd))
+	{
+		errorMessage = "bad RA/Dec for sync";
+		return false;
+	}
+
+	std::string response;
+	if (!sendRawSync (sr + sd, response, waitTimeoutSec))
+	{
+		errorMessage = "no response to sync target set (:Sr/:Sd)";
+		return false;
+	}
+	if (response.size () < 2 || response[0] != '1' || response[1] != '1')
+	{
+		errorMessage = "mount rejected sync target (:Sr/:Sd expected two '1' acks), reply=\"" + response + "\"";
+		return false;
+	}
+
+	// sent separately from :Sr/:Sd, reply not strictly parsed - see header
+	if (!sendRawSync (":CI#", response, waitTimeoutSec))
+	{
+		errorMessage = "target was set, but no response to sync command (:CI#) - sync may not have completed";
+		return false;
+	}
+
+	return true;
+}
+
 // ---- everything below this line runs on the caring-loop thread only ----
 
 bool GeminiCaringLoop::sendAndReceive (const std::string &payload, std::string &response, double timeoutSec, int maxResyncAttempts)

@@ -235,6 +235,26 @@ class GeminiCaringLoop
 		 */
 		bool matchTimeUtc (std::string &errorMessage, double waitTimeoutSec = 3.0);
 
+		/**
+		 * Sync (not slew): tells Gemini the mount is currently, actually,
+		 * pointed at (raDeg, decDeg) - same :Sr/:Sd target-set as
+		 * gotoRaDec(), but followed by ":CI#" (index-only sync) instead of
+		 * ":MS#" (go there). Deliberately ":CI#", not ":Cm#" - the latter
+		 * appends to Gemini's own onboard alignment model, which would
+		 * double-count against the T-Point model this driver already
+		 * applies in software (see GeminiUDP::computeModelCorrection()) -
+		 * matches gemini2ser.cpp's setTo()'s non-append path, its default.
+		 * raDeg/decDeg are sent as-is, with no model correction applied -
+		 * matches that same production setTo() (its applyModel() call for
+		 * this path is commented out there too): a sync tells Gemini what
+		 * it's actually looking at, so there's nothing to correct for.
+		 *
+		 * :CI#'s own reply is not strictly parsed (sent as a separate
+		 * command from :Sr/:Sd, not batched) - same open-ended-reply
+		 * caution as matchTimeUtc()'s handling of ":SC#".
+		 */
+		bool syncTo (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec = 3.0);
+
 	private:
 		void threadMain ();
 		// all of these run on the caring-loop thread only
