@@ -40,6 +40,7 @@
 #include "pluto/observe.h"
 
 #include "telmodel.h"
+#include "tpointmodel.h"
 
 #include "dut1.h"
 
@@ -1354,9 +1355,10 @@ int Telescope::init ()
 		return -1;
 	}
 
-	// base note: GPointModel/TPointModel (concrete pointing models) are
-	// deferred - see telmodel.h. Report an error instead of silently
-	// ignoring the option if one was actually given.
+	// base note: GPointModel (RTS2's own model format) is still deferred -
+	// see telmodel.h - no driver in this tree needs it yet. TPointModel is
+	// ported (tpointmodel.h/.cpp, tpointmodelterm.h/.cpp) - a real T-Point
+	// model file is in active use (Gemini).
 	if (rts2ModelFile)
 	{
 		logStream (MESSAGE_ERROR) << "RTS2 pointing model (--rts2-model) is not supported in base - GPointModel was not ported (see STATUS.md)" << sendLog;
@@ -1364,8 +1366,12 @@ int Telescope::init ()
 	}
 	else if (tPointModelFile)
 	{
-		logStream (MESSAGE_ERROR) << "T-Point pointing model (--t-point-model) is not supported in base - TPointModel was not ported (see STATUS.md)" << sendLog;
-		return -1;
+		model = new rts2telmodel::TPointModel (getLatitude ());
+		ret = model->load (tPointModelFile);
+		if (ret)
+			return ret;
+		for (std::vector <rts2telmodel::TPointModelTerm *>::iterator iter = ((rts2telmodel::TPointModel*) model)->begin (); iter != ((rts2telmodel::TPointModel*) model)->end (); iter++)
+			addValue (*iter, TEL_MOVING);
 	}
 
 	if (horizonFile)

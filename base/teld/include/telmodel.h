@@ -21,13 +21,20 @@
 
 // base note: this abstract interface is ported in full (it's small and
 // pure-virtual, no .cpp needed), so Telescope::model (a TelModel*) type-
-// checks correctly. The concrete implementations - GPointModel and
-// TPointModel (lib/rts2tel/gpointmodel.cpp + tpointmodel.cpp +
-// tpointmodelterm.cpp, ~1090 lines) - are NOT ported: they're only ever
-// constructed behind the --rts2-model/--t-point-model command-line options
-// (see teld.cpp's init()/signaledHUP()), so `model` stays nullptr unless a
-// driver explicitly loads a pointing-model file, which dummy never does.
-// Same deferral reasoning as SEP in camd and SimbadTarget in the monitor.
+// checks correctly. GPointModel (RTS2's own model format) is still
+// deferred - no driver in this tree needs it. TPointModel IS ported now
+// (tpointmodel.h/.cpp, tpointmodelterm.h/.cpp) - GeminiUDP's flip/pier-
+// side decision needs a real model. Same deferral reasoning for GPointModel
+// as SEP in camd and SimbadTarget in the monitor.
+//
+// One real bug found while porting TPointModel: getErrAltAz()'s default
+// body below calls the free logStream()/sendLog() (app.h), not the
+// rts2core::LogStream class this file already included via logstream.h -
+// classic tree got away with it because every translation unit that
+// happened to include telmodel.h also transitively included app.h first
+// (via device.h/daemon.h) for unrelated reasons; a minimal translation
+// unit that only needs the model classes (tpointmodelterm.cpp) doesn't,
+// and failed to compile until app.h was included here directly.
 
 /**
  * @file
@@ -37,6 +44,7 @@
  */
 
 #include "logstream.h"
+#include "app.h"
 
 #include <libnova/libnova.h>
 #include <iostream>
