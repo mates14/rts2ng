@@ -376,10 +376,16 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 	if (oldValue == pulseGuideRaValue || oldValue == pulseGuideDecValue)
 	{
 		int ms = newValue->getValueInteger ();
-		// convention matches base/teld/gemini/gemini.cpp's change_ra/
-		// changeDec precedent: positive -> east/north, negative -> west/south
+		// convention and guard match gemini2ser.cpp's performGuide()
+		// exactly (the live production driver's verified precedent):
+		// positive -> east/north, negative -> west/south; only realized
+		// in state == TEL_OBSERVING (not moving, not parked, no other
+		// mask bit) and not getBlockMove() - a stricter check than just
+		// isTracking(), which alone wouldn't necessarily exclude parked
 		char direction = (oldValue == pulseGuideRaValue) ? (ms >= 0 ? 'e' : 'w') : (ms >= 0 ? 'n' : 's');
-		bool suitable = caring != nullptr && ms != 0 && isTracking () && (getState () & TEL_MASK_MOVING) != TEL_MOVING;
+		bool suitable = caring != nullptr && ms != 0
+			&& (getState () & TEL_MASK_MOVING) == TEL_OBSERVING
+			&& isTracking () && !getBlockMove ();
 		if (suitable)
 			caring->queuePulseGuide (direction, (unsigned int) (ms >= 0 ? ms : -ms));
 		// always reset to 0 (rather than leaving the just-committed
@@ -403,6 +409,15 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 		return;
 
 	setTelRaDec (st.ra, st.dec);
+	// telFlip (MNT_FLIP) drives Telescope::infoUTCLST()'s rotang +180 deg
+	// adjustment and FITS headers - gemini2ser.cpp's getFlip() derives it
+	// from encoder ticks (native 235) vs. a per-mount decFlipLimit; we
+	// already have the mount's own W/E answer from the ENQ macro (:Gm#
+	// equivalent), which is more direct - 'E' -> flipped (1), matching
+	// that driver's "decTick >= decFlipLimit -> 1" convention (east side
+	// of pier = flipped orientation)
+	if (st.pierSide == 'E' || st.pierSide == 'W')
+		telFlip->setValueInteger (st.pierSide == 'E' ? 1 : 0);
 	pierSideValue->setValueCharArr (std::string (1, st.pierSide).c_str ());
 	moveRateValue->setValueCharArr (std::string (1, st.moveRate).c_str ());
 	praRawValue->setValueLong (st.praRaw);

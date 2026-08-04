@@ -183,19 +183,19 @@ class GeminiCaringLoop
 		void queueNativeSet (int id, double value);
 
 		/**
-		 * Fire-and-forget LX200 pulse-guide command (:MgnDDDD#, n='n'/'s'/
-		 * 'e'/'w', DDDD = duration in milliseconds) - the real documented
-		 * command, per the UDP protocol spec's Appendix 3 critical-sequence
-		 * list (":Me/Mw/Mn/Ms/Ma/Mi/Mg"), NOT the ":Mi" command the classic
-		 * tree's dead/never-wired Gemini::guide() used (see
-		 * base/teld/gemini/gemini.cpp's L4_GUIDE block - that command takes
-		 * a 0-255 magnitude on some other scale, not milliseconds, and was
-		 * never actually connected to a pulse_guide_ra/dec Value in any
-		 * driver history). Guide rate itself is whatever native register
-		 * 150 is currently set to (GeminiUDP's guiding_speed Value) - :Mg
-		 * doesn't take a rate parameter.
+		 * Fire-and-forget pulse-guide command: ":Mi" + direction
+		 * ('e'/'w'/'n'/'s') + magnitude, e.g. ":Mie40#" - NOT the
+		 * documented LX200 ":Mgn DDDD#" command (that was this driver's
+		 * first guess, based on the UDP protocol spec's Appendix 3 list;
+		 * wrong - see UPSTREAM_BUGS.md). ":Mi..." is what the live
+		 * production driver (~/gemini2ser.cpp's Gemini::performGuide(),
+		 * actively guiding real observations at lascaux) actually sends,
+		 * and its magnitude is capped at 255 there (values above are
+		 * rejected outright, not clamped) - same cap enforced here, since
+		 * we have no evidence for what a larger value does on this
+		 * firmware and no reason to be the first to find out live.
 		 */
-		void queuePulseGuide (char direction, unsigned int durationMs);
+		void queuePulseGuide (char direction, unsigned int magnitude);
 
 		/**
 		 * Read a native Gemini register synchronously (bounded real OS

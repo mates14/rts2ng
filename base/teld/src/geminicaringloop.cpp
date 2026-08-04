@@ -320,12 +320,12 @@ void GeminiCaringLoop::queueNativeSet (int id, double value)
 	commandQueue.push_back ({ id, buf });
 }
 
-void GeminiCaringLoop::queuePulseGuide (char direction, unsigned int durationMs)
+void GeminiCaringLoop::queuePulseGuide (char direction, unsigned int magnitude)
 {
-	if (durationMs > 9999)
-		durationMs = 9999;	// DDDD is a 4-digit field, see :Mg's doc comment
+	if (magnitude > 255)
+		return;	// matches gemini2ser.cpp's performGuide() - reject, don't clamp, see header
 	char buf[16];
-	snprintf (buf, sizeof (buf), ":Mg%c%u#", direction, durationMs);
+	snprintf (buf, sizeof (buf), ":Mi%c%u#", direction, magnitude);
 	std::lock_guard<std::mutex> lock (mutex_);
 	rawCommandQueue.push_back (buf);
 }
