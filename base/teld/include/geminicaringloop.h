@@ -183,6 +183,21 @@ class GeminiCaringLoop
 		void queueNativeSet (int id, double value);
 
 		/**
+		 * Fire-and-forget LX200 pulse-guide command (:MgnDDDD#, n='n'/'s'/
+		 * 'e'/'w', DDDD = duration in milliseconds) - the real documented
+		 * command, per the UDP protocol spec's Appendix 3 critical-sequence
+		 * list (":Me/Mw/Mn/Ms/Ma/Mi/Mg"), NOT the ":Mi" command the classic
+		 * tree's dead/never-wired Gemini::guide() used (see
+		 * base/teld/gemini/gemini.cpp's L4_GUIDE block - that command takes
+		 * a 0-255 magnitude on some other scale, not milliseconds, and was
+		 * never actually connected to a pulse_guide_ra/dec Value in any
+		 * driver history). Guide rate itself is whatever native register
+		 * 150 is currently set to (GeminiUDP's guiding_speed Value) - :Mg
+		 * doesn't take a rate parameter.
+		 */
+		void queuePulseGuide (char direction, unsigned int durationMs);
+
+		/**
 		 * Read a native Gemini register synchronously (bounded real OS
 		 * wait, same shape/safety reasoning as gotoRaDec() - see its doc
 		 * comment). Checksum-verified (see tel_gemini_get's checksum2 in
@@ -232,6 +247,7 @@ class GeminiCaringLoop
 		void handleAbort ();
 		void handlePark ();
 		void handleQueuedCommand ();
+		void handleQueuedRawCommand ();
 		void handleSyncQuery ();
 
 		std::string hostname;
@@ -282,6 +298,12 @@ class GeminiCaringLoop
 			std::string valueStr;
 		};
 		std::deque<NativeSetCommand> commandQueue;
+
+		// fire-and-forget raw wire commands (currently just :Mg pulse-guide
+		// - see queuePulseGuide()), queued as pre-built strings rather than
+		// reusing commandQueue/NativeSetCommand since these aren't native
+		// >ID:VAL# register writes
+		std::deque<std::string> rawCommandQueue;
 
 		uint32_t nextDatagramNumber;
 };

@@ -153,6 +153,17 @@ class GeminiUDP:public Telescope
 		rts2core::ValueInteger *centeringSpeedValue;
 		rts2core::ValueFloat *pollIntervalValue;
 
+		// pulse-guide inputs, same name/units convention as
+		// base/teld/d50/d50.cpp's guidePulseRA/DEC ("[ms], negative changes
+		// direction") - RTS2's guide scripts (python/rts2/guide.py,
+		// guideccd.py) write these directly on T0. Realized via
+		// GeminiCaringLoop::queuePulseGuide() (the documented :Mg command -
+		// see its doc comment for why not the classic tree's dead ":Mi"
+		// code). See setValue() for the direction-sign convention and the
+		// tracking-only safety guard.
+		rts2core::ValueInteger *pulseGuideRaValue;
+		rts2core::ValueInteger *pulseGuideDecValue;
+
 		void applyStatus (const GeminiStatus &st);
 
 		// ---- one-shot live self-test, gated by --live-slew-test ----
@@ -222,6 +233,11 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	centeringSpeedValue->setValueInteger (2);
 	createValue (pollIntervalValue, "poll_interval", "seconds between the caring loop's async status polls", false, RTS2_VALUE_WRITABLE);
 	pollIntervalValue->setValueFloat (1.0);
+
+	createValue (pulseGuideRaValue, "pulse_guide_ra", "[ms] time to guide in RA, negative changes direction", false, RTS2_VALUE_WRITABLE);
+	pulseGuideRaValue->setValueInteger (0);
+	createValue (pulseGuideDecValue, "pulse_guide_dec", "[ms] time to guide in DEC, negative changes direction", false, RTS2_VALUE_WRITABLE);
+	pulseGuideDecValue->setValueInteger (0);
 
 	addOption ('e', "gemini-udp", 1, "IP and port (separated by :) of the Gemini-2 mount's UDP interface (default port 11110)");
 	addOption ('T', "live-slew-test", 0, "run a one-shot self-test: small Dec-only slew away from the current position, then back. Read current position first, checks altitude margin before moving.");
@@ -355,6 +371,25 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 	{
 		if (caring)
 			caring->setPollInterval (newValue->getValueDouble ());
+		return 0;
+	}
+	if (oldValue == pulseGuideRaValue || oldValue == pulseGuideDecValue)
+	{
+		int ms = newValue->getValueInteger ();
+		// convention matches base/teld/gemini/gemini.cpp's change_ra/
+		// changeDec precedent: positive -> east/north, negative -> west/south
+		char direction = (oldValue == pulseGuideRaValue) ? (ms >= 0 ? 'e' : 'w') : (ms >= 0 ? 'n' : 's');
+		bool suitable = caring != nullptr && ms != 0 && isTracking () && (getState () & TEL_MASK_MOVING) != TEL_MOVING;
+		if (suitable)
+			caring->queuePulseGuide (direction, (unsigned int) (ms >= 0 ? ms : -ms));
+		// always reset to 0 (rather than leaving the just-committed
+		// magnitude in place) - the framework only re-invokes this hook
+		// when the incoming value actually differs from the stored one
+		// (see Daemon::doSetValue()'s isEqual() short-circuit), so leaving
+		// e.g. "255" in place would silently swallow the next identical
+		// guide pulse. Mutating newValue here means the framework commits
+		// 0 as the stored value on our behalf, no separate sendValueAll needed.
+		newValue->setValueInteger (0);
 		return 0;
 	}
 	return Telescope::setValue (oldValue, newValue);

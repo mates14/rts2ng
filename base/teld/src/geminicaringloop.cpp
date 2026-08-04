@@ -320,6 +320,16 @@ void GeminiCaringLoop::queueNativeSet (int id, double value)
 	commandQueue.push_back ({ id, buf });
 }
 
+void GeminiCaringLoop::queuePulseGuide (char direction, unsigned int durationMs)
+{
+	if (durationMs > 9999)
+		durationMs = 9999;	// DDDD is a 4-digit field, see :Mg's doc comment
+	char buf[16];
+	snprintf (buf, sizeof (buf), ":Mg%c%u#", direction, durationMs);
+	std::lock_guard<std::mutex> lock (mutex_);
+	rawCommandQueue.push_back (buf);
+}
+
 bool GeminiCaringLoop::gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec)
 {
 	std::unique_lock<std::mutex> lock (mutex_);
@@ -712,6 +722,21 @@ void GeminiCaringLoop::handleQueuedCommand ()
 	sendAndReceive (wire, response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);	// fire-and-forget: result intentionally unused, see header
 }
 
+void GeminiCaringLoop::handleQueuedRawCommand ()
+{
+	std::string cmd;
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		if (rawCommandQueue.empty ())
+			return;
+		cmd = rawCommandQueue.front ();
+		rawCommandQueue.pop_front ();
+	}
+
+	std::string response;
+	sendAndReceive (cmd, response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);	// fire-and-forget: result intentionally unused, see header
+}
+
 void GeminiCaringLoop::handleSyncQuery ()
 {
 	std::string cmd;
@@ -768,6 +793,17 @@ void GeminiCaringLoop::threadMain ()
 		if (haveSyncQuery)
 		{
 			handleSyncQuery ();
+			continue;
+		}
+
+		bool haveRawQueued;
+		{
+			std::lock_guard<std::mutex> lock (mutex_);
+			haveRawQueued = !rawCommandQueue.empty ();
+		}
+		if (haveRawQueued)
+		{
+			handleQueuedRawCommand ();
 			continue;
 		}
 
