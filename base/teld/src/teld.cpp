@@ -330,7 +330,7 @@ Telescope::Telescope (int in_argc, char **in_argv, bool diffTrack, bool hasTrack
 
 	createValue (targetDistance, "target_distance", "distance to the target in degrees", false, RTS2_DT_DEG_DIST);
 	createValue (targetStarted, "move_started", "time when movement was started", false);
-	createValue (targetReached, "move_end", "expected time when telescope will reach the destination", false);
+	createValue (targetReached, "move_end", "estimated time telescope will reach the destination, set precisely to the actual completion time once the move (or park, or a failed/aborted move) actually finishes", false);
 	if (hasTracking)
 		createValue (targetDistanceStat, "tdist_stat", "statistics of target distances", false, RTS2_DT_DEG_DIST);
 	else
@@ -2012,6 +2012,16 @@ void Telescope::startCupolaSync ()
 
 int Telescope::endMove ()
 {
+	// move_end starts as startResyncMove()'s upfront estimate
+	// (targetStarted + estimateTargetTime()) and is corrected here to the
+	// real completion time - a client script watching move_started/
+	// move_end to detect "did a new move happen" (see e.g. python3/
+	// filtros.py's check_mount_movement()) needs this to actually be the
+	// completion time, not a guess that's never trued up; the estimate
+	// quality differs enough between mount types that scripts relying on
+	// it saw inconsistent behavior across drivers.
+	targetReached->setValueDouble (getNow ());
+
 	if (targetDistanceStat != nullptr)
 		targetDistanceStat->clearStat ();
 	startTracking ();
@@ -2024,6 +2034,10 @@ int Telescope::endMove ()
 
 void Telescope::failedMove ()
 {
+	// see endMove()'s comment - a failed move still stopped moving, just
+	// not where it was aiming for; move_end should reflect that too
+	targetReached->setValueDouble (getNow ());
+
 	failedMoveNum->inc ();
 	lastFailedMove->setNow ();
 	changeIdleMovingTracking ();
@@ -2031,6 +2045,9 @@ void Telescope::failedMove ()
 
 int Telescope::abortMoveTracking ()
 {
+	// see endMove()'s comment
+	targetReached->setValueDouble (getNow ());
+
 	stopTracking ("tracking below horizon");
 	changeIdleMovingTracking ();
 	return 0;
