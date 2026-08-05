@@ -18,6 +18,7 @@
  */
 
 #include "connfork.h"
+#include "configuration.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -78,6 +79,30 @@ ConnFork::ConnFork (rts2core::Block *_master, const char *_exe, bool _fillConnEn
 			{
 				exePath = new char[pos - start + 1];
 				strcpy (exePath, start);
+
+				// A path with no leading '/' would otherwise go straight
+				// into execv() as-is (see newProcess() below) - execv()
+				// never searches $PATH, so a bare/relative name would
+				// silently resolve against whatever the executor
+				// daemon's own current working directory happens to be
+				// at fork time, which is not a location anyone actually
+				// chose. Resolve it against the configured script
+				// directory instead, so "guide.py" (or "d50/guide.py")
+				// means something fixed and predictable. Anything
+				// already starting with '/' is left exactly as given -
+				// unchanged from prior behavior, so every script
+				// referenced by full path today keeps working exactly
+				// as it does now.
+				if (exePath[0] != '/')
+				{
+					std::string scriptPath = Configuration::instance ()->getStringDefault ("scriptexec", "script_path", "/etc/rts2/scripts");
+					while (!scriptPath.empty () && scriptPath.back () == '/')
+						scriptPath.pop_back ();
+					std::string full = scriptPath + "/" + exePath;
+					delete[] exePath;
+					exePath = new char[full.length () + 1];
+					strcpy (exePath, full.c_str ());
+				}
 			}
 			else
 			{
