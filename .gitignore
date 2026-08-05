@@ -5,6 +5,10 @@ CMakeCache.txt
 CMakeFiles/
 compile_commands.json
 
+# Python bytecode cache (python/ subtree)
+__pycache__/
+*.pyc
+
 # Debian package build artifacts (debuild/dpkg-buildpackage output lands
 # one level up from debian/, i.e. at the subtree root)
 *.deb
