@@ -26,8 +26,5 @@ f.setSubwindow(waitingSubWindow='-1 -1 -1 -1')
 # domeDevice je tu None schvalne, aby se nezavrela strecha pred porizenim rannich darku (to udela C3, ktere to trva nejdyl)
 f.run(domeDevice=None)
 
-# Send some optional emails - configure before uncomenting this line
-# f.sendEmail('robot@example.com','Example skyflats')
-
 f.finish()
 

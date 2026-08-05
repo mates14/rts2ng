@@ -27,8 +27,5 @@ f.setSubwindow(waitingSubWindow='-1 -1 -1 -1')
 # Configure domeDevice,tmpDirectory and mountDevice if your device names differ
 f.run()
 
-# Send some optional emails - configure before uncomenting this line
-# f.sendEmail('robot@example.com','Example skyflats')
-
 #f.finish()
 
