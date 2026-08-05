@@ -58,6 +58,8 @@
 #define GEMINI_CMD_RATE_GUIDE    150
 #define GEMINI_CMD_RATE_CENTER   170
 
+#define OPT_AUTO_RECOVERY        OPT_LOCAL + 1
+
 namespace rts2teld
 {
 
@@ -163,12 +165,22 @@ class GeminiUDP:public Telescope
 		// base/teld/d50/d50.cpp's guidePulseRA/DEC ("[ms], negative changes
 		// direction") - RTS2's guide scripts (python/rts2/guide.py,
 		// guideccd.py) write these directly on T0. Realized via
-		// GeminiCaringLoop::queuePulseGuide() (the documented :Mg command -
-		// see its doc comment for why not the classic tree's dead ":Mi"
-		// code). See setValue() for the direction-sign convention and the
-		// tracking-only safety guard.
+		// GeminiCaringLoop::queuePulseGuide() (the ":Mi" command - see its
+		// doc comment; matches gemini2ser.cpp's performGuide() exactly).
+		// See setValue() for the direction-sign convention and guard.
 		rts2core::ValueInteger *pulseGuideRaValue;
 		rts2core::ValueInteger *pulseGuideDecValue;
+
+		// ---- EXPERIMENTAL, off by default (--experimental-auto-recovery)
+		// ---- see the long comment at armAutoRecovery()'s definition for
+		// why this is scoped down so far from gemini2ser.cpp's own
+		// resetMount()/telMotorState machinery, which it's inspired by but
+		// does NOT faithfully replicate - this has never been exercised
+		// against a real hung mount, over this transport, at all.
+		bool autoRecoveryEnabled;
+		double disconnectedSince;	// NAN while connected; caring loop poll timestamp of the first poll that came back disconnected, otherwise
+		bool autoRecoveryAttempted;	// one attempt per outage - cleared the moment we see connected=true again
+		void checkAutoRecovery (const GeminiStatus &st);
 
 		void applyStatus (const GeminiStatus &st);
 
@@ -216,6 +228,10 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	pendingMoveNaiveRa = pendingMoveNaiveDec = NAN;
 	moveCorrectionApplied = true;	// nothing pending until a move actually starts
 
+	autoRecoveryEnabled = false;
+	disconnectedSince = NAN;
+	autoRecoveryAttempted = false;
+
 	createValue (pierSideValue, "pier_side", "side of pier (W/E, see :Gm#)", false);
 	createValue (moveRateValue, "move_rate", "current movement rate (N/T/G/C/S, see :Gv#)", false);
 	createValue (praRawValue, "CNT_RA", "RA axis raw encoder count", true);
@@ -250,6 +266,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	addOption ('D', "test-dec-offset", 1, "declination offset in degrees for --live-slew-test (default 3.0, always applied towards the equator)");
 	addOption ('N', "dry-run", 0, "with --live-slew-test: compute and log the plan (target, altitude, exact commands) but never send :MS#/:Q# - status polling still runs normally");
 	addOption ('R', "return-to-dec", 1, "one-shot mode: slew to this declination (same RA as currently read), confirm arrival, stop tracking, done - no return leg. For restoring a known position after a test.");
+	addOption (OPT_AUTO_RECOVERY, "experimental-auto-recovery", 0, "EXPERIMENTAL, off by default: after 60s of total silence from the mount, send one native warm-reboot command. Unverified over UDP - see checkAutoRecovery()'s doc comment before enabling this unattended.");
 }
 
 GeminiUDP::~GeminiUDP ()
@@ -278,6 +295,9 @@ int GeminiUDP::processOption (int in_opt)
 			returnMode = true;
 			liveSlewTest = true;
 			returnDec = atof (optarg);
+			break;
+		case OPT_AUTO_RECOVERY:
+			autoRecoveryEnabled = true;
 			break;
 		default:
 			return Telescope::processOption (in_opt);
@@ -411,6 +431,18 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 {
 	maskState (DEVICE_ERROR_HW, st.connected ? 0 : DEVICE_ERROR_HW, st.connected ? "mount communication OK" : "no response from mount over UDP");
 
+	if (st.connected)
+	{
+		disconnectedSince = NAN;
+		autoRecoveryAttempted = false;
+	}
+	else
+	{
+		if (std::isnan (disconnectedSince))
+			disconnectedSince = getNow ();
+		checkAutoRecovery (st);
+	}
+
 	if (!st.valid)
 		return;
 
@@ -457,6 +489,59 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 		<< " HA=" << st.ha << " AZ=" << st.az << " ALT=" << st.alt << " LST=" << st.lst
 		<< " pier=" << st.pierSide << " rate=" << st.moveRate
 		<< " trackingSecToLimit=" << st.trackingSecToWestLimit << sendLog;
+}
+
+// EXPERIMENTAL, off by default (--experimental-auto-recovery). Loosely
+// inspired by gemini2ser.cpp's telMotorState/resetMount() machinery, but
+// deliberately NOT a faithful port of it - the two failure modes aren't
+// the same thing:
+//
+// Production's trigger is "the RS232 register-99 query itself failed
+// while we expected the mount to be active" - a blocking serial call
+// coming back with an I/O error, which on that transport plausibly means
+// the mount's firmware (or the USB-serial bridge) has genuinely wedged.
+// Its response is a whole state machine: reboot (:65535/:65533 native
+// registers, chosen by warm/cold/restart), wait, then re-park and re-
+// issue whatever move was interrupted, tracked across many info() cycles.
+//
+// Our GeminiCaringLoop already retries silently through the datagram
+// NACK/resync protocol on every single poll (see sendAndReceive()) -
+// that's the direct analogue of production's per-call retry, and it
+// already runs unconditionally, not behind this flag. What st.connected
+// == false actually means here is "every resync attempt in an entire
+// poll cycle failed" - which could be the mount genuinely wedged, or
+// could just as easily be a flaky network path, a firewall hiccup, or
+// (as happened for real earlier this same project) another client
+// stepping on the mount at the same time. Rebooting the mount is not an
+// obviously-safe response to any of those other cases.
+//
+// So this only ports the narrow, low-risk half: notice sustained silence
+// and try ONE thing (the same native "warm" reboot register production
+// uses by default) - no automatic re-park, no automatic resume of an
+// interrupted move, no cold-start option, no retry loop beyond the one
+// attempt per outage. Whether a reboot command sent over a UDP socket
+// that isn't currently getting ANY response even reaches the mount is
+// untested; whether Gemini's UDP listener survives/rebinds after a
+// reboot at all is untested. This is here so the behavior exists and is
+// visible/logged for a human to evaluate, not because it's been shown to
+// help - hence gating it behind an explicit flag, off by default, and
+// logging at MESSAGE_CRITICAL when it fires so it's impossible to miss.
+void GeminiUDP::checkAutoRecovery (const GeminiStatus &st)
+{
+	if (!autoRecoveryEnabled || caring == nullptr || autoRecoveryAttempted)
+		return;
+
+	constexpr double DISCONNECT_RECOVERY_THRESHOLD_SEC = 60.0;
+	double outageSec = getNow () - disconnectedSince;
+	if (outageSec < DISCONNECT_RECOVERY_THRESHOLD_SEC)
+		return;
+
+	autoRecoveryAttempted = true;
+	logStream (MESSAGE_CRITICAL) << "GeminiUDP: EXPERIMENTAL auto-recovery firing - no response from mount for "
+		<< outageSec << "s, sending native warm-reboot command (register 65535). This path is unverified "
+		<< "over UDP; if it doesn't visibly help within a minute or two, intervene manually rather than "
+		<< "waiting on it." << sendLog;
+	caring->queueNativeSet (65535, (int32_t) 0);
 }
 
 int GeminiUDP::info ()
