@@ -16,7 +16,7 @@ done
 shift $(($OPTIND - 1))
 
 # build everything by default, but limit to a particular module if listed on the command line
-modules="base db gui"
+modules="base db gui python"
 test $* && modules="$*"
 
 # sudo apt install libgsl-dev qtbase5-dev
@@ -32,6 +32,13 @@ if [ $build_deb == 0 ] && [ $build_src == 0 ]; then
     for tree in $modules; do
     #for tree in gui; do
     #for tree in base; do
+        # python/ (and any future non-CMake tree) has nothing to
+        # configure/build here - it only ever gets touched by the -d/-s
+        # (dpkg-buildpackage) branches below, via its own debian/rules.
+        if [ ! -f "$tree/CMakeLists.txt" ]; then
+            echo "==> Skipping cmake build for $tree (no CMakeLists.txt)"
+            continue
+        fi
         rm -rf $tree/build
         cmake -S $tree -B $tree/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBASE_FLI_SDK_DIR=$BASE_FLI_SDK_DIR
         cmake --build $tree/build -j4
