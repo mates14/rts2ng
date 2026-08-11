@@ -1,3 +1,23 @@
+rts2-db (0.1.0-7) UNRELEASED; urgency=medium
+
+  * postinst: stop re-appending the 'executor' line to /etc/rts2/services
+    (a conffile owned by rts2-base, not this package) on every upgrade -
+    observed for real growing the file over repeated upgrades. The
+    previous guard (grep for an existing "^executor" line before
+    appending) is correct in isolation, but is fragile against
+    /etc/rts2/services being reset out from under it by an unrelated
+    rts2-base conffile-upgrade in between rts2-db runs: the append then
+    looks unmatched again next time and repeats. Replaced with a stamp
+    file (/var/lib/rts2-db/executor-service-added) so this is a genuine
+    do-this-once action - once added, no future postinst run touches the
+    conffile again no matter what happens to it meanwhile, and an admin
+    who deliberately removes the line later won't have it silently
+    reappear either. postrm removes the stamp on purge (bookkeeping only,
+    not observation data - same reasoning as everything else it leaves
+    alone).
+
+ -- RTS2 Project <petr@rts2.org>  Tue, 11 Aug 2026 14:16:28 +0200
+
 rts2-db (0.1.0-6) UNRELEASED; urgency=medium
 
   * debian/control: drop postgresql-server-dev-all from Build-Depends -

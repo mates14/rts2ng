@@ -12,6 +12,11 @@ set -e
 
 case "$1" in
     purge)
+        # Package bookkeeping only (the executor-service-added stamp,
+        # see postinst) - not observation data, safe to remove unlike
+        # everything else this case handles.
+        rm -rf /var/lib/rts2-db
+
         if getent passwd rts2 >/dev/null 2>&1; then
             echo "rts2-db: package removed, but the 'stars' database, the 'rts2'" >&2
             echo "Postgres role, and the 'rts2' system user were left in place -" >&2

@@ -31,6 +31,7 @@ RTS2_DB_USER=rts2
 RTS2_DB_NAME=stars
 RTS2_SQL_DIR=/usr/share/rts2-db/sql
 RTS2_SERVICES_FILE=/etc/rts2/services
+RTS2_SERVICES_STAMP=/var/lib/rts2-db/executor-service-added
 
 case "$1" in
     configure)
@@ -72,15 +73,32 @@ case "$1" in
             echo "rts2-db: point rts2-executor at a remote database yourself (see rts2-executor --help)." >&2
         fi
 
-        if [ -f "$RTS2_SERVICES_FILE" ] && ! grep -q "^executor[[:space:]]" "$RTS2_SERVICES_FILE"; then
-            {
-                echo ""
-                echo "# Added by rts2-db - --run-as drops root to the rts2 system user"
-                echo "# after the daemon has forked and created its lock file, so it"
-                echo "# can reach the database via Postgres peer auth."
-                printf 'executor\tEXEC\t--run-as %s\n' "$RTS2_DB_USER"
-            } >> "$RTS2_SERVICES_FILE"
-            echo "rts2-db: added an 'executor' line to $RTS2_SERVICES_FILE."
+        # $RTS2_SERVICES_FILE is a conffile owned by rts2-base, not this
+        # package - re-grepping it on every postinst run (as this used to
+        # do) is fragile: a conffile-upgrade of rts2-base can silently
+        # restore the pristine packaged file under some upgrade paths,
+        # which erases this line without ever touching rts2-db, so the
+        # next rts2-db postinst run (a later upgrade, a reconfigure, ...)
+        # finds no match and appends a duplicate - observed for real, see
+        # git log. A stamp file makes this a genuine "do this once, ever"
+        # action: once added, no future postinst run touches the conffile
+        # again, regardless of what happens to it in between - an admin
+        # who deliberately removes the line later won't have it silently
+        # reappear either, which is the right call for something that's
+        # meant to be one-time bootstrapping, not enforced configuration.
+        if [ ! -f "$RTS2_SERVICES_STAMP" ]; then
+            if [ -f "$RTS2_SERVICES_FILE" ] && ! grep -q "^executor[[:space:]]" "$RTS2_SERVICES_FILE"; then
+                {
+                    echo ""
+                    echo "# Added by rts2-db - --run-as drops root to the rts2 system user"
+                    echo "# after the daemon has forked and created its lock file, so it"
+                    echo "# can reach the database via Postgres peer auth."
+                    printf 'executor\tEXEC\t--run-as %s\n' "$RTS2_DB_USER"
+                } >> "$RTS2_SERVICES_FILE"
+                echo "rts2-db: added an 'executor' line to $RTS2_SERVICES_FILE."
+            fi
+            mkdir -p "$(dirname "$RTS2_SERVICES_STAMP")"
+            touch "$RTS2_SERVICES_STAMP"
         fi
 
         echo "rts2-db: next steps - register your camera/mount/filters with:"
