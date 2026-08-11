@@ -1,0 +1,11 @@
+cygnus.py usr/share/rts2/scripts
+filtros.py usr/share/rts2/scripts
+flatC1.py usr/share/rts2/scripts
+flatC2.py usr/share/rts2/scripts
+flatC3.py usr/share/rts2/scripts
+flats.py usr/share/rts2/scripts
+guideccd.py usr/share/rts2/scripts
+make_survey.py usr/share/rts2/scripts
+ojitos.py usr/share/rts2/scripts
+ojitos_adaptive.py usr/share/rts2/scripts
+vaodscan.py usr/share/rts2/scripts

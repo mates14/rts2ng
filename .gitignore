@@ -9,6 +9,10 @@ compile_commands.json
 __pycache__/
 *.pyc
 
+# pybuild/setuptools build output (python/ subtree)
+.pybuild/
+*.egg-info/
+
 # Debian package build artifacts (debuild/dpkg-buildpackage output lands
 # one level up from debian/, i.e. at the subtree root)
 *.deb

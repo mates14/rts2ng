@@ -1,0 +1,17 @@
+rts2-python (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial rts2-python package: rts2.scriptcomm (the library RTS2's
+    "exe" observation scripts use to talk to the running system) plus a
+    set of ready-to-use system scripts - guiding (guideccd.py), sky
+    flats (flats.py, flatC1/2/3.py), filter-synchronized multi-camera
+    sequences (filtros.py, ojitos.py), GRB follow-up
+    (ojitos_adaptive.py), an idle-time sky survey (make_survey.py), and
+    an airmass/extinction-curve scan (vaodscan.py) - installed to
+    /usr/share/rts2/scripts, with /etc/rts2/scripts kept as a symlink to
+    it (so every file stays a plain, cleanly-replaced-on-upgrade file,
+    not a dpkg conffile - unavoidable for anything installed directly
+    under /etc, see debian/rules) where rts2-base's new script_path
+    resolution (base/kernel/src/connfork.cpp) finds them by bare
+    filename.
+
+ -- RTS2 Project <petr@rts2.org>  Tue, 11 Aug 2026 10:27:00 +0200

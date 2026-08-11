@@ -1,0 +1,38 @@
+#!/usr/bin/make -f
+
+# python note: pure Python, no compiled extensions and no CMake tree at
+# all - the only one of rts2ng's packages that doesn't go through
+# debhelper's cmake buildsystem. dh-python's pybuild driver runs setup.py
+# directly - the exact same setup.py a plain `pip install .` would use,
+# see setup.py's own docstring-adjacent note in README.md - so unlike
+# rts2-base/rts2-db/rts2-viewer there's no dh_auto_install override
+# needed for the library itself.
+#
+# The action scripts (guideccd.py, flats.py, ...) are deliberately NOT
+# part of setup.py's packages - they're not meant to become PATH-
+# accessible commands (setuptools console_scripts would rename/shim
+# them), they're meant to land where rts2-base's script-path resolution
+# (base/kernel/src/connfork.cpp) finds them by bare name. Installed via
+# debian/rts2-python.install into /usr/share/rts2/scripts (dh_install
+# preserves the executable bit already set on these files in the source
+# tree, no explicit mode needed) - NOT directly into /etc/rts2/scripts
+# (script_path's actual default): dh_installdeb unconditionally treats
+# every file under a package's /etc as a conffile (see
+# Dh_Lib.pm-adjacent logic in dh_installdeb itself - "if it is in /etc,
+# it is a conffile", no per-file opt-out exists), which is more than
+# these files need - they're meant to be replaced cleanly on every
+# upgrade, not offered for a three-way merge. debian/rts2-python.links
+# makes /etc/rts2/scripts a symlink to the real directory, so
+# script_path's default still resolves correctly with zero config
+# needed - only the real files' location changed, not the path anyone
+# else (connfork.cpp, rts2.ini) needs to know about.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+# No test suite exists for this package (same reasoning as
+# rts2-base/rts2-db/rts2-viewer's override_dh_auto_test - nothing to
+# gain from running it as part of a package build).
+override_dh_auto_test:

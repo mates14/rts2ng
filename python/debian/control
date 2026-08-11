@@ -1,0 +1,31 @@
+Source: rts2-python
+Section: python
+Priority: optional
+Maintainer: RTS2 Project <petr@rts2.org>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all,
+               python3-setuptools
+Standards-Version: 4.6.2
+Homepage: https://github.com/RTS2/rts2
+
+Package: rts2-python
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Recommends: rts2-db
+Description: Remote Telescope System 2 - Python client scripting support
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains rts2.scriptcomm, the Python library RTS2's "exe"
+ observation scripts use to talk to the running system (device values,
+ state, exposures, image handling, ...), plus a set of ready-to-use
+ system scripts - guiding, sky flats, filter-synchronized multi-camera
+ sequences, GRB follow-up, an idle-time sky survey, an airmass scan -
+ installed to /usr/share/rts2/scripts, with /etc/rts2/scripts kept as a
+ symlink to it. rts2-base's script-path resolution (see [scriptexec]
+ script_path in rts2.ini, defaulting to /etc/rts2/scripts) finds
+ anything there by bare filename, e.g. "exe guideccd.py", without every
+ target/camera needing a full path. Pure Python, no compiled
+ extensions; the same setup.py this package builds from is also
+ directly pip-installable.
