@@ -1279,14 +1279,80 @@ nothing to exercise them against meaningfully. Both now exist:
    - Message panel populated (6 real messages from this session's
      testing).
 
-   Not yet done, left for later: an example Apache/nginx front-end
-   config (genuinely optional per the deployment-model decision, so not
-   urgent); a device/value detail or history view; the image panel this
-   session deliberately left out until task 7's image search exists;
-   and a `WEB_HAVE_DB`-gated view for the new `/api/db/*` endpoints
-   (target list/detail) - task 8 as built only renders bus-side
-   device/value data, matching where the reference page's own focus
-   was.
+   Not yet done, left for later: a device/value detail or history view;
+   a `WEB_HAVE_DB`-gated view for `/api/db/targets`/`target`
+   (target list/detail) - the dashboard doesn't render those yet, only
+   the nights/images panel below.
+
+   **Images/nights panel added (2026-08-18)**, once task 7's night-
+   reports/image-search endpoints existed to back it: a
+   year -> month -> day drill-down (`/api/db/nights`) landing on a
+   night's observation table (`/api/db/night`) and a thumbnail grid
+   (`/api/db/images` + `/preview/<previewPath>`). `WEB_HAVE_DB=OFF`
+   builds get a 404 on the first `/api/db/nights` call and the panel
+   just hides itself rather than showing a permanently-broken UI.
+
+   **Made proxy-subpath-safe while doing this**, prompted by planning a
+   real test on lascaux: Apache's existing vhost there already has
+   `ProxyPass /images http://localhost:8889` pointed at classic httpd
+   (the *only* public route to it - confirmed via `ssh l`, see below),
+   and `app.js` had been using absolute root paths (`fetch('/api/...')`,
+   a `/ws`-rooted `WebSocket()` URL) that only work when the page is
+   mounted at the server's actual root. Under a reverse-proxied
+   subpath, those absolute paths get resolved by the *browser* against
+   the site's real root, bypassing the proxy prefix entirely - Apache
+   has no rule for bare `/api/...`, so every fetch would 404. Fixed by
+   switching `fetch()` calls to plain relative paths (`api/getall`,
+   not `/api/getall` - resolves correctly against whatever directory
+   the page was actually loaded from) and computing the WebSocket URL
+   from `location.pathname` instead of assuming `/ws` at the root
+   (`new WebSocket()` needs a full URL, so it's the one case `fetch()`'s
+   automatic relative resolution can't cover). Verified locally with a
+   throwaway Python script reproducing Apache's exact prefix-stripping
+   `ProxyPass` semantics (no `ProxyHTMLURLMap`, since lascaux's vhost
+   doesn't have one either) in front of a real running `rts2-httpd` -
+   `index.html`, `app.js`, `style.css`, `api/getall`, `api/db/nights`,
+   and `preview/*` all resolved correctly through the simulated
+   `/images` mount before this was ever tried against the real Apache
+   config. One caveat this only mitigates, doesn't eliminate: a client
+   that opens the mount path *without* a trailing slash
+   (`https://host/images`, not `/images/`) still gets relative-path
+   resolution wrong, same as any web server's directory URLs - not
+   fixed here (would need the daemon to know it's mounted at a
+   sub-path, which it currently has no way to know), so this only works
+   reliably when entered with the trailing slash.
+
+   **Recon on lascaux for a real (reversible) production trial**: the
+   real `rts2-httpd` runs under `rts2.service` (`rts2-start`/`rts2-stop
+   all`, PID-file-based per-service control - `rts2-stop httpd` alone
+   stops just it), as user `rts2`, bound to `localhost:8889` only,
+   invoked as `-d HTTPD --event-file /etc/rts2/events --run-as rts2
+   --server localhost` (built from `/etc/rts2/services`). Apache 2.4.68
+   (`proxy`/`proxy_http` only, no separate `wstunnel` module - fine,
+   `mod_proxy_http` has forwarded `Upgrade` requests transparently since
+   2.4.47, well below this version, so `/images/ws` should Just Work
+   through the existing rule with no Apache config change at all).
+   `/etc/rts2/rts2.ini`'s `archive_path = "/images/%Y/%N/%c/%t/%f"` and
+   the real `/images` (a symlink to `/bart/images`) confirm `--images-
+   dir /images` is the right value - and that the DB's stored
+   `img_path` convention this session's local test DB already used
+   (`/images/<night>/...`) matches real production, not a made-up
+   layout. Database name is `stars` in both places too. Confirmed (via
+   a harmless `kill -0`, not a real attempt) that the `mates` recon
+   account cannot signal the real httpd process (owned by user `rts2`)
+   even though it's a group member - stopping/restarting it needs root
+   or the `rts2` account, which past sessions established the user
+   handles themselves on this host rather than delegating.
+
+   Also flagged, not yet resolved: `HttpD::checkWriteAuth()` returns
+   `true` unconditionally when `--auth-file` isn't set (`web/httpd/src/
+   httpd.cpp:800`) - fine for the sandbox/local-test-DB rounds so far,
+   but running *this* build reachable from the public internet via
+   Apache without an auth file would mean `/api/set,inc,dec` against
+   real hardware with zero authentication for as long as the trial
+   runs. Needs a real `--auth-file` (chosen/typed by the user, not
+   generated by the assistant) before any lascaux trial that leaves the
+   daemon reachable through the public proxy, even a short one.
 9. **DEFERRED, not scheduled** - Big Brother federation client, pending
    confirmation a real site still needs it.
 

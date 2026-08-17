@@ -246,3 +246,107 @@ header h1 {
 	font-style: italic;
 	padding: 10px 14px;
 }
+
+.breadcrumb {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
+	margin-bottom: 10px;
+}
+
+.breadcrumb a {
+	color: var(--accent);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.breadcrumb a:hover {
+	text-decoration: underline;
+}
+
+.breadcrumb .sep {
+	color: var(--text-muted);
+}
+
+.drilldown-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+	gap: 8px;
+}
+
+.drilldown-cell {
+	background: #f8fafc;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px;
+	text-align: center;
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.drilldown-cell:hover {
+	border-color: var(--accent);
+}
+
+.drilldown-cell .cell-key {
+	font-weight: 600;
+}
+
+.drilldown-cell .cell-stats {
+	color: var(--text-muted);
+	font-size: 11px;
+	margin-top: 2px;
+}
+
+#images-content table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+	margin-bottom: 14px;
+}
+
+#images-content th, #images-content td {
+	padding: 4px 10px;
+	border-top: 1px solid #f0f1f3;
+	text-align: left;
+}
+
+.thumb-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	gap: 10px;
+}
+
+.thumb-cell {
+	background: #f8fafc;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	overflow: hidden;
+	font-size: 11px;
+}
+
+.thumb-cell img {
+	width: 100%;
+	height: 140px;
+	object-fit: contain;
+	background: #111;
+	display: block;
+}
+
+.thumb-cell .thumb-noimg {
+	width: 100%;
+	height: 140px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: #e5e7eb;
+	color: var(--text-muted);
+}
+
+.thumb-cell .thumb-caption {
+	padding: 4px 6px;
+	color: var(--text-muted);
+	word-break: break-all;
+}
