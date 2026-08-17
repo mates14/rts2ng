@@ -11,6 +11,7 @@
 
 #include <libnova/libnova.h>
 #include <ctime>
+#include <map>
 
 using namespace rts2web;
 
@@ -216,8 +217,50 @@ void rts2web::dbNightDetail (int year, int month, int day, std::ostringstream &o
 
 /** Shared by dbSearchImagesByTarget/dbSearchImagesByNight - both just
  * differ in how the ImageSet subclass is constructed/loaded. */
+// Image::getTargetName() (base/kernel/src/image.cpp) is only ever
+// backed by the DB row's numeric target_id, not a name column - when
+// unset (always, for an ImageSet built straight from DB rows, see
+// ImageSkyDb's DB-row constructor calling setTargetHeaders() with
+// targetName left null), it lazily *opens the actual FITS file on disk*
+// to read the OBJECT header. Calling it once per image in a loop over a
+// whole night is exactly the kind of thing that looks fine against a
+// handful of local test images and then falls over against a real
+// archive: found live against lascaux's production data, a single
+// 6585-image night took 6+ seconds and monopolized the worker pool
+// shared with every other DB/preview request for that whole time
+// (visible as an unrelated concurrent request 502ing through Apache's
+// proxy timeout, and the dashboard's WebSocket looking like it dropped).
+// Fixed by resolving target names once per unique target_id (already
+// free - the DB row already carries it) via a request-local cache
+// instead of once per image; a night typically reuses a handful of
+// targets across thousands of images, so this turns thousands of FITS
+// opens into at most a handful of target DB lookups.
+static std::string resolveTargetName (int targetId, std::map <int, std::string> &nameCache)
+{
+	std::map <int, std::string>::iterator cached = nameCache.find (targetId);
+	if (cached != nameCache.end ())
+		return cached->second;
+
+	std::string name;
+	try
+	{
+		rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+		name = tar->getTargetName () ? tar->getTargetName () : "";
+		delete tar;
+	}
+	catch (rts2core::Error &er)
+	{
+		// Target row itself gone/unloadable - leave name empty rather
+		// than failing the whole image listing over one bad target.
+	}
+	nameCache[targetId] = name;
+	return name;
+}
+
 static void writeImageSetJson (rts2db::ImageSet &is, const std::string &imagesDir, std::ostringstream &os)
 {
+	std::map <int, std::string> nameCache;
+
 	os << "[";
 	bool first = true;
 	for (rts2db::ImageSet::iterator iter = is.begin (); iter != is.end (); iter++)
@@ -232,7 +275,7 @@ static void writeImageSetJson (rts2db::ImageSet &is, const std::string &imagesDi
 		os << ",\"previewPath\":";
 		jsonString (computePreviewPath (imagesDir, img->getFileName ()).c_str (), os);
 		os << ",\"obsId\":" << img->getObsId () << ",\"targetId\":" << img->getTargetId () << ",\"targetName\":";
-		jsonString (img->getTargetName ().c_str (), os);
+		jsonString (resolveTargetName (img->getTargetId (), nameCache).c_str (), os);
 		os << ",\"cameraName\":";
 		jsonString (img->getCameraName (), os);
 		os << ",\"exposureStart\":";

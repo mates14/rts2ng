@@ -14,12 +14,22 @@ namespace rts2web
  * Freshly written for web (not a mechanical port of classic
  * lib/rts2json/jsonvalue.cpp), simplified for what's actually needed so
  * far: no "extended" ([flags,value,error,warning,description]) mode, no
- * array/stat/rectangle value rendering yet - added when a real endpoint
- * needs them (STATUS.md task 2 follow-up). One deliberate improvement
- * over classic: string values are actually JSON-escaped here (classic's
- * sendValue()/jsonValue() wrote raw device/value strings straight into
- * the response with no escaping - a value or device name containing a
- * literal `"` would corrupt the JSON output).
+ * stat/rectangle value rendering yet - added when a real endpoint needs
+ * them (STATUS.md task 2 follow-up). Array values (IntegerArray/
+ * BoolArray/DoubleArray/TimeArray/StringArray, RTS2_VALUE_ARRAY) *are*
+ * handled, added after this exact gap corrupted /api/getall against
+ * real production data on lascaux: rts2core::Value's base getValueBaseType()
+ * strips the array bit (it's in the separate RTS2_EXT_TYPE mask), so an
+ * array value's base type looks identical to its scalar counterpart's -
+ * without an explicit array check, a BoolArray falls into the scalar
+ * bool branch and calls its getValue(), which (being an array, not a
+ * scalar) returns an empty string, silently producing an empty JSON
+ * token (`"next_hard":,`) that breaks the entire response. One
+ * deliberate improvement over classic: string values are actually
+ * JSON-escaped here (classic's sendValue()/jsonValue() wrote raw
+ * device/value strings straight into the response with no escaping - a
+ * value or device name containing a literal `"` would corrupt the JSON
+ * output).
  */
 
 /** Write a JSON-escaped copy of s (no surrounding quotes) to os.

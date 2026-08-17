@@ -1,4 +1,5 @@
 #include "jsonvalue.h"
+#include "valuearray.h"
 
 #include <cmath>
 #include <cstdio>
@@ -71,10 +72,78 @@ void rts2web::jsonNumber (double d, std::ostringstream &os)
 		os << d;
 }
 
+// Renders IntegerArray/BoolArray/DoubleArray/TimeArray/StringArray as a
+// plain JSON array of their elements. Split out of jsonValue() since it
+// needs a different dynamic_cast per base type (the array classes don't
+// share a typed element accessor) - see jsonvalue.h's doc comment for
+// why this exists at all (a real production bug, not written blind).
+static void jsonArrayValue (Value *value, std::ostringstream &os)
+{
+	os << "[";
+	switch (value->getValueBaseType ())
+	{
+		case RTS2_VALUE_DOUBLE:
+		case RTS2_VALUE_FLOAT:
+		case RTS2_VALUE_TIME:
+		{
+			DoubleArray *arr = (DoubleArray *) value;
+			bool first = true;
+			for (std::vector <double>::iterator iter = arr->valueBegin (); iter != arr->valueEnd (); iter++)
+			{
+				if (!first)
+					os << ",";
+				first = false;
+				rts2web::jsonNumber (*iter, os);
+			}
+			break;
+		}
+		case RTS2_VALUE_STRING:
+		{
+			StringArray *arr = (StringArray *) value;
+			bool first = true;
+			for (std::vector <std::string>::iterator iter = arr->valueBegin (); iter != arr->valueEnd (); iter++)
+			{
+				if (!first)
+					os << ",";
+				first = false;
+				rts2web::jsonString (iter->c_str (), os);
+			}
+			break;
+		}
+		case RTS2_VALUE_INTEGER:
+		case RTS2_VALUE_LONGINT:
+		case RTS2_VALUE_SELECTION:
+		case RTS2_VALUE_BOOL:
+		default:
+		{
+			// IntegerArray and BoolArray (BoolArray IS-A IntegerArray,
+			// storing 0/1) both iterate as plain ints - bare numbers are
+			// valid JSON either way, so no separate bool-array rendering
+			// is needed.
+			IntegerArray *arr = (IntegerArray *) value;
+			bool first = true;
+			for (std::vector <int>::iterator iter = arr->valueBegin (); iter != arr->valueEnd (); iter++)
+			{
+				if (!first)
+					os << ",";
+				first = false;
+				os << *iter;
+			}
+			break;
+		}
+	}
+	os << "]";
+}
+
 void rts2web::jsonValue (Value *value, std::ostringstream &os)
 {
 	jsonString (value->getName ().c_str (), os);
 	os << ":";
+	if (value->getValueExtType () & RTS2_VALUE_ARRAY)
+	{
+		jsonArrayValue (value, os);
+		return;
+	}
 	switch (value->getValueBaseType ())
 	{
 		case RTS2_VALUE_STRING:
