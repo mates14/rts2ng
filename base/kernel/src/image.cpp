@@ -496,6 +496,15 @@ void Image::getTargetHeaders ()
 	{
 		// get IRAF info..
 		targetName = new char[FLEN_VALUE];
+		targetName[0] = '\0';			 // getValue() only touches this on success - if the FITS
+							 // file can't be opened (eg. DB row references a path not
+							 // present on this host, as happens routinely for a web
+							 // daemon serving DB-sourced image metadata), it silently
+							 // returns leaving this buffer at whatever new[] handed
+							 // back, and getTargetName() below then does
+							 // std::string(targetName) over that uninitialized memory -
+							 // found via a real /api/db/images response leaking garbage
+							 // bytes, not a hypothetical.
 		getValue ("OBJECT", targetName, FLEN_VALUE, NULL, verbose);
 		// get info
 		getValue ("TARGET", targetId, verbose);

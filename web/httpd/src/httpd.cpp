@@ -1131,6 +1131,114 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/nights") || !strcmp (url, "/api/db/night"))
+	{
+		bool wantDetail = !strcmp (url, "/api/db/night");
+		int year = atoi (getParam (connection, "year", "-1"));
+		int month = atoi (getParam (connection, "month", "-1"));
+		int day = atoi (getParam (connection, "day", "-1"));
+
+		if (wantDetail && (year <= 0 || month <= 0 || day <= 0))
+		{
+			static const char *msg = "{\"error\":\"year, month and day are all required for /api/db/night\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, year, month, day, wantDetail] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				if (wantDetail)
+					dbNightDetail (year, month, day, os);
+				else
+					dbNightsSummary (year, month, day, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (!strcmp (url, "/api/db/images"))
+	{
+		const char *targetStr = getParam (connection, "target", "");
+		int year = atoi (getParam (connection, "year", "-1"));
+		int month = atoi (getParam (connection, "month", "-1"));
+		int day = atoi (getParam (connection, "day", "-1"));
+
+		bool byTarget = targetStr[0] != '\0';
+		bool byNight = year > 0 && month > 0 && day > 0;
+
+		if (!byTarget && !byNight)
+		{
+			static const char *msg = "{\"error\":\"pass either target=<id> or year=&month=&day= to search images\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+
+		int targetId = byTarget ? atoi (targetStr) : 0;
+		std::string imagesDirCopy = imagesDir;
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, imagesDirCopy, byTarget, targetId, year, month, day] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				if (byTarget)
+					dbSearchImagesByTarget (imagesDirCopy, targetId, os);
+				else
+					dbSearchImagesByNight (imagesDirCopy, year, month, day, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 
 	static const char *notFound = "{\"error\":\"not found\"}";
 	struct MHD_Response *response = MHD_create_response_from_buffer (strlen (notFound), (void *) notFound, MHD_RESPMEM_PERSISTENT);

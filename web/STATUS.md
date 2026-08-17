@@ -1086,8 +1086,101 @@ count, and the real database row count were all unchanged.
 This is also where the DB-worker-pool finding above actually came from -
 see that section for what the real dataset exposed that the local test
 database was too small to reveal.
-   `style.css`/`app.js`, real files on disk, no CDN dependency, no build
-   step) plus daemon-side serving. Verified in an actual headless
+
+**Second slice (2026-08-17)** - night reports and image search, the two
+pieces deferred from the first slice because the local test DB had
+nothing to exercise them against meaningfully. Both now exist:
+
+- `GET /api/db/nights?year=&month=&day=` - hierarchical drill-down
+  (year -> month -> day -> hour) via `rts2db::ObservationSetDate`,
+  exactly the same aggregation classic's `Night::callAPI()` uses (same
+  GROUP BY, same map-of-int-to-DateStatistics shape) - reused, not
+  reimplemented. Unlike classic's tabular `{"h":[...],"d":[...]}` grid
+  format (a UI-widget convention, not a clean API), this returns
+  `{"level":"month","entries":[{"key":7,"observations":4,"images":49,
+  "goodImages":0,"timeOnSky":980}]}` - self-describing, matching the
+  plain-named-field style the first task-7 slice already established.
+- `GET /api/db/night?year=Y&month=M&day=D` (all three required) - every
+  observation during one specific night, boundaries computed by a
+  ported `getNightDuration()` (file-local to `dbendpoints.cpp`, ~30
+  lines, straight port of classic's `lib/rts2json/nightdur.cpp` -
+  astronomical-night start via `Configuration::getNight()`, not
+  calendar midnight).
+- `GET /api/db/images?target=N` / `GET /api/db/images?year=&month=&day=`
+  - every archived image of a target, or from one night, via
+  `rts2db::ImageSetTarget`/`ImageSetDate` (already-ported, reused as-is).
+  Each entry includes a `previewPath` computed by stripping `--images-
+  dir`'s prefix off the DB's stored absolute path when it actually falls
+  under it (empty string, not a guess, when it doesn't - e.g. images-dir
+  not configured, or this site's archive is laid out differently) so a
+  client can feed it straight to `/preview/<previewPath>` without the
+  daemon needing to know or care how the frontend wants to construct
+  that URL. Used `getFileName()` (raw stored path), not
+  `getAbsoluteFileName()` - see task 3's write-up for why the latter is
+  unreliable for a DB-sourced path in a daemon (resolves relative to
+  `getcwd()` when the stored path isn't already absolute).
+
+  All five endpoints (this slice's three plus the first slice's
+  `targets`/`target`/`observations`) now go through `workerPool` from
+  the moment they were written, not added synchronously and fixed
+  later - directly applying the lesson the first slice's production
+  testing surfaced.
+
+  **Found and fixed a real memory-safety bug along the way, not
+  hypothetical**: testing `/api/db/images` against this session's local
+  test DB (real observations/images, but `img_path` rows pointing at
+  files that don't exist at that path on this host - an entirely
+  plausible situation for any real deployment too, e.g. an archive
+  that's been reorganized or is mounted differently) produced responses
+  with `targetName` fields full of garbage binary bytes instead of an
+  empty string. Root cause: `Image::getTargetHeaders()`
+  (`base/kernel/src/image.cpp`, a pre-existing method inherited
+  unchanged from classic - confirmed identical in
+  `~/rts2/lib/rts2json`'s equivalent) allocates `targetName = new
+  char[FLEN_VALUE]` and only ever writes to it on a *successful* FITS
+  header read; when the underlying file can't be opened at all (not
+  just "keyword missing" - the file genuinely isn't there), the
+  triggering `getValue()` call swallows its own exception and returns
+  without touching the buffer, leaving `getTargetName()`'s
+  `std::string(targetName)` to scan uninitialized heap memory for a
+  stray null terminator. Fixed by zero-initializing the buffer
+  immediately after allocation, before the fallible read - a one-line
+  fix at the allocation site (chosen over fixing only in
+  `dbendpoints.cpp`'s call site, same reasoning as the earlier
+  `jsonEscape` null-safety fix: other raw-pointer-backed `Image`
+  accessors could hit the same failure mode from any caller, not just
+  this one). Verified both directions with a small standalone probe
+  linked against `libbase_kernel.a`: a real openable FITS file still
+  correctly returns its `OBJECT` header (`"flat target"`); a path that
+  can't be opened now yields `""` through the real `getTargetHeaders()`
+  catch path (confirmed via the live endpoint - 49 images from
+  intentionally-unreachable paths, zero garbage, zero crashes) rather
+  than the crash-under-a-debugger a *naive* reproduction gets (a
+  standalone probe calling `openFile()` directly without the try/catch
+  `getTargetHeaders()` wraps it in throws unhandled - that's a gap in
+  the throwaway test harness, not evidence of a second bug in the real
+  call path).
+
+  Verified end-to-end against the local `stars` test DB (real night of
+  2026-07-19/20, targets 268/283/2, 4 observations, 49 images):
+  hierarchical `nights` drill-down at all three levels, full `night`
+  detail, both `images` search modes, all the "missing required
+  parameter"/"nonexistent target"/"nonexistent night" 400 paths, and a
+  concurrent-request check (`/api/devices` alongside an in-flight
+  `/api/db/images` call) confirming the worker-pool offload still holds
+  for these three new endpoints exactly as it does for the first
+  slice's. Both `WEB_WITH_DB=ON` and the `OFF` regression build compile
+  clean. Not yet re-run against lascaux's production database - the
+  first slice's lascaux round already validated the deployment
+  methodology and the worker-pool architecture on real production data;
+  these three endpoints reuse that exact same architecture and the
+  already-ported `rts2db` classes, so a repeat full lascaux round
+  wasn't judged necessary to write this up as done, but is still
+  reasonable to do before calling task 7 fully closed out.
+
+8. **DONE (2026-08-17)** - Generic device-agnostic web dashboard
+   (`web/static/index.html`/`style.css`/`app.js`, real files on disk, no
+   CDN dependency, no build
    browser via Chrome's DevTools Protocol, not just curl/code review -
    see below.
 
