@@ -12,8 +12,36 @@
 #include <libnova/libnova.h>
 #include <ctime>
 #include <map>
+#include <mutex>
 
 using namespace rts2web;
+
+namespace
+{
+
+/**
+ * rts2db's ECPG-generated queries run over a single implicit connection
+ * that isn't safe for concurrent use from multiple threads - two
+ * queries in flight at once on it corrupt the wire protocol (libpq
+ * error messages like "message contents do not agree with length in
+ * message type T" / "server sent data without prior row description").
+ * Found live: dbendpoints.cpp's functions all run on workerPool's
+ * multiple threads (httpd.cpp's handleDb()), and the frontend's own
+ * night-detail view fires /api/db/night and /api/db/images concurrently
+ * via Promise.all - two DB-touching worker jobs racing on the one
+ * connection was never a hypothetical, it happened on the first real
+ * concurrent page load. Every public function below takes this before
+ * touching rts2db and holds it for its whole body (including the
+ * private helpers below, which never take it themselves - std::mutex
+ * isn't recursive, only the outermost entry point may lock). This
+ * makes DB endpoints line up behind each other instead of running
+ * truly in parallel, but they were serialized by the single physical
+ * connection anyway; the worker pool's job here is keeping the main
+ * bus/WebSocket thread free, not DB-query parallelism.
+ */
+std::mutex dbAccessMutex;
+
+}
 
 namespace
 {
@@ -81,6 +109,8 @@ std::string computePreviewPath (const std::string &imagesDir, const char *absPat
 
 void rts2web::dbListTargets (std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	// Mirrors db/db/tools/targetlist.cpp's plain-listing case exactly
 	// (new rts2db::TargetSet (targetType) with targetType defaulted to
 	// nullptr) - "every target, regardless of type."
@@ -112,6 +142,8 @@ void rts2web::dbListTargets (std::ostringstream &os)
 
 void rts2web::dbGetTarget (int targetId, std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	// createTarget() throws rts2db::SqlError (a rts2core::Error) if
 	// targetId doesn't exist - propagates to httpd.cpp's handleRequest(),
 	// caught there the same way as ApiError.
@@ -135,6 +167,8 @@ void rts2web::dbGetTarget (int targetId, std::ostringstream &os)
 
 void rts2web::dbListObservations (int targetId, std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	// Confirm the target itself exists first - ObservationSet::loadTarget()
 	// below would otherwise just silently return an empty set for a bad
 	// id, making "target doesn't exist" indistinguishable from "target
@@ -174,6 +208,8 @@ void rts2web::dbCurrentNight (std::ostringstream &os)
 
 void rts2web::dbNightsSummary (int year, int month, int day, std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	// Same call classic's Night::callAPI() makes for its "incomplete
 	// date" branch - hour/minutes stay at ObservationSetDate::load()'s
 	// defaults, matching upstream exactly (see dbendpoints.h's comment
@@ -199,6 +235,8 @@ void rts2web::dbNightsSummary (int year, int month, int day, std::ostringstream 
 
 void rts2web::dbNightDetail (int year, int month, int day, std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	time_t from;
 	int64_t duration;
 	getNightDuration (year, month, day, from, duration);
@@ -301,6 +339,8 @@ static void writeImageSetJson (rts2db::ImageSet &is, const std::string &imagesDi
 
 void rts2web::dbSearchImagesByTarget (const std::string &imagesDir, int targetId, std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	// Same existence check as dbListObservations() - a bad target id
 	// should be a 400, not silently "no images found".
 	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
@@ -313,6 +353,8 @@ void rts2web::dbSearchImagesByTarget (const std::string &imagesDir, int targetId
 
 void rts2web::dbSearchImagesByNight (const std::string &imagesDir, int year, int month, int day, std::ostringstream &os)
 {
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
 	time_t from;
 	int64_t duration;
 	getNightDuration (year, month, day, from, duration);

@@ -1215,6 +1215,31 @@ nothing to exercise them against meaningfully. Both now exist:
   straight to that night's detail on load; the "all nights" breadcrumb
   still reaches the full historical drill-down as an explicit action.
 
+  **A third, more serious bug found immediately after (2026-08-18)**:
+  live production logs showed real libpq protocol corruption -
+  `message contents do not agree with length in message type "T"`,
+  `server sent data ("D" message) without prior row description`,
+  `insufficient data in "T" message` - the daemon recovered via its own
+  reconnect logic, but requests in flight during the corruption failed.
+  Root cause: `rts2db`'s ECPG-generated queries run over a single
+  implicit connection with no locking anywhere in the DB layer, but
+  every `/api/db/*` endpoint runs on `workerPool`'s multiple threads -
+  and the dashboard's own night-detail view fires `/api/db/night` and
+  `/api/db/images` *concurrently* via `Promise.all`. Two DB-touching
+  worker jobs racing on the one connection at once corrupts the wire
+  protocol - not a hypothetical, it happened on the very first real
+  concurrent page load once `current-night` made that page the default.
+  Fixed with a single `std::mutex` (`dbAccessMutex`, file-local to
+  `dbendpoints.cpp`) taken by every public `dbXxx()` function for its
+  whole body - DB endpoints now queue up behind each other instead of
+  running truly in parallel, but they were already serialized by the
+  one physical connection regardless; the worker pool's job is keeping
+  the main bus/WebSocket thread free, not DB-query parallelism. Preview
+  generation (task 5) is unaffected - it never touches `rts2db` at all,
+  and stays genuinely concurrent. Verified with 30 concurrent `/api/db/
+  night`+`/api/db/images`+`/api/db/targets` requests locally (all 200,
+  no protocol errors in the log) before redeploying to lascaux.
+
 8. **DONE (2026-08-17)** - Generic device-agnostic web dashboard
    (`web/static/index.html`/`style.css`/`app.js`, real files on disk, no
    CDN dependency, no build
