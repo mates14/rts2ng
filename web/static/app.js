@@ -354,6 +354,33 @@ async function loadNightDetail (year, month, day) {
 	}
 }
 
+// Lands on tonight's detail directly rather than the top-level nights
+// drill-down (dbNightsSummary() with no year/month/day is an unbounded
+// aggregate over every observation/image ever recorded - found live
+// against lascaux's real archive to be what made the dashboard's
+// initial load slow. api/db/current-night is a separate, DB-free
+// endpoint (just today's date run through the same night-boundary
+// math), so this costs nothing extra before jumping straight to the
+// one night an operator actually wants to see on open. The "all nights"
+// breadcrumb link still reaches the full drill-down for anyone who
+// wants to browse history - that's an explicit action, not the default.
+async function loadDefaultImagesView () {
+	try {
+		const res = await fetch ('api/db/current-night');
+		if (res.status === 404) {
+			imagesPanelEl.style.display = 'none';
+			return;
+		}
+		if (!res.ok)
+			throw new Error (`GET api/db/current-night -> ${res.status}`);
+		const { year, month, day } = await res.json ();
+		await loadNightDetail (year, month, day);
+	} catch (e) {
+		// Fall back to the drill-down rather than showing nothing.
+		await loadNightsLevel (-1, -1, -1);
+	}
+}
+
 // --- Init --------------------------------------------------------------
 
 (async function init () {
@@ -363,6 +390,6 @@ async function loadNightDetail (year, month, day) {
 		devicesEl.innerHTML = `<p class="empty-hint">failed to load initial state: ${escapeHtml (String (e))}</p>`;
 	}
 	await loadRecentMessages ();
-	await loadNightsLevel (-1, -1, -1);
+	await loadDefaultImagesView ();
 	connectWs ();
 }) ();

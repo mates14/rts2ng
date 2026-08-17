@@ -1047,6 +1047,19 @@ void HttpD::drainDbResults ()
 // has to serve, not assumed.
 MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 {
+	if (!strcmp (url, "/api/db/current-night"))
+	{
+		// No DB access - answered inline, no worker pool/suspend needed.
+		std::ostringstream os;
+		dbCurrentNight (os);
+		std::string body = os.str ();
+		struct MHD_Response *response = MHD_create_response_from_buffer (body.length (), (void *) body.c_str (), MHD_RESPMEM_MUST_COPY);
+		MHD_add_response_header (response, "Content-Type", "application/json");
+		MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
+
 	bool wantTarget = !strcmp (url, "/api/db/target");
 	bool wantObservations = !strcmp (url, "/api/db/observations");
 

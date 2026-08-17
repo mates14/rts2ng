@@ -46,6 +46,20 @@ void dbGetTarget (int targetId, std::ostringstream &os);
 void dbListObservations (int targetId, std::ostringstream &os);
 
 /**
+ * GET /api/db/current-night - {"year":Y,"month":M,"day":D} for "tonight"
+ * (Configuration::getNight(), astronomical-night boundary from the
+ * current time - no DB access at all). Exists so the frontend's default
+ * landing view can jump straight to dbNightDetail()/image search for
+ * tonight without first paying for dbNightsSummary()'s unbounded
+ * all-time aggregate over every observation/image in the database -
+ * found necessary live: that full-table aggregate was what made the
+ * dashboard's initial load so slow against lascaux's real archive.
+ * Answered synchronously inline in handleDb(), not via the worker pool
+ * like the other db endpoints - there's no DB query to block on.
+ */
+void dbCurrentNight (std::ostringstream &os);
+
+/**
  * GET /api/db/nights?year=&month=&day= - aggregated observation/image
  * counts, grouped by whichever date component is left unspecified
  * (a hierarchical year -> month -> day drill-down, mirroring classic's

@@ -1178,6 +1178,43 @@ nothing to exercise them against meaningfully. Both now exist:
   wasn't judged necessary to write this up as done, but is still
   reasonable to do before calling task 7 fully closed out.
 
+  **Two bugs found live during the lascaux trial (2026-08-18)**, both
+  fixed and redeployed same session:
+  - `/api/getall` produced invalid JSON against the real `EXEC` device:
+    array-typed values (`rts2core::BoolArray`/`IntegerArray`/...) share
+    their scalar counterpart's base type - the array bit lives in a
+    separate ext-type mask `jsonValue()` never checked - so an
+    `ExecutorQueue` `BoolArray` value (`*_hard`) fell into the scalar
+    bool branch and its `getValue()` returned `""` for an array,
+    producing a bare `"next_hard":,` that broke the whole response.
+    `jsonvalue.cpp` now checks `getValueExtType() & RTS2_VALUE_ARRAY`
+    first and renders a real JSON array. This gap was already flagged
+    in `jsonvalue.h`'s own doc comment ("no array/stat/rectangle value
+    rendering yet") - the local test rig never had a device using one,
+    so it took real production traffic to trigger.
+  - `/api/db/images` took 6+ seconds against a real 6585-image night
+    and monopolized the shared worker pool, causing an unrelated
+    concurrent request to 502 through Apache's proxy timeout. Root
+    cause: `Image::getTargetName()` unconditionally opens the actual
+    FITS file on disk when the image came from a DB row (`targetName`
+    is left null by `setTargetHeaders()` - there's no name column on
+    `images`, only `target_id`), so the per-image loop in
+    `writeImageSetJson()` was one real file open per image.
+    `dbSearchImagesByTarget`/`dbSearchImagesByNight` now resolve names
+    once per unique `target_id` via a request-local cache instead - a
+    night reuses a handful of targets across thousands of images, and
+    the ID is already free from the DB row.
+
+  **Also added `/api/db/current-night`** (2026-08-18) after the same
+  trial showed the dashboard's default landing view - the unbounded
+  `dbNightsSummary()` drill-down with no year/month/day - paying for a
+  full-table aggregate over every observation/image ever recorded just
+  to render the *first* screen. Returns `{"year":Y,"month":M,"day":D}`
+  for tonight via `Configuration::getNight()` with no DB access at all
+  (answered inline, not through the worker pool), so `app.js` can jump
+  straight to that night's detail on load; the "all nights" breadcrumb
+  still reaches the full historical drill-down as an explicit action.
+
 8. **DONE (2026-08-17)** - Generic device-agnostic web dashboard
    (`web/static/index.html`/`style.css`/`app.js`, real files on disk, no
    CDN dependency, no build

@@ -158,6 +158,20 @@ void rts2web::dbListObservations (int targetId, std::ostringstream &os)
 	os << "]";
 }
 
+void rts2web::dbCurrentNight (std::ostringstream &os)
+{
+	// Same "which night does this timestamp belong to" computation
+	// Configuration::getNight()'s own zero-arg overload does internally
+	// (base/kernel/include/configuration.h) - duplicated here only
+	// because that overload returns a time_t, not the year/month/day
+	// this endpoint needs to hand straight to dbNightDetail()/
+	// dbSearchImagesByNight().
+	time_t t = rts2core::Configuration::instance ()->getNight (time (nullptr));
+	struct tm tm_s;
+	gmtime_r (&t, &tm_s);
+	os << "{\"year\":" << (tm_s.tm_year + 1900) << ",\"month\":" << (tm_s.tm_mon + 1) << ",\"day\":" << tm_s.tm_mday << "}";
+}
+
 void rts2web::dbNightsSummary (int year, int month, int day, std::ostringstream &os)
 {
 	// Same call classic's Night::callAPI() makes for its "incomplete
