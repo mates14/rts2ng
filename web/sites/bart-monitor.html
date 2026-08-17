@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BART telescope - Lascaux Observatory</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background-color: #f5f5f5;
+            font-size: 12px;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 10px;
+            max-width: 1500px;
+            margin: 0 auto;
+        }
+
+        .left-panel, .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .status-panel, .image-panel, .webcam-panel, .cam-panel {
+            background: white;
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .logo {
+            text-align: center;
+            border: 2px solid #000;
+            padding: 10px;
+            background-color: #e8e8e8;
+        }
+
+        .logo h1 { margin: 5px 0; font-size: 24px; }
+        .logo h2 { margin: 5px 0; font-size: 14px; font-weight: normal; }
+
+        .temp-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 11px;
+        }
+
+        .temp-table th, .temp-table td {
+            border: 1px solid #000;
+            padding: 3px;
+            text-align: center;
+        }
+
+        .temp-table th { background-color: #ddd; font-weight: bold; }
+
+        .cam-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .cam-box {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 6px;
+            text-align: center;
+        }
+
+        .cam-box h4 { margin: 0 0 4px 0; }
+
+        .webcam-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .webcam-column {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            align-items: center;
+        }
+
+        .webcam-column img {
+            width: 320px;
+            height: 240px;
+            object-fit: contain;
+            background: #000;
+            border: 1px solid #ccc;
+            cursor: pointer;
+        }
+
+        .control-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
+
+        .control-buttons button {
+            padding: 5px 10px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .status-value { margin: 3px 0; }
+
+        .error { color: #ff0000; font-weight: bold; }
+        .good { color: #008b00; }
+        .warn { color: #8B0000; }
+
+        hr { margin: 10px 0; border: 1px solid #ccc; }
+
+        /* Lightbox */
+        .lightbox {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            cursor: pointer;
+        }
+
+        .lightbox-content {
+            position: relative;
+            margin: auto;
+            padding: 20px;
+            width: 90%;
+            height: 90%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        .lightbox img {
+            max-width: 100%;
+            max-height: 80%;
+            object-fit: contain;
+            border: 2px solid white;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .lightbox-title { color: white; font-size: 18px; font-weight: bold; margin-bottom: 10px; text-align: center; }
+        .lightbox-close { position: absolute; top: 10px; right: 25px; color: white; font-size: 35px; font-weight: bold; cursor: pointer; user-select: none; }
+        .lightbox-close:hover { color: #ccc; }
+        .lightbox-info { color: white; font-size: 14px; margin-top: 10px; text-align: center; }
+
+        @media (max-width: 1200px) {
+            .container { grid-template-columns: 1fr; }
+            .webcam-grid { grid-template-columns: 1fr; }
+            .cam-grid { grid-template-columns: 1fr; }
+            .webcam-column img { width: 100%; max-width: 320px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="lightbox" class="lightbox">
+        <div class="lightbox-content">
+            <span class="lightbox-close">&times;</span>
+            <div class="lightbox-title" id="lightbox-title"></div>
+            <img id="lightbox-img" src="" alt="Lightbox Image">
+            <div class="lightbox-info" id="lightbox-info">Click anywhere to close</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="left-panel">
+            <div class="status-panel">
+                <div class="logo">
+                    <h1>BART telescope</h1>
+                    <h2>Lascaux Observatory</h2>
+                </div>
+                <div id="status-info">
+                    <div class="status-value"><strong>Status:</strong> <span id="loading">Loading...</span></div>
+                    <div id="telescope-status"></div>
+                    <div id="dome-status"></div>
+                    <hr>
+                    <div id="weather-status"></div>
+                </div>
+            </div>
+
+            <div class="control-buttons">
+                <button onclick="reloadWebcams()">reload webcams</button>
+                <button onclick="openArchive()">image archive</button>
+            </div>
+
+            <div class="webcam-panel">
+                <h3 style="margin-top: 0;">Webcams</h3>
+                <div class="webcam-grid">
+                    <div class="webcam-column">
+                        <div>AllSky</div>
+                        <img id="webcam-allsky" src="/webcam/allsky_small.jpg" alt="AllSky" onclick="openLightbox('/webcam/allsky.jpg', 'AllSky - Full View')">
+                    </div>
+                    <div class="webcam-column">
+                        <div>Sentinel</div>
+                        <img id="webcam-sentinel" src="/webcam/sentinel-sum1_av_small.jpg" alt="Sentinel" onclick="openLightbox('/webcam/sentinel-sum1_av.png', 'Sentinel - Full View')">
+                    </div>
+                    <div class="webcam-column">
+                        <div>Webcam 3</div>
+                        <img id="webcam-3" src="/webcam/webcam3_small.jpg" alt="Webcam 3" onclick="openLightbox('/webcam/webcam3.jpg', 'Webcam 3 - Full View')">
+                    </div>
+                    <div class="webcam-column">
+                        <div>Webcam 4</div>
+                        <img id="webcam-4" src="/webcam/webcam4_small.jpg" alt="Webcam 4" onclick="openLightbox('/webcam/webcam4.jpg', 'Webcam 4 - Full View')">
+                    </div>
+                </div>
+                <!--
+                    Only the periodically-refreshed snapshot files under
+                    /webcam/ are wired up here (confirmed real and live via
+                    their mtimes - sum1_av* is a dead 2012-2013 leftover,
+                    sentinel-sum1_av* is what's actually updating). The
+                    numbered /webcam2, /webcam3, /webcam4 proxy paths in
+                    Apache's vhost point at the cameras' own web UIs
+                    (ports 81/82/83 on 10.0.0.52) for a live MJPEG-style
+                    feed, like D50's page offers via a "Live"/"1min avg"
+                    toggle - not wired up here since their exact stream
+                    URL convention wasn't confirmed. Add a toggle the same
+                    way D50's switchWebcamMode() does once known.
+                -->
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="cam-panel">
+                <h3 style="margin-top: 0;">Cameras</h3>
+                <div class="cam-grid">
+                    <div class="cam-box">
+                        <h4>C1</h4>
+                        <div id="c1-status"></div>
+                    </div>
+                    <div class="cam-box">
+                        <h4>C2</h4>
+                        <div id="c2-status"></div>
+                    </div>
+                    <div class="cam-box">
+                        <h4>C3</h4>
+                        <div id="c3-status"></div>
+                    </div>
+                </div>
+                <!--
+                    No "latest processed image" thumbnails per camera yet
+                    (D50's page shows those from sibling C0_small.jpg/
+                    C0_center.jpg files written by an external process -
+                    unconfirmed whether an equivalent exists for BART's
+                    three cameras). rts2ng's own /api/db/images + /preview
+                    endpoints (STATUS.md task 7) could drive a real
+                    "latest image per camera" panel without depending on
+                    that external generator at all - a reasonable
+                    fast-follow, not done here.
+                -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Talks directly to rts2ng's rts2-httpd (task 2's JSON API) -
+        // reads are unauthenticated by that daemon's own design
+        // (STATUS.md task 6), so unlike D50's monitor.html this page
+        // embeds no credentials at all.
+        const API_BASE = '/images/api';
+
+        let systemData = {
+            EXEC: {}, T0: {}, DOME: {},
+            C1: {}, C2: {}, C3: {},
+            F1: {}, F2: {}, F3: {},
+            WEATHER_BART: {}, RAIN_BART: {}, CLOUD: {},
+            DISK_BART: {}, BARTUPS: {}
+        };
+
+        const DEVICES = Object.keys(systemData);
+
+        // rts2ng's httpd uses the RTS2 value's own name as the JSON key
+        // verbatim - some real value names contain a literal "." (e.g.
+        // BARTUPS's "ups.status", "battery.charge"), which is a flat key,
+        // not a nested object. Try the literal key first; only fall back
+        // to dot-path traversal for genuinely nested data. Confirmed
+        // against this daemon's real /api/get?d=BARTUPS output.
+        function getNestedValue(obj, path) {
+            if (obj && obj[path] !== undefined)
+                return obj[path];
+            return path.split('.').reduce((cur, key) => cur && cur[key] !== undefined ? cur[key] : undefined, obj);
+        }
+
+        function safeValue(obj, key, defaultVal = 'N/A') {
+            const val = getNestedValue(obj, key);
+            return val !== undefined ? val : defaultVal;
+        }
+
+        function fmt(val, digits = 1) {
+            return typeof val === 'number' && !Number.isNaN(val) ? val.toFixed(digits) : 'N/A';
+        }
+
+        // rts2ng's httpd serializes RA/Dec-pair values (RTS2_VALUE_RADEC
+        // et al, no dedicated case in jsonvalue.cpp's switch) via their
+        // getDisplayValue() fallback - a single "ra dec" space-separated
+        // string (e.g. "159.7 52.5", or "nan nan" when unset), not a
+        // {ra,dec} nested object the way classic's httpd/D50's
+        // monitor.html assumes. Confirmed against this daemon's real
+        // /api/get?d=T0 output, not guessed.
+        function parseRaDec(str) {
+            if (typeof str !== 'string')
+                return [NaN, NaN];
+            const parts = str.trim().split(/\s+/).map(Number);
+            return parts.length === 2 ? parts : [NaN, NaN];
+        }
+
+        function formatTime(timeVal) {
+            return typeof timeVal === 'number' ? new Date(timeVal * 1000).toLocaleString() : 'N/A';
+        }
+
+        async function fetchDeviceData(deviceName) {
+            try {
+                const res = await fetch(`${API_BASE}/get?d=${deviceName}`);
+                if (!res.ok)
+                    throw new Error(`${res.status}`);
+                const data = await res.json();
+                return data.d || data;
+            } catch (e) {
+                console.error(`Failed to fetch ${deviceName}:`, e);
+                return null;
+            }
+        }
+
+        async function updateAllDeviceData() {
+            await Promise.all(DEVICES.map(async device => {
+                const data = await fetchDeviceData(device);
+                if (data)
+                    systemData[device] = data;
+            }));
+        }
+
+        function updateTelescopeStatus() {
+            const div = document.getElementById('telescope-status');
+            const currentName = safeValue(systemData.EXEC, 'current_name', '');
+            const current = safeValue(systemData.EXEC, 'current', -1);
+            const nextName = safeValue(systemData.EXEC, 'next_name', '');
+            const [objRa, objDec] = parseRaDec(safeValue(systemData.T0, 'OBJ', ''));
+            const airmass = safeValue(systemData.T0, 'AIRMASS', NaN);
+            const tracking = safeValue(systemData.T0, 'TRACKING', 0) == 1;
+
+            div.innerHTML = `
+                <div class="status-value"><strong>Object:</strong> ${currentName || '(none)'} (${current})</div>
+                <div class="status-value"><strong>Next:</strong> ${nextName || '(none)'}</div>
+                <div class="status-value"><strong>Coordinates:</strong> ${fmt(objRa, 4)}&deg; ${fmt(objDec, 4)}&deg;</div>
+                <div class="status-value"><strong>Airmass:</strong> ${fmt(airmass, 2)}</div>
+                <div class="status-value"><strong>Tracking:</strong> <span class="${tracking ? 'good' : 'warn'}">${tracking ? 'On' : 'Off'}</span></div>
+            `;
+        }
+
+        function updateDomeStatus() {
+            const div = document.getElementById('dome-status');
+            const opened = safeValue(systemData.DOME, 'south_roof_opened', 0) == 1;
+            const closed = safeValue(systemData.DOME, 'south_roof_closed', 0) == 1;
+            const weatherOpen = safeValue(systemData.DOME, 'weather_open', 0) == 1;
+            div.innerHTML = `
+                <div class="status-value"><strong>Roof:</strong> <span class="${opened ? 'warn' : 'good'}">${opened ? 'Open' : (closed ? 'Closed' : 'Moving/unknown')}</span></div>
+                <div class="status-value"><strong>Weather allows opening:</strong> <span class="${weatherOpen ? 'good' : 'warn'}">${weatherOpen ? 'Yes' : 'No'}</span></div>
+            `;
+        }
+
+        function updateCameraStatus() {
+            for (const cam of ['C1', 'C2', 'C3']) {
+                const div = document.getElementById(cam.toLowerCase() + '-status');
+                const d = systemData[cam];
+                const object = safeValue(d, 'OBJECT', '');
+                const exposure = safeValue(d, 'exposure', NaN);
+                const exposureEnd = safeValue(d, 'exposure_end', NaN);
+                const filter = safeValue(d, 'filter', 'N/A');
+                const ccdTemp = safeValue(d, 'CCD_TEMP', NaN);
+                const focName = safeValue(d, 'focuser', '');
+                const focPos = safeValue(systemData[focName] || {}, 'FOC_POS', 'N/A');
+
+                div.innerHTML = `
+                    <div class="status-value">${object || '(idle)'}</div>
+                    <div class="status-value">Exp: ${fmt(exposure)} s</div>
+                    <div class="status-value">Ends: ${formatTime(exposureEnd)}</div>
+                    <div class="status-value">Filter: ${filter}</div>
+                    <div class="status-value">CCD: ${fmt(ccdTemp, 1)}&deg;C</div>
+                    <div class="status-value">Focus (${focName}): ${focPos}</div>
+                `;
+            }
+        }
+
+        function updateWeatherStatus() {
+            const div = document.getElementById('weather-status');
+            const rain = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
+            const rainStr = rain ? '<span class="error">YES</span>' : '<span class="good">No</span>';
+
+            const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
+            const humOut = safeValue(systemData.WEATHER_BART, 'HUM_OUT', NaN);
+            const tempDome = safeValue(systemData.WEATHER_BART, 'TEMP_DOME', NaN);
+            const humDome = safeValue(systemData.WEATHER_BART, 'HUM_DOME', NaN);
+            const windSpeed = safeValue(systemData.WEATHER_BART, 'WIND_SPEED', NaN);
+            const windPeak = safeValue(systemData.WEATHER_BART, 'WIND_SPEED_PEAK', NaN);
+
+            const cloudDiff = safeValue(systemData.CLOUD, 'TEMP_DIFF', NaN);
+            const tempAmb = safeValue(systemData.CLOUD, 'TEMP_AMB', NaN);
+            const tempSky = safeValue(systemData.CLOUD, 'TEMP_SKY', NaN);
+            const heater = safeValue(systemData.CLOUD, 'HEATER', 0) == 1;
+
+            const diskFree = safeValue(systemData.DISK_BART, 'free', NaN);
+            const diskFreeGB = typeof diskFree === 'number' ? (diskFree / 1e9).toFixed(1) : diskFree;
+
+            const upsStatus = safeValue(systemData.BARTUPS, 'ups.status', 'N/A');
+            const upsLoad = safeValue(systemData.BARTUPS, 'ups.load', NaN);
+            const upsCharge = safeValue(systemData.BARTUPS, 'battery.charge', NaN);
+            const onBattery = upsStatus !== 'OL';
+
+            div.innerHTML = `
+                <div class="status-value"><strong>Rain?:</strong> ${rainStr}</div>
+                <div class="status-value"><strong>Cloud coverage:</strong> ${fmt(cloudDiff)} (${fmt(tempAmb)} - ${fmt(tempSky)})</div>
+                <div class="status-value"><strong>Cloud heater:</strong> ${heater ? 'on' : 'off'}</div>
+                <div class="status-value"><strong>Wind:</strong> ${fmt(windSpeed)} m/s, peak ${fmt(windPeak)} m/s</div>
+
+                <table class="temp-table">
+                    <tr><th></th><th>Out</th><th>Dome</th></tr>
+                    <tr><th>Temp [&deg;C]</th><td>${fmt(tempOut)}</td><td>${fmt(tempDome)}</td></tr>
+                    <tr><th>Hum [%]</th><td>${fmt(humOut)}</td><td>${fmt(humDome)}</td></tr>
+                </table>
+
+                <div class="status-value"><strong>Disk free:</strong> ${diskFreeGB} GB</div>
+                <div class="status-value"><strong>UPS:</strong> <span class="${onBattery ? 'error' : 'good'}">${upsStatus}</span> - load ${fmt(upsLoad)}%, charge ${fmt(upsCharge, 0)}%</div>
+            `;
+
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        async function updateStatus() {
+            await updateAllDeviceData();
+            updateTelescopeStatus();
+            updateDomeStatus();
+            updateCameraStatus();
+            updateWeatherStatus();
+        }
+
+        function reloadWebcams() {
+            const t = new Date().getTime();
+            document.getElementById('webcam-allsky').src = `/webcam/allsky_small.jpg?t=${t}`;
+            document.getElementById('webcam-sentinel').src = `/webcam/sentinel-sum1_av_small.jpg?t=${t}`;
+            document.getElementById('webcam-3').src = `/webcam/webcam3_small.jpg?t=${t}`;
+            document.getElementById('webcam-4').src = `/webcam/webcam4_small.jpg?t=${t}`;
+        }
+
+        function openArchive() {
+            window.open('/images/', '_blank');
+        }
+
+        // Lightbox
+        let lightboxInterval = null;
+
+        function openLightbox(imageSrc, title) {
+            const lightbox = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            const t = new Date().getTime();
+            const sep = imageSrc.includes('?') ? '&' : '?';
+            img.src = `${imageSrc}${sep}t=${t}`;
+            document.getElementById('lightbox-title').textContent = title;
+            document.getElementById('lightbox-info').textContent = 'Click anywhere to close - auto-refreshing every 15s';
+            lightbox.style.display = 'block';
+
+            lightboxInterval = setInterval(() => {
+                const nt = new Date().getTime();
+                const base = img.src.split(/[?&]t=/)[0];
+                img.src = `${base}${base.includes('?') ? '&' : '?'}t=${nt}`;
+            }, 15000);
+        }
+
+        function closeLightbox() {
+            document.getElementById('lightbox').style.display = 'none';
+            if (lightboxInterval) {
+                clearInterval(lightboxInterval);
+                lightboxInterval = null;
+            }
+        }
+
+        document.getElementById('lightbox').addEventListener('click', function (e) {
+            if (e.target === this)
+                closeLightbox();
+        });
+        document.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape')
+                closeLightbox();
+        });
+
+        async function init() {
+            await updateStatus();
+            reloadWebcams();
+        }
+
+        setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
+        setInterval(reloadWebcams, 15000);
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
