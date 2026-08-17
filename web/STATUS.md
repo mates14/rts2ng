@@ -4,14 +4,16 @@ Working notes for the `web` effort so it can be picked up cold. Update this
 file at the end of each work session; don't rely on chat history surviving.
 
 **Status as of 2026-08-17: tasks 1-6 done (the entire non-DB track), task
-7's first slice done (`WEB_WITH_DB` + DB-bound target/observation
-endpoints, live-tested against a real `stars` database), and task 8's
-first pass done (`web/static/` dashboard, live-verified in an actual
-headless browser via Chrome DevTools Protocol, including a real proof
-that WebSocket push updates an already-open page with no reload/
-polling).** See the phased plan below for the real progress entries.
-Remaining: task 7's night reports/image search/DB-availability state
-machine, and task 9 (Big Brother, deferred pending site confirmation).
+7's first slice done and DB queries moved to the worker pool after being
+proven to block the whole daemon against real production data, and task
+8's first pass done (`web/static/` dashboard, live-verified in an actual
+headless browser).** Also: first live testing against a real production
+site (`lascaux.asu.cas.cz`), not just this laptop - found and fixed a
+real libmicrohttpd version-portability gap and a real DB-query
+concurrency bug that the local test database was too small to expose.
+See the phased plan below for the real progress entries. Remaining:
+task 7's night reports/image search/DB-availability state machine, and
+task 9 (Big Brother, deferred pending site confirmation).
 
 ## What web is
 
@@ -946,16 +948,144 @@ implementation:
    opposed to `/preview/`'s raw path-based lookup from task 3) - both
    need data this sparse test database doesn't have (no real observation
    nights, no archived images with DB rows) to test against meaningfully;
-   the DB-connection availability state machine from "Runtime DB
+   and the DB-connection availability state machine from "Runtime DB
    availability" above (this slice assumes the DB is reachable for the
-   whole process lifetime, matching how it was actually tested); and
-   moving DB queries onto the worker pool (they currently run inline on
-   the main thread, same as the cheap task-2 endpoints - `TargetSet::
-   load()` for 121 rows was fast enough in testing not to need it yet,
-   but a `night`/observation-history query against a real multi-year
-   production database, e.g. at lascaux, could be a different story -
-   worth measuring before deciding, not assuming).
-8. **DONE, first pass (2026-08-17)** - `web/static/` (`index.html`/
+   whole process lifetime, matching how it was actually tested).
+
+### DB queries moved to the worker pool - measured live against real production data (2026-08-17)
+
+The "worth measuring before deciding, not assuming" flag on DB-query
+threading (task 7's first write-up, above) got its measurement: tested
+against `lascaux.asu.cas.cz`, a live production telescope-control host
+(see "Live production testing (lascaux.asu.cas.cz)" below for the full
+access/safety story), whose real `stars` database has 15,753 targets -
+not the 121-row local test DB task 7 was originally built and verified
+against.
+
+`/api/db/targets` against that real data took **~14.7 seconds** for a
+single request. Confirmed this wasn't just "one slow endpoint" but
+actually blocked the whole daemon: fired `/api/devices` (an otherwise
+sub-millisecond, purely in-memory bus-side endpoint, extensively proven
+fast under load back in task 5) from a second connection while the slow
+query was still running - it *also* took ~14 seconds. `TargetSet::
+load()` running synchronously on `Block`'s single poll-loop thread meant
+one DB query froze live device/bus traffic for its entire duration - a
+real operational problem for a telescope-control daemon, not a
+theoretical one.
+
+**Fixed**: moved `/api/db/targets`, `/api/db/target`, `/api/db/
+observations` onto the same `workerPool` already built for cache-miss
+preview generation (task 5) - identical `MHD_suspend_connection()`/
+`MHD_resume_connection()` pattern, identical eventfd wakeup, sharing the
+pool rather than standing up a second one (both are occasional, bursty
+background work; not worth a dedicated pool each until real contention
+between the two shows up as an actual problem). `rts2core::Error`
+(`SqlError` for a bad target id, or any other DB-layer failure) is now
+caught *inside* the worker job and turned into the JSON error body
+there, since it can no longer propagate to the main thread's
+`try`/`catch` the way the synchronous version did.
+
+**Re-verified against the same real production database after the
+fix**: the query itself still takes ~14.7s (that's real, inherent
+Postgres query cost against 15,753 rows via `rts2db`'s existing
+per-target-row `createTarget()` loop - not something this fix was meant
+to address, and not addressed here), but `/api/devices` fired
+concurrently while it's in flight now returns in **~0.28 milliseconds**
+- completely unblocked, matching task 5's preview-generation result
+exactly. Confirmed production stayed untouched throughout both rounds of
+testing: same process count before/after, the real classic `HTTPD`
+(port 8889) still responding, and `SELECT count(*) FROM targets` still
+`15753` both times (zero writes, as designed - these endpoints are
+read-only and this session never touched `/api/set,inc,dec` against
+lascaux at all).
+
+Actually fixing the *query* being slow (e.g., avoiding `TargetSet::
+load()`'s one-`createTarget()`-call-per-row pattern for a bulk listing)
+is a separate, not-yet-investigated question - today's fix is "a slow
+query can no longer block the daemon," not "make the query fast."
+Worth a real look before `/api/db/targets` becomes something an actual
+site UI calls routinely against a large database.
+
+### Live production testing (lascaux.asu.cas.cz, 2026-08-17)
+
+First time anything in this port has been tested against a real,
+currently-in-use production telescope-control host rather than this
+laptop's local rig or a disposable test database - handled deliberately
+cautiously throughout, per explicit user direction ("the tests have to
+be very careful, it is a live production machine"), not just building
+and running things there the way earlier tasks did locally.
+
+**Read-only recon before touching anything**: confirmed via SSH what's
+actually running - a fully live D50-class setup (real `centrald`, three
+real cameras `C1`/`C2`/`C3`, mount, dome, focusers, weather/rain
+sensors, `rts2-executor`, `rts2-imgproc`, classic `rts2-httpd` already
+on port 8889, plus a large number of `rtspy-queue-sel` processes - the
+Python queuer effort). `~/rts2ng` was already checked out there (a real
+`git@github.com:mates14/rts2ng.git` remote, tracked history - this
+session's local checkout shares the same remote), behind by several
+commits including everything from today. The `mates` OS user already
+had a Postgres role with full read access to the real `stars` database
+(15,753 targets - genuinely the live dataset, confirmed, not a copy).
+
+**Getting the code there**: asked the user how (rather than assuming) -
+chose commit + push + pull over a direct copy, to match the project's
+normal workflow and leave a real history entry. Staged carefully: `git
+add -n` first caught that `web/build-nodb/` (this session's local
+regression-test build directory) wasn't covered by `.gitignore`'s
+`build/` pattern and would have been committed wholesale, plus two
+stray `.STATUS.md.swp`/`.swo` vim swap files - deleted both before
+staging, not silently included.
+
+**A real, unpredicted portability gap, found immediately**:
+lascaux's system `libmicrohttpd` is 0.9.75 - the dev machine this was
+all built against has 1.0.1. `MHD_basic_auth_get_username_password3()`
+(task 6's auth code) didn't exist before 0.9.77; `MHD_OPTION_SOCK_ADDR_LEN`
+needed for clean interface binding didn't exist before 0.9.77.06. Both
+replaced with their older, still-present-but-deprecated equivalents
+(`MHD_basic_auth_get_username_password()`, `MHD_OPTION_SOCK_ADDR`) -
+verified locally first that nothing regressed, then confirmed the build
+succeeded on lascaux itself. A concrete reminder that "compiles and
+works on the dev machine" and "compiles and works on whatever
+libmicrohttpd version a real site actually has installed" are different
+claims - this project has only verified the first one so far, at any
+real site, for any of its dependencies.
+
+**New `--bind-address` option**, added specifically because of this
+testing, not a preexisting feature: since `--auth-file` is off by
+default, running this daemon on a shared production host would
+otherwise mean an unauthenticated, write-capable HTTP port bound to
+*every* interface for the test's duration, on a machine with no
+per-daemon firewalling to fall back on (confirmed - no passwordless
+`sudo` for even a read-only `iptables -L` check). Implemented, verified
+locally (`ss -ltnp` shows the socket bound to `127.0.0.1:<port>`, not
+`0.0.0.0:<port>`, and still fully functional via that address) before
+ever using it against lascaux. This is also just a genuinely useful
+feature independent of the testing need - it lets the "fronted by a
+proxy, never reachable directly" deployment model (an early design
+decision) actually be enforced at the socket level.
+
+**The test methodology itself**: built in `~/rts2ng/web` (nesting the
+already-checked-out `db`/`base` there, same as locally), ran with a
+distinct device name (`-d HTTPDNG`, avoiding a collision with the real
+`HTTPD` already registered on the bus), distinct HTTP and bus ports
+(`28889`/`28701`, both confirmed free first), `--bind-address 127.0.0.1`,
+and `--database stars` pointed at the real production database -
+deliberately never touching `/api/set`, `/api/inc`, `/api/dec` against
+it, since task 7 is read-only by design and there was no reason to risk
+commanding real hardware to prove a database-query endpoint works.
+Verified `/api/devices` showed the full real device roster (`C1`/`C2`/
+`C3`/`T0`/`DOME`/`EXEC`/the real `HTTPD`/...) coexisting cleanly with
+the test instance, confirming the bus layer (tasks 1-2) works correctly
+against a real, complex, multi-device production deployment, not just
+this session's minimal local rig. After every round of testing:
+explicitly killed the test process, confirmed via a fresh `pgrep` (not
+just trusting the kill command's exit status) that nothing was left
+running, and confirmed the real production `HTTPD`, the real process
+count, and the real database row count were all unchanged.
+
+This is also where the DB-worker-pool finding above actually came from -
+see that section for what the real dataset exposed that the local test
+database was too small to reveal.
    `style.css`/`app.js`, real files on disk, no CDN dependency, no build
    step) plus daemon-side serving. Verified in an actual headless
    browser via Chrome's DevTools Protocol, not just curl/code review -
