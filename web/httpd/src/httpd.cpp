@@ -727,16 +727,30 @@ bool HttpD::checkWriteAuth (struct MHD_Connection *connection, const char *devic
 	if (authFile.empty ())
 		return true;					 // no auth configured - see the authFile member's doc comment
 
-	struct MHD_BasicAuthInfo *info = MHD_basic_auth_get_username_password3 (connection);
-	if (info == nullptr)
+	// Deliberately the older MHD_basic_auth_get_username_password() (a
+	// plain char* out-param pair), not the newer, struct-based
+	// MHD_basic_auth_get_username_password3() - found while deploying to
+	// lascaux.asu.cas.cz (real production libmicrohttpd 0.9.75, vs.
+	// 1.0.1 on the dev machine this was first built against): the "3"
+	// variant was only added in 0.9.77 and doesn't exist at all on
+	// 0.9.75, while this older one is still present (just deprecated,
+	// not removed) even in 1.0.1 - the more portable choice across the
+	// range of libmicrohttpd versions real sites actually run.
+	char *password_c = nullptr;
+	char *username_c = MHD_basic_auth_get_username_password (connection, &password_c);
+	if (username_c == nullptr)
 	{
+		if (password_c)
+			MHD_free (password_c);
 		errorMsg = "authentication required";
 		return false;
 	}
 
-	std::string username (info->username, info->username_len);
-	std::string password (info->password ? info->password : "", info->password_len);
-	MHD_free (info);
+	std::string username (username_c);
+	std::string password (password_c ? password_c : "");
+	MHD_free (username_c);
+	if (password_c)
+		MHD_free (password_c);
 
 	UserPermissions perms;
 	if (!userLogins.verifyUser (username, password, &perms))
