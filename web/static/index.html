@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Device Monitor</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<header>
+		<h1>RTS2 Device Monitor</h1>
+		<div id="conn-status" class="conn-status conn-unknown">connecting&hellip;</div>
+	</header>
+
+	<section id="command-panel" class="panel">
+		<h2>Send command</h2>
+		<form id="command-form">
+			<label>Device <select id="cmd-device"></select></label>
+			<label>Variable <input id="cmd-name" type="text" placeholder="value name" required></label>
+			<label>Value <input id="cmd-value" type="text" placeholder="new value" required></label>
+			<div class="cmd-buttons">
+				<button type="submit" data-op="set">Set</button>
+				<button type="submit" data-op="inc">Inc</button>
+				<button type="submit" data-op="dec">Dec</button>
+			</div>
+		</form>
+		<div id="command-result"></div>
+	</section>
+
+	<main id="devices"></main>
+
+	<section id="messages-panel" class="panel">
+		<h2>Recent messages</h2>
+		<ul id="messages"></ul>
+	</section>
+
+	<script src="app.js"></script>
+</body>
+</html>

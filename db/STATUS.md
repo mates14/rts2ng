@@ -881,3 +881,37 @@ was just a matter of wiring it up. New `db/imgproc/` subtree:
   and a configured `[imgproc] astrometry` script, deferred to whichever
   site testing session picks this up next (see
   `rts2c_bugfixing_raids`/the D50 device-by-device testing notes).
+
+## Re-verified test DB still intact (2026-08-17), + a no-sudo access path for future testing
+
+Checked in preparation for `web`'s task 7 (DB-bound endpoints, see
+`web/STATUS.md`): the `stars` test database from the 2026-07-19 bootstrap
+verification (above) is still fully intact a month later - 44 tables,
+owned by `rts2`, 121 targets (special targets + the 103 Stetson fields),
+19 types, 1 test camera. The `rts2` *system* user exists but has a
+no-login shell by design (`su rts2` correctly refuses - that's not a bug,
+it's how `rts2-testdb-create` deliberately provisions a service account;
+use `sudo -u rts2 <command>`, not `su rts2`).
+
+**New**: the user created a plain Postgres role `mates` (`createuser
+mates`, no special attributes) and, at this session's suggestion, ran
+`GRANT observers TO mates` as `postgres`. Since `grant.sql` grants the
+`observers` group `GRANT ALL` (not just read) on every real table, `mates`
+now has the *same* access level the `rts2` app role itself has - full
+read/write, not read-only. Verified: `mates` can now query `targets`/
+`types`/`cameras` (previously `permission denied` for all three).
+
+**Why this matters going forward**: this session's shell has no
+interactive `sudo` TTY (same wall the July session hit trying to start
+`rts2-executor` - see above), so anything needing `sudo -u rts2` has
+always required the user to run it themselves. Since Postgres peer auth
+maps the *current OS user* to the same-named Postgres role, and `mates`
+(the OS user this session actually runs as) now has full `stars` access
+via `observers` membership, DB-bound test binaries (`web`'s future
+`--database stars`, or any `rts2db`-linked tool) can now be run *directly
+in this session, without sudo*, as long as they're pointed at a config
+that doesn't hardcode `user=rts2` for the connection. Worth remembering:
+`mates` having `GRANT ALL` means test runs from this session can now
+write to `stars`, not just read it - the same care about not polluting
+real target/observation data that already applied to `rts2`-run tests
+now applies here too.
