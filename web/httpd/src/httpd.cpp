@@ -153,6 +153,23 @@ struct PreviewResult
 	std::string errorMsg;
 };
 
+#ifdef WEB_HAVE_DB
+/**
+ * Result of a worker-thread DB query (STATUS.md task 7, added after
+ * lascaux.asu.cas.cz testing showed why this can't stay synchronous -
+ * see the long comment by handleDb() below). The job itself decides the
+ * final JSON body and HTTP status (success or error), so - unlike
+ * PreviewResult - there's nothing left for the main thread to branch on
+ * beyond "send exactly this".
+ */
+struct DbResult
+{
+	struct MHD_Connection *connection;
+	std::string body;
+	unsigned int httpStatus;
+};
+#endif
+
 /**
  * Generic DevClient used for every connected device (see
  * HttpD::createOtherType()). Unlike classic's per-device-type
@@ -313,6 +330,20 @@ class HttpD:public HttpDBase
 		// synchronous cache-hit path and the async worker-completion
 		// path in drainPreviewResults().
 		MHD_Result sendPreviewResponse (struct MHD_Connection *connection, bool ok, const std::string &jpegData, const std::string &errorMsg);
+
+#ifdef WEB_HAVE_DB
+		// STATUS.md task 7: DB queries also run on workerPool now, not
+		// inline - see handleDb()'s comment for why this stopped being
+		// optional. Shares the same pool/wakeupFd as preview generation
+		// (STATUS.md task 5) rather than a second pool - both are
+		// occasional, bursty background work, not worth a dedicated pool
+		// each until real contention between the two shows up.
+		std::mutex dbResultsMutex;
+		std::queue <DbResult> dbResults;
+
+		void drainDbResults ();
+		MHD_Result handleDb (struct MHD_Connection *connection, const char *url);
+#endif
 
 		// STATUS.md task 6: HTTP Basic Auth (RFC 7617) against userLogins,
 		// gating write access to a specific device. Returns true if the
@@ -595,6 +626,9 @@ void HttpD::pollSuccess ()
 			;							 // drain the eventfd counter (non-blocking fd - the loop
 										 // ends on EAGAIN once it's empty)
 		drainPreviewResults ();
+#ifdef WEB_HAVE_DB
+		drainDbResults ();
+#endif
 	}
 
 	for (std::list <WsClient *>::iterator iter = wsClients.begin (); iter != wsClients.end (); )
@@ -968,6 +1002,145 @@ void HttpD::drainPreviewResults ()
 	MHD_run (mhd);
 }
 
+#ifdef WEB_HAVE_DB
+void HttpD::drainDbResults ()
+{
+	std::vector <DbResult> results;
+	{
+		std::lock_guard <std::mutex> lock (dbResultsMutex);
+		while (!dbResults.empty ())
+		{
+			results.push_back (std::move (dbResults.front ()));
+			dbResults.pop ();
+		}
+	}
+
+	if (results.empty ())
+		return;
+
+	for (std::vector <DbResult>::iterator iter = results.begin (); iter != results.end (); iter++)
+	{
+		struct MHD_Response *response = MHD_create_response_from_buffer (iter->body.length (), (void *) iter->body.c_str (), MHD_RESPMEM_MUST_COPY);
+		MHD_add_response_header (response, "Content-Type", "application/json");
+		MHD_queue_response (iter->connection, iter->httpStatus, response);
+		MHD_destroy_response (response);
+		MHD_resume_connection (iter->connection);
+	}
+
+	// Same requirement as drainPreviewResults() - see its comment.
+	MHD_run (mhd);
+}
+
+// STATUS.md task 7: DB queries run on workerPool, not inline on the main
+// thread, as of 2026-08-17 - the original first-slice implementation
+// answered these synchronously (fine against the sparse local test
+// database used to build it), but live-tested against
+// lascaux.asu.cas.cz's real production database (15,753 targets, not
+// 121), a single /api/db/targets request took ~14.7 seconds - and
+// during that entire window, /api/devices (normally sub-millisecond,
+// pure in-memory) *also* took ~14 seconds, confirmed by firing it
+// concurrently from a second connection. The whole daemon, including
+// live bus/device traffic, was completely blocked for the duration of
+// one DB query - exactly the risk STATUS.md's task 7 write-up flagged
+// as "worth measuring before deciding, not assuming" and left
+// unresolved. Now measured, on the real dataset this daemon actually
+// has to serve, not assumed.
+MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
+{
+	bool wantTarget = !strcmp (url, "/api/db/target");
+	bool wantObservations = !strcmp (url, "/api/db/observations");
+
+	if (!strcmp (url, "/api/db/targets"))
+	{
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbListTargets (os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (wantTarget || wantObservations)
+	{
+		const char *idStr = getParam (connection, "id", "");
+		if (idStr[0] == '\0')
+		{
+			static const char *msg = "{\"error\":\"missing id parameter\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+		int targetId = atoi (idStr);
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, wantObservations] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				if (wantObservations)
+					dbListObservations (targetId, os);
+				else
+					dbGetTarget (targetId, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+
+	static const char *notFound = "{\"error\":\"not found\"}";
+	struct MHD_Response *response = MHD_create_response_from_buffer (strlen (notFound), (void *) notFound, MHD_RESPMEM_PERSISTENT);
+	MHD_add_response_header (response, "Content-Type", "application/json");
+	MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_NOT_FOUND, response);
+	MHD_destroy_response (response);
+	return ret;
+}
+#endif
+
 MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *url)
 {
 	static const char *previewPrefix = "/preview/";
@@ -976,6 +1149,12 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 
 	if (!strcmp (url, "/ws"))
 		return handleWsUpgrade (connection);
+
+#ifdef WEB_HAVE_DB
+	static const char *dbPrefix = "/api/db/";
+	if (!strncmp (url, dbPrefix, strlen (dbPrefix)))
+		return handleDb (connection, url);
+#endif
 
 	// STATUS.md task 8: static frontend files. Checked before the JSON
 	// API dispatch below but harmless either way - handleStatic() only
@@ -1118,28 +1297,6 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 			}
 			os << "]";
 		}
-#ifdef WEB_HAVE_DB
-		// STATUS.md task 7: target/observation history via ../db's
-		// rts2db, only present at all when WEB_HAVE_DB is set.
-		else if (!strcmp (url, "/api/db/targets"))
-		{
-			dbListTargets (os);
-		}
-		else if (!strcmp (url, "/api/db/target"))
-		{
-			const char *idStr = getParam (connection, "id", "");
-			if (idStr[0] == '\0')
-				throw ApiError ("missing id parameter");
-			dbGetTarget (atoi (idStr), os);
-		}
-		else if (!strcmp (url, "/api/db/observations"))
-		{
-			const char *idStr = getParam (connection, "id", "");
-			if (idStr[0] == '\0')
-				throw ApiError ("missing id parameter");
-			dbListObservations (atoi (idStr), os);
-		}
-#endif
 		else
 		{
 			httpStatus = MHD_HTTP_NOT_FOUND;
