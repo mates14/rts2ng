@@ -41,6 +41,7 @@
 #define OPT_PREVIEW_WORKERS  OPT_LOCAL + 3
 #define OPT_AUTH_FILE        OPT_LOCAL + 4
 #define OPT_STATIC_DIR       OPT_LOCAL + 5
+#define OPT_BIND_ADDRESS     OPT_LOCAL + 6
 
 #include <cerrno>
 #include <cstdlib>
@@ -56,6 +57,8 @@
 #include <stdexcept>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -237,6 +240,17 @@ class HttpD:public HttpDBase
 
 	private:
 		int httpPort;
+		// Empty (default) binds all interfaces, same as before this
+		// option existed. Set via --bind-address to restrict to e.g.
+		// 127.0.0.1 - useful both for the "fronted by a proxy, never
+		// reachable directly" deployment model, and for testing this
+		// daemon on a shared/production host without exposing an
+		// unauthenticated HTTP port on every interface in the meantime
+		// (found genuinely necessary, not just theoretical, the first
+		// time this was tried against a real production machine -
+		// lascaux.asu.cas.cz - which has no per-daemon firewalling to
+		// fall back on).
+		std::string bindAddress;
 		struct MHD_Daemon *mhd;
 		int mhdEpollFd;
 
@@ -360,6 +374,7 @@ HttpD::HttpD (int argc, char **argv):HttpDBase (argc, argv, DEVICE_TYPE_HTTPD, "
 	addOption (OPT_PREVIEW_WORKERS, "preview-workers", 1, "worker threads for preview generation (default 2)");
 	addOption (OPT_AUTH_FILE, "auth-file", 1, "credentials file gating /api/set,inc,dec (user:cryptedpass:perms lines, crypt(3) hashes) - writes are unrestricted if not set");
 	addOption (OPT_STATIC_DIR, "static-dir", 1, "root of the static web frontend (web/static/) - disabled if not set");
+	addOption (OPT_BIND_ADDRESS, "bind-address", 1, "restrict the HTTP port to this address (e.g. 127.0.0.1) - binds all interfaces if not set");
 }
 
 HttpD::~HttpD ()
@@ -417,6 +432,9 @@ int HttpD::processOption (int in_opt)
 		case OPT_STATIC_DIR:
 			staticDir = optarg;
 			break;
+		case OPT_BIND_ADDRESS:
+			bindAddress = optarg;
+			break;
 		default:
 			return HttpDBase::processOption (in_opt);
 	}
@@ -472,10 +490,31 @@ int HttpD::init ()
 	// response; found by testing a real handshake and getting a
 	// connection that accepted bytes but sent nothing back at all, not
 	// even an error.
-	mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_END);
+	//
+	// MHD_OPTION_SOCK_ADDR (not the newer MHD_OPTION_SOCK_ADDR_LEN) for
+	// the same portability reason as the basic-auth function below:
+	// _LEN needs libmicrohttpd >= 0.9.77.06, not present on lascaux's
+	// 0.9.75.
+	struct sockaddr_in bindAddr;
+	if (!bindAddress.empty ())
+	{
+		memset (&bindAddr, 0, sizeof (bindAddr));
+		bindAddr.sin_family = AF_INET;
+		bindAddr.sin_port = htons (httpPort);
+		if (inet_pton (AF_INET, bindAddress.c_str (), &bindAddr.sin_addr) != 1)
+		{
+			logStream (MESSAGE_ERROR) << "invalid --bind-address " << bindAddress << " (must be a plain IPv4 address)" << sendLog;
+			return -1;
+		}
+		mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_SOCK_ADDR, (struct sockaddr *) &bindAddr, MHD_OPTION_END);
+	}
+	else
+	{
+		mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_END);
+	}
 	if (mhd == nullptr)
 	{
-		logStream (MESSAGE_ERROR) << "cannot start HTTP server on port " << httpPort << sendLog;
+		logStream (MESSAGE_ERROR) << "cannot start HTTP server on port " << httpPort << (bindAddress.empty () ? "" : (" bound to " + bindAddress)) << sendLog;
 		return -1;
 	}
 
