@@ -74,6 +74,30 @@
 
         .cam-box h4 { margin: 0 0 4px 0; }
 
+        .latest-image img {
+            width: 100%;
+            max-width: 220px;
+            height: 160px;
+            object-fit: contain;
+            background: #111;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            margin-bottom: 4px;
+        }
+
+        .latest-image .thumb-noimg {
+            width: 100%;
+            max-width: 220px;
+            height: 160px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #e5e7eb;
+            color: #666;
+            margin: 0 auto 4px auto;
+            font-size: 11px;
+        }
+
         .webcam-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -229,27 +253,28 @@
                 <div class="cam-grid">
                     <div class="cam-box">
                         <h4>C1</h4>
+                        <div id="latest-c1" class="latest-image"></div>
                         <div id="c1-status"></div>
                     </div>
                     <div class="cam-box">
                         <h4>C2</h4>
+                        <div id="latest-c2" class="latest-image"></div>
                         <div id="c2-status"></div>
                     </div>
                     <div class="cam-box">
                         <h4>C3</h4>
+                        <div id="latest-c3" class="latest-image"></div>
                         <div id="c3-status"></div>
                     </div>
                 </div>
                 <!--
-                    No "latest processed image" thumbnails per camera yet
-                    (D50's page shows those from sibling C0_small.jpg/
-                    C0_center.jpg files written by an external process -
-                    unconfirmed whether an equivalent exists for BART's
-                    three cameras). rts2ng's own /api/db/images + /preview
-                    endpoints (STATUS.md task 7) could drive a real
-                    "latest image per camera" panel without depending on
-                    that external generator at all - a reasonable
-                    fast-follow, not done here.
+                    Latest-image-per-camera thumbnails, below, come from
+                    rts2ng's own /api/db/images + /preview endpoints
+                    (STATUS.md task 7) - tonight's image list, most recent
+                    per camera by exposureStart - rather than depending on
+                    an external per-camera generator the way D50's page's
+                    sibling C0_small.jpg/C0_center.jpg files do (never
+                    confirmed to exist for BART's three cameras).
                 -->
             </div>
         </div>
@@ -384,6 +409,53 @@
             }
         }
 
+        // Most recent archived image per camera, via rts2ng's own
+        // task-7 endpoints - current-night is DB-free (just today's
+        // date), the images list is a real query so this runs on its
+        // own slower interval (updateImages below), not every 10s
+        // alongside device status.
+        async function updateLatestImages() {
+            try {
+                const nightRes = await fetch(`${API_BASE}/db/current-night`);
+                if (!nightRes.ok)
+                    return;
+                const { year, month, day } = await nightRes.json();
+
+                const imgRes = await fetch(`${API_BASE}/db/images?year=${year}&month=${month}&day=${day}`);
+                if (!imgRes.ok)
+                    return;
+                const images = await imgRes.json();
+
+                const latest = {};
+                for (const im of images) {
+                    if (!latest[im.cameraName] || im.exposureStart > latest[im.cameraName].exposureStart)
+                        latest[im.cameraName] = im;
+                }
+
+                for (const cam of ['C1', 'C2', 'C3']) {
+                    const el = document.getElementById('latest-' + cam.toLowerCase());
+                    const im = latest[cam];
+                    el.innerHTML = '';
+                    if (im && im.previewPath) {
+                        // Built via DOM APIs, not an innerHTML template
+                        // string with inline onclick="..." - a target
+                        // name containing a quote would otherwise break
+                        // out of the interpolated JS string literal.
+                        const previewUrl = '/images/preview/' + im.previewPath.split('/').map(encodeURIComponent).join('/');
+                        const img = document.createElement('img');
+                        img.src = previewUrl + '?ps=220';
+                        img.alt = cam + ' latest';
+                        img.addEventListener('click', () => openLightbox(previewUrl + '?ps=1024', `${cam} - ${im.targetName || ''}`));
+                        el.appendChild(img);
+                    } else {
+                        el.innerHTML = '<div class="thumb-noimg">no image tonight</div>';
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to update latest images:', e);
+            }
+        }
+
         function updateWeatherStatus() {
             const div = document.getElementById('weather-status');
             const rain = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
@@ -489,10 +561,14 @@
         async function init() {
             await updateStatus();
             reloadWebcams();
+            updateLatestImages();
         }
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
         setInterval(reloadWebcams, 15000);
+        // Its own, slower interval - a real DB query, not a free
+        // device-status read like updateStatus().
+        setInterval(() => updateLatestImages().catch(e => console.error(e)), 60000);
 
         window.addEventListener('load', init);
     </script>
