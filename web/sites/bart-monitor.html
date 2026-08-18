@@ -74,33 +74,42 @@
 
         .cam-box h4 { margin: 0 0 4px 0; }
 
+        .latest-image {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+            margin-bottom: 4px;
+        }
+
         .latest-image img {
             width: 100%;
-            max-width: 220px;
-            height: 160px;
+            height: 140px;
             object-fit: contain;
             background: #111;
             border: 1px solid #ccc;
             cursor: pointer;
-            margin-bottom: 4px;
         }
 
-        .latest-image .thumb-noimg {
-            width: 100%;
-            max-width: 220px;
-            height: 160px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: #e5e7eb;
-            color: #666;
-            margin: 0 auto 4px auto;
-            font-size: 11px;
+        .latest-image-info {
+            font-size: 10px;
+            color: #555;
+            white-space: pre-line;
+            text-align: left;
+            margin: 0 0 6px 0;
+        }
+
+        .webcam-panel {
+            /* Placed as a direct grid child of .container (not nested
+               inside .left-panel, which is fixed at 320px) so it can
+               span the full page width - lets all four cameras sit on
+               one row on a wide screen instead of being squeezed into
+               the sidebar's 2-column layout. */
+            grid-column: 1 / -1;
         }
 
         .webcam-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 10px;
         }
 
@@ -112,8 +121,8 @@
         }
 
         .webcam-column img {
-            width: 320px;
-            height: 240px;
+            width: 100%;
+            aspect-ratio: 4 / 3;
             object-fit: contain;
             background: #000;
             border: 1px solid #ccc;
@@ -174,9 +183,12 @@
 
         @media (max-width: 1200px) {
             .container { grid-template-columns: 1fr; }
-            .webcam-grid { grid-template-columns: 1fr; }
             .cam-grid { grid-template-columns: 1fr; }
-            .webcam-column img { width: 100%; max-width: 320px; }
+            .webcam-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 600px) {
+            .webcam-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -210,41 +222,6 @@
                 <button onclick="reloadWebcams()">reload webcams</button>
                 <button onclick="openArchive()">image archive</button>
             </div>
-
-            <div class="webcam-panel">
-                <h3 style="margin-top: 0;">Webcams</h3>
-                <div class="webcam-grid">
-                    <div class="webcam-column">
-                        <div>AllSky</div>
-                        <img id="webcam-allsky" src="/webcam/allsky_small.jpg" alt="AllSky" onclick="openLightbox('/webcam/allsky.jpg', 'AllSky - Full View')">
-                    </div>
-                    <div class="webcam-column">
-                        <div>Sentinel</div>
-                        <img id="webcam-sentinel" src="/webcam/sentinel-sum1_av_small.jpg" alt="Sentinel" onclick="openLightbox('/webcam/sentinel-sum1_av.png', 'Sentinel - Full View')">
-                    </div>
-                    <div class="webcam-column">
-                        <div>Webcam 3</div>
-                        <img id="webcam-3" src="/webcam/webcam3_small.jpg" alt="Webcam 3" onclick="openLightbox('/webcam/webcam3.jpg', 'Webcam 3 - Full View')">
-                    </div>
-                    <div class="webcam-column">
-                        <div>Webcam 4</div>
-                        <img id="webcam-4" src="/webcam/webcam4_small.jpg" alt="Webcam 4" onclick="openLightbox('/webcam/webcam4.jpg', 'Webcam 4 - Full View')">
-                    </div>
-                </div>
-                <!--
-                    Only the periodically-refreshed snapshot files under
-                    /webcam/ are wired up here (confirmed real and live via
-                    their mtimes - sum1_av* is a dead 2012-2013 leftover,
-                    sentinel-sum1_av* is what's actually updating). The
-                    numbered /webcam2, /webcam3, /webcam4 proxy paths in
-                    Apache's vhost point at the cameras' own web UIs
-                    (ports 81/82/83 on 10.0.0.52) for a live MJPEG-style
-                    feed, like D50's page offers via a "Live"/"1min avg"
-                    toggle - not wired up here since their exact stream
-                    URL convention wasn't confirmed. Add a toggle the same
-                    way D50's switchWebcamMode() does once known.
-                -->
-            </div>
         </div>
 
         <div class="right-panel">
@@ -253,30 +230,77 @@
                 <div class="cam-grid">
                     <div class="cam-box">
                         <h4>C1</h4>
-                        <div id="latest-c1" class="latest-image"></div>
+                        <div class="latest-image">
+                            <img id="c1-image" src="C1_small.jpg" alt="C1" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
+                            <img id="c1-center" src="C1_center.jpg" alt="C1 center" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
+                        </div>
+                        <div id="c1-info" class="latest-image-info"></div>
                         <div id="c1-status"></div>
                     </div>
                     <div class="cam-box">
                         <h4>C2</h4>
-                        <div id="latest-c2" class="latest-image"></div>
+                        <div class="latest-image">
+                            <img id="c2-image" src="C2_small.jpg" alt="C2" onclick="openLightbox('C2_full.jpg', 'C2 - Full Image')">
+                            <img id="c2-center" src="C2_center.jpg" alt="C2 center" onclick="openLightbox('C2_full.jpg', 'C2 - Full Image')">
+                        </div>
+                        <div id="c2-info" class="latest-image-info"></div>
                         <div id="c2-status"></div>
                     </div>
                     <div class="cam-box">
                         <h4>C3</h4>
-                        <div id="latest-c3" class="latest-image"></div>
+                        <div class="latest-image">
+                            <img id="c3-image" src="C3_small.jpg" alt="C3" onclick="openLightbox('C3_full.jpg', 'C3 - Full Image')">
+                            <img id="c3-center" src="C3_center.jpg" alt="C3 center" onclick="openLightbox('C3_full.jpg', 'C3 - Full Image')">
+                        </div>
+                        <div id="c3-info" class="latest-image-info"></div>
                         <div id="c3-status"></div>
                     </div>
                 </div>
                 <!--
-                    Latest-image-per-camera thumbnails, below, come from
-                    rts2ng's own /api/db/images + /preview endpoints
-                    (STATUS.md task 7) - tonight's image list, most recent
-                    per camera by exposureStart - rather than depending on
-                    an external per-camera generator the way D50's page's
-                    sibling C0_small.jpg/C0_center.jpg files do (never
-                    confirmed to exist for BART's three cameras).
+                    C{n}_small.jpg/C{n}_center.jpg/C{n}_full.jpg/
+                    C{n}_info.txt are written by the same external
+                    dark+flat-correction process D50's monitor.html
+                    already relies on, as sibling files in this page's
+                    own directory - confirmed present for C1/C2/C3 on
+                    lascaux (not the rts2ng /preview endpoint's raw,
+                    uncorrected output this page used before).
                 -->
             </div>
+        </div>
+
+        <div class="webcam-panel">
+            <h3 style="margin-top: 0;">Webcams</h3>
+            <div class="webcam-grid">
+                <div class="webcam-column">
+                    <div>AllSky</div>
+                    <img id="webcam-allsky" src="/webcam/allsky_small.jpg" alt="AllSky" onclick="openLightbox('/webcam/allsky.jpg', 'AllSky - Full View')">
+                </div>
+                <div class="webcam-column">
+                    <div>Sentinel</div>
+                    <img id="webcam-sentinel" src="/webcam/sentinel-sum1_av_small.jpg" alt="Sentinel" onclick="openLightbox('/webcam/sentinel-sum1_av.png', 'Sentinel - Full View')">
+                </div>
+                <div class="webcam-column">
+                    <div>Webcam 3</div>
+                    <img id="webcam-3" src="/webcam/webcam3_small.jpg" alt="Webcam 3" onclick="openLightbox('/webcam/webcam3.jpg', 'Webcam 3 - Full View')">
+                </div>
+                <div class="webcam-column">
+                    <div>Webcam 4</div>
+                    <img id="webcam-4" src="/webcam/webcam4_small.jpg" alt="Webcam 4" onclick="openLightbox('/webcam/webcam4.jpg', 'Webcam 4 - Full View')">
+                </div>
+            </div>
+            <!--
+                Only the periodically-refreshed snapshot files under
+                /webcam/ are wired up here (confirmed real and live via
+                their mtimes - sum1_av* is a dead 2012-2013 leftover,
+                sentinel-sum1_av* is what's actually updating). The
+                numbered /webcam2, /webcam3, /webcam4 proxy paths in
+                Apache's vhost point at the cameras' own web UIs
+                (ports 81/82/83 on 10.0.0.52) for a live MJPEG-style
+                feed, like D50's page offers via a "Live"/"1min avg"
+                toggle - not wired up here since their exact stream
+                URL convention wasn't confirmed. Add a toggle the same
+                way D50's switchWebcamMode() does once known.
+            -->
         </div>
     </div>
 
@@ -409,50 +433,29 @@
             }
         }
 
-        // Most recent archived image per camera, via rts2ng's own
-        // task-7 endpoints - current-night is DB-free (just today's
-        // date), the images list is a real query so this runs on its
-        // own slower interval (updateImages below), not every 10s
-        // alongside device status.
-        async function updateLatestImages() {
-            try {
-                const nightRes = await fetch(`${API_BASE}/db/current-night`);
-                if (!nightRes.ok)
-                    return;
-                const { year, month, day } = await nightRes.json();
+        // Latest per-camera image, via the same external dark+flat
+        // correction process D50's monitor.html reads (C{n}_small.jpg/
+        // C{n}_center.jpg/C{n}_info.txt, sibling files in this page's own
+        // directory - confirmed present on lascaux, not guessed). Plain
+        // cache-busted <img> reloads, no rts2ng API/DB call involved at
+        // all - much simpler than, and better quality than, driving this
+        // off the raw /preview endpoint.
+        function reloadCameraImages() {
+            const t = new Date().getTime();
+            for (const cam of ['C1', 'C2', 'C3']) {
+                const c = cam.toLowerCase();
+                document.getElementById(c + '-image').src = `${cam}_small.jpg?t=${t}`;
+                document.getElementById(c + '-center').src = `${cam}_center.jpg?t=${t}`;
+            }
+        }
 
-                const imgRes = await fetch(`${API_BASE}/db/images?year=${year}&month=${month}&day=${day}`);
-                if (!imgRes.ok)
-                    return;
-                const images = await imgRes.json();
-
-                const latest = {};
-                for (const im of images) {
-                    if (!latest[im.cameraName] || im.exposureStart > latest[im.cameraName].exposureStart)
-                        latest[im.cameraName] = im;
-                }
-
-                for (const cam of ['C1', 'C2', 'C3']) {
-                    const el = document.getElementById('latest-' + cam.toLowerCase());
-                    const im = latest[cam];
-                    el.innerHTML = '';
-                    if (im && im.previewPath) {
-                        // Built via DOM APIs, not an innerHTML template
-                        // string with inline onclick="..." - a target
-                        // name containing a quote would otherwise break
-                        // out of the interpolated JS string literal.
-                        const previewUrl = '/images/preview/' + im.previewPath.split('/').map(encodeURIComponent).join('/');
-                        const img = document.createElement('img');
-                        img.src = previewUrl + '?ps=220';
-                        img.alt = cam + ' latest';
-                        img.addEventListener('click', () => openLightbox(previewUrl + '?ps=1024', `${cam} - ${im.targetName || ''}`));
-                        el.appendChild(img);
-                    } else {
-                        el.innerHTML = '<div class="thumb-noimg">no image tonight</div>';
-                    }
-                }
-            } catch (e) {
-                console.error('Failed to update latest images:', e);
+        function updateImageInfo() {
+            for (const cam of ['C1', 'C2', 'C3']) {
+                const el = document.getElementById(cam.toLowerCase() + '-info');
+                fetch(`${cam}_info.txt`)
+                    .then(res => res.text())
+                    .then(text => { el.textContent = text.trim(); })
+                    .catch(() => { el.textContent = ''; });
             }
         }
 
@@ -561,14 +564,14 @@
         async function init() {
             await updateStatus();
             reloadWebcams();
-            updateLatestImages();
+            reloadCameraImages();
+            updateImageInfo();
         }
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
         setInterval(reloadWebcams, 15000);
-        // Its own, slower interval - a real DB query, not a free
-        // device-status read like updateStatus().
-        setInterval(() => updateLatestImages().catch(e => console.error(e)), 60000);
+        setInterval(reloadCameraImages, 15000);
+        setInterval(updateImageInfo, 15000);
 
         window.addEventListener('load', init);
     </script>
