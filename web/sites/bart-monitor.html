@@ -25,6 +25,12 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
+            /* Otherwise a grid item stretches to match the row height -
+               cam-panel is much taller now (three stacked camera rows),
+               and the title/status column should stay its own natural
+               height rather than growing to fill that, per the ask that
+               it read as a compact vertical block beside the cameras. */
+            align-self: start;
         }
 
         .status-panel, .image-panel, .webcam-panel, .cam-panel {
@@ -59,16 +65,20 @@
 
         .temp-table th { background-color: #ddd; font-weight: bold; }
 
-        .cam-panel, .webcam-panel {
-            /* Both placed as direct grid children of .container (not
-               nested inside .left-panel, which is fixed at 320px) so
-               they can span the full page width. */
+        .webcam-panel {
+            /* Placed as a direct grid child of .container (not nested
+               inside .left-panel, which is fixed at 320px) so it can
+               span the full page width, below the title/status +
+               cameras row. */
             grid-column: 1 / -1;
         }
 
-        /* One row per camera, stacked vertically, rather than three
-           cameras side by side - each row gets the full page width to
-           show its two images large. */
+        /* cam-panel stays beside .left-panel (title/status), occupying
+           .container's second (flexible) column - not full width, per
+           the user's ask to keep the title/status sidebar next to the
+           cameras rather than above them. One row per camera within
+           it, stacked vertically, each row showing its two images
+           large. */
         .cam-grid {
             display: flex;
             flex-direction: column;
