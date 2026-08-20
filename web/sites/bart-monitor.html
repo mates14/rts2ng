@@ -530,19 +530,23 @@
         // via curl on lascaux itself (200, multipart/x-mixed-replace)
         // for allsky/3/4, which Apache proxies same-origin from
         // 10.0.0.52:81/82/83 (see /etc/apache2/sites-available on
-        // lascaux). Sentinel is a different camera on a different host
-        // entirely (sentinel.asu.cas.cz) and its stream URL embeds HTTP
-        // basic-auth credentials directly - that's how classic's own
-        // index-old.php/fr_webcam_live.php already did it, but modern
-        // browsers block <img>/fetch subresource loads whose URL has
-        // embedded userinfo (Chrome's "embedded credentials" mitigation),
-        // so this one likely won't load as-is despite the URL itself
-        // being correct. Fixing that for real needs an Apache
-        // ProxyPass on lascaux (mod_proxy, unlike browsers, is fine with
-        // credentials in the backend URL) so this page can hit it
-        // same-origin and credential-free, like the other three already
-        // do - not done here since it's a production Apache config
-        // change, not a page change.
+        // lascaux).
+        //
+        // Sentinel has no `live` entry - it's a different camera on a
+        // different host (sentinel.asu.cas.cz), and getting its stream
+        // proxied same-origin turned out to be a dead end: even past
+        // the embedded-credentials issue (browsers block <img>/fetch
+        // loads whose URL has userinfo in it) and past mod_proxy not
+        // actually forwarding those embedded credentials to the backend
+        // on its own (needs an explicit RequestHeader), its firmware
+        // sends a malformed response header (a literal space before the
+        // colon, e.g. "SID : 0") that Apache 2.4.68's stricter RFC 7230
+        // header-name validation refuses to relay at all (AH02429) -
+        // confirmed live on lascaux, not guessed. The only server-side
+        // fix is `HttpProtocolOptions Unsafe`, which relaxes that
+        // validation for the whole vhost (not just this path) - not
+        // worth it for one camera's live view when the site's own call
+        // was to just leave Sentinel on its regular snapshot instead.
         const WEBCAMS = [
             { id: 'allsky', label: 'AllSky',
                 small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
@@ -550,8 +554,7 @@
                 live: '/webcam2/?action=stream' },
             { id: 'sentinel', label: 'Sentinel',
                 small: 'sentinel-sum1_av_small.jpg', smallEq: 'sentinel-sum1_av_eq_small.jpg',
-                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png',
-                live: 'http://juzr:x@sentinel.asu.cas.cz/video.mjpg' },
+                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png' },
             { id: '3', label: 'Webcam 3',
                 small: 'webcam3_small.jpg', smallEq: 'webcam3_eq_small.jpg',
                 full: 'webcam3.jpg', fullEq: 'webcam3_eq.jpg',
@@ -824,7 +827,11 @@
             const t = new Date().getTime();
             for (const cam of WEBCAMS) {
                 const el = document.getElementById(`webcam-${cam.id}`);
-                if (liveWebcams) {
+                // cam.live is absent for cameras with no working stream
+                // (currently just Sentinel) - falls through to the
+                // regular snapshot below rather than requesting a URL
+                // known not to work.
+                if (liveWebcams && cam.live) {
                     // Setting an <img> to the same src it already has
                     // is a no-op in every browser (no re-fetch), so
                     // this 15s-interval call doesn't reconnect the
@@ -838,7 +845,7 @@
         }
 
         function webcamFullSrc(cam) {
-            if (liveWebcams)
+            if (liveWebcams && cam.live)
                 return cam.live;
             return `/webcam/${equalizeWebcams ? cam.fullEq : cam.full}`;
         }
@@ -1363,7 +1370,7 @@
             document.getElementById('live-btn').classList.toggle('active', liveWebcams);
             for (const cam of WEBCAMS) {
                 document.getElementById(`webcam-${cam.id}`).addEventListener('click', () => {
-                    openLightbox(webcamFullSrc(cam), `${cam.label} - Full View`, liveWebcams);
+                    openLightbox(webcamFullSrc(cam), `${cam.label} - Full View`, liveWebcams && !!cam.live);
                 });
             }
             document.getElementById('sky-canvas').addEventListener('click', openSkyLightbox);
