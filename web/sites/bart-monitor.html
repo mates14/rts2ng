@@ -193,6 +193,15 @@
         .state-buttons .state-standby { border-color: #b8860b; color: #b8860b; }
         .state-buttons .state-off { border-color: var(--warn); color: var(--warn); }
 
+        #equalize-btn {
+            cursor: pointer;
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+        }
+        #equalize-btn.active { background: var(--good); color: white; border-color: var(--good); }
+
         .status-value { margin: 3px 0; }
 
         .error { color: var(--error); font-weight: bold; }
@@ -374,37 +383,45 @@
         </div>
 
         <div class="webcam-panel">
-            <h3 style="margin-top: 0;">Webcams</h3>
+            <h3 style="margin-top: 0;">
+                Webcams
+                <button id="equalize-btn" onclick="toggleEqualize()" style="font-size: 11px; padding: 3px 8px; margin-left: 10px;">equalize</button>
+            </h3>
             <div class="webcam-grid">
                 <div class="webcam-column">
                     <div>AllSky</div>
-                    <img id="webcam-allsky" src="/webcam/allsky_small.jpg" alt="AllSky" onclick="openLightbox('/webcam/allsky.jpg', 'AllSky - Full View')">
+                    <img id="webcam-allsky" data-cam="allsky" alt="AllSky">
                 </div>
                 <div class="webcam-column">
                     <div>Sentinel</div>
-                    <img id="webcam-sentinel" src="/webcam/sentinel-sum1_av_small.jpg" alt="Sentinel" onclick="openLightbox('/webcam/sentinel-sum1_av.png', 'Sentinel - Full View')">
+                    <img id="webcam-sentinel" data-cam="sentinel" alt="Sentinel">
                 </div>
                 <div class="webcam-column">
                     <div>Webcam 3</div>
-                    <img id="webcam-3" src="/webcam/webcam3_small.jpg" alt="Webcam 3" onclick="openLightbox('/webcam/webcam3.jpg', 'Webcam 3 - Full View')">
+                    <img id="webcam-3" data-cam="3" alt="Webcam 3">
                 </div>
                 <div class="webcam-column">
                     <div>Webcam 4</div>
-                    <img id="webcam-4" src="/webcam/webcam4_small.jpg" alt="Webcam 4" onclick="openLightbox('/webcam/webcam4.jpg', 'Webcam 4 - Full View')">
+                    <img id="webcam-4" data-cam="4" alt="Webcam 4">
                 </div>
             </div>
             <!--
                 Only the periodically-refreshed snapshot files under
-                /webcam/ are wired up here (confirmed real and live via
-                their mtimes - sum1_av* is a dead 2012-2013 leftover,
-                sentinel-sum1_av* is what's actually updating). The
-                numbered /webcam2, /webcam3, /webcam4 proxy paths in
+                /webcam/ are wired up here (proxied by Apache to a
+                separate LAN host, 10.0.0.52, not this box's own
+                filesystem - confirmed live via Last-Modified headers on
+                the real public URLs, since a same-named local directory
+                on lascaux itself turned out to be a stale, unrelated
+                2010-2011 leftover). Plain and "_eq" (locally
+                equalized-contrast) variants both confirmed present for
+                all four cameras, toggled via the WEBCAMS table below.
+                The numbered /webcam2, /webcam3, /webcam4 proxy paths in
                 Apache's vhost point at the cameras' own web UIs
                 (ports 81/82/83 on 10.0.0.52) for a live MJPEG-style
                 feed, like D50's page offers via a "Live"/"1min avg"
                 toggle - not wired up here since their exact stream
-                URL convention wasn't confirmed. Add a toggle the same
-                way D50's switchWebcamMode() does once known.
+                URL convention wasn't confirmed yet (can wait, per the
+                site's own feedback).
             -->
         </div>
     </div>
@@ -416,10 +433,30 @@
         // embeds no credentials at all.
         const API_BASE = '/images/api';
 
+        // Plain vs "_eq" (locally contrast-equalized) filenames for each
+        // webcam - both variants confirmed live on the real site (curl
+        // -I, fresh Last-Modified) rather than guessed from the naming
+        // of the one dead local leftover directory that looked similar.
+        const WEBCAMS = [
+            { id: 'allsky', label: 'AllSky',
+                small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
+                full: 'allsky.jpg', fullEq: 'allsky_eq.jpg' },
+            { id: 'sentinel', label: 'Sentinel',
+                small: 'sentinel-sum1_av_small.jpg', smallEq: 'sentinel-sum1_av_eq_small.jpg',
+                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png' },
+            { id: '3', label: 'Webcam 3',
+                small: 'webcam3_small.jpg', smallEq: 'webcam3_eq_small.jpg',
+                full: 'webcam3.jpg', fullEq: 'webcam3_eq.jpg' },
+            { id: '4', label: 'Webcam 4',
+                small: 'webcam4_small.jpg', smallEq: 'webcam4_eq_small.jpg',
+                full: 'webcam4.jpg', fullEq: 'webcam4_eq.jpg' },
+        ];
+
         let systemData = {
             EXEC: {}, T0: {}, DOME: {},
             C1: {}, C2: {}, C3: {},
             F1: {}, F2: {}, F3: {},
+            IMGP: {},
             WEATHER_BART: {}, RAIN_BART: {}, CLOUD: {},
             DISK_BART: {}, BARTUPS: {}
         };
@@ -486,6 +523,29 @@
             }));
         }
 
+        // rts2ng's /api/getall,get always send a selection value (e.g.
+        // "filter") as its bare numeric index (see jsonvalue.cpp) -
+        // fetched once per camera via /api/selval and cached, not
+        // refetched every poll, since the option list only changes if
+        // the wheel itself is reconfigured. Left null (and retried next
+        // poll) if the device wasn't reachable yet.
+        const filterNames = { C1: null, C2: null, C3: null };
+
+        async function loadFilterNames() {
+            await Promise.all(['C1', 'C2', 'C3'].map(async cam => {
+                if (filterNames[cam])
+                    return;
+                try {
+                    const res = await fetch(`${API_BASE}/selval?d=${cam}&n=filter`);
+                    if (!res.ok)
+                        return;
+                    filterNames[cam] = await res.json();
+                } catch (e) {
+                    console.error(`Failed to fetch filter names for ${cam}:`, e);
+                }
+            }));
+        }
+
         function updateTelescopeStatus() {
             const div = document.getElementById('telescope-status');
             const currentName = safeValue(systemData.EXEC, 'current_name', '');
@@ -522,16 +582,25 @@
                 const object = safeValue(d, 'OBJECT', '');
                 const exposure = safeValue(d, 'exposure', NaN);
                 const exposureEnd = safeValue(d, 'exposure_end', NaN);
-                const filter = safeValue(d, 'filter', 'N/A');
+                const filterIdx = safeValue(d, 'filter', -1);
+                const names = filterNames[cam];
+                const filter = (names && names[filterIdx] !== undefined) ? names[filterIdx] : (filterIdx === -1 ? 'N/A' : filterIdx);
                 const ccdTemp = safeValue(d, 'CCD_TEMP', NaN);
                 const focName = safeValue(d, 'focuser', '');
                 const focPos = safeValue(systemData[focName] || {}, 'FOC_POS', 'N/A');
+                // IMGP's fwhm_C1/C2/C3 are only populated by the image
+                // processing pipeline when it's actually running - per
+                // the site's own report, that stopped happening at some
+                // point. No fallback beyond N/A here; fixing the pipeline
+                // itself is out of this page's scope.
+                const fwhm = safeValue(systemData.IMGP, `fwhm_${cam}`, NaN);
 
                 div.innerHTML = `
                     <div class="status-value">${object || '(idle)'}</div>
                     <div class="status-value">Exp: ${fmt(exposure)} s</div>
                     <div class="status-value">Ends: ${formatTime(exposureEnd)}</div>
                     <div class="status-value">Filter: ${filter}</div>
+                    <div class="status-value">FWHM: ${fmt(fwhm, 2)}</div>
                     <div class="status-value">CCD: ${fmt(ccdTemp, 1)}&deg;C</div>
                     <div class="status-value">Focus (${focName}): ${focPos}</div>
                 `;
@@ -609,7 +678,7 @@
         }
 
         async function updateStatus() {
-            await updateAllDeviceData();
+            await Promise.all([updateAllDeviceData(), loadFilterNames()]);
             updateTelescopeStatus();
             updateDomeStatus();
             updateCameraStatus();
@@ -618,22 +687,40 @@
 
         function reloadWebcams() {
             const t = new Date().getTime();
-            document.getElementById('webcam-allsky').src = `/webcam/allsky_small.jpg?t=${t}`;
-            document.getElementById('webcam-sentinel').src = `/webcam/sentinel-sum1_av_small.jpg?t=${t}`;
-            document.getElementById('webcam-3').src = `/webcam/webcam3_small.jpg?t=${t}`;
-            document.getElementById('webcam-4').src = `/webcam/webcam4_small.jpg?t=${t}`;
+            for (const cam of WEBCAMS) {
+                const src = equalizeWebcams ? cam.smallEq : cam.small;
+                document.getElementById(`webcam-${cam.id}`).src = `/webcam/${src}?t=${t}`;
+            }
+        }
+
+        function webcamFullSrc(cam) {
+            return `/webcam/${equalizeWebcams ? cam.fullEq : cam.full}`;
+        }
+
+        function toggleEqualize() {
+            equalizeWebcams = !equalizeWebcams;
+            setCookie('equalizeWebcams', equalizeWebcams ? '1' : '0');
+            document.getElementById('equalize-btn').classList.toggle('active', equalizeWebcams);
+            reloadWebcams();
         }
 
         function openArchive() {
             window.open('/images/', '_blank');
         }
 
-        // Preferences (dark/compact mode), persisted via cookie so they
-        // survive a reload - this page has no backend of its own to
-        // store per-user settings in.
+        // Preferences (dark/compact/equalize mode), persisted via cookie
+        // so they survive a reload - this page has no backend of its
+        // own to store per-user settings in.
         function setCookie(name, value) {
             document.cookie = `${name}=${value};path=/;max-age=31536000;samesite=lax`;
         }
+
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return match ? match[1] : null;
+        }
+
+        let equalizeWebcams = getCookie('equalizeWebcams') === '1';
 
         function toggleDarkMode() {
             const on = document.body.classList.toggle('dark');
@@ -711,6 +798,13 @@
         });
 
         async function init() {
+            document.getElementById('equalize-btn').classList.toggle('active', equalizeWebcams);
+            for (const cam of WEBCAMS) {
+                document.getElementById(`webcam-${cam.id}`).addEventListener('click', () => {
+                    openLightbox(webcamFullSrc(cam), `${cam.label} - Full View`);
+                });
+            }
+
             await updateStatus();
             reloadWebcams();
             reloadCameraImages();

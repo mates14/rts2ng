@@ -1362,6 +1362,40 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 				os << "}";
 			}
 		}
+		else if (!strcmp (url, "/api/selval"))
+		{
+			// Ported from classic's api.cpp sendSelection() - the option
+			// names for a RTS2_VALUE_SELECTION value, in index order, so
+			// a frontend can show e.g. a filter's name instead of its
+			// raw numeric index (jsonValue() only ever sends the index -
+			// see jsonvalue.cpp's doc comment).
+			const char *device = getParam (connection, "d", "");
+			const char *variable = getParam (connection, "n", "");
+			if (device[0] == '\0' || variable[0] == '\0')
+				throw ApiError ("missing d or n parameter");
+
+			Connection *conn = findDeviceConnection (device);
+			if (conn == nullptr)
+				throw ApiError ("cannot find device with given name");
+
+			Value *v = conn->getValue (variable);
+			if (v == nullptr)
+				throw ApiError ("cannot find variable");
+			if (v->getValueBaseType () != RTS2_VALUE_SELECTION)
+				throw ApiError ("variable is not a selection value");
+
+			ValueSelection *sel = (ValueSelection *) v;
+			os << "[";
+			bool first = true;
+			for (std::vector <SelVal>::iterator iter = sel->selBegin (); iter != sel->selEnd (); iter++)
+			{
+				if (!first)
+					os << ",";
+				first = false;
+				jsonString (iter->name.c_str (), os);
+			}
+			os << "]";
+		}
 		else if (!strcmp (url, "/api/set") || !strcmp (url, "/api/inc") || !strcmp (url, "/api/dec"))
 		{
 			const char *device = getParam (connection, "d", "");
