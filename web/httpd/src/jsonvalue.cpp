@@ -181,5 +181,14 @@ void rts2web::sendConnectionValues (Connection *conn, std::ostringstream &os)
 		first = false;
 		jsonValue (*iter, os);
 	}
+	// The connection's raw RTS2 protocol state (rts2_status_t bitmask -
+	// SERVERD_ONOFF_MASK etc, status.h) is not itself a named Value, so
+	// it wouldn't otherwise appear here at all - a frontend showing
+	// e.g. centrald's on/standby/off needs it. Matches classic's own
+	// per-device JSON, which always includes this alongside the value
+	// list (lib/rts2json/jsonvalue.cpp in the old tree).
+	if (!first)
+		os << ",";
+	os << "\"state\":" << conn->getState ();
 	os << "}";
 }

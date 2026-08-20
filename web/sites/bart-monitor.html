@@ -213,6 +213,7 @@
         .error { color: var(--error); font-weight: bold; }
         .good { color: var(--good); }
         .warn { color: var(--warn); }
+        .standby { color: #b8860b; font-weight: bold; }
 
         hr { margin: 10px 0; border: 1px solid var(--border); }
 
@@ -239,9 +240,17 @@
             flex-direction: column;
         }
 
+        /* title/info take their natural height; the image flexes to
+           fill whatever's left of the 90vh box and object-fit:contain
+           scales it to fill that - up as well as down, so a small
+           source image (e.g. the webcam thumbnails) still fills the
+           box instead of showing at its native (smaller) size. */
+        .lightbox-title, .lightbox-info { flex: 0 0 auto; }
         .lightbox img {
-            max-width: 100%;
-            max-height: 80%;
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
             border: 2px solid white;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
@@ -262,9 +271,18 @@
         body.compact .logo { padding: 4px; }
         body.compact .logo h1 { font-size: 16px; margin: 2px 0; }
         body.compact .logo h2 { font-size: 11px; margin: 2px 0; }
-        body.compact .cam-grid { gap: 4px; }
-        body.compact .cam-box { padding: 4px; gap: 6px; }
-        body.compact .latest-image { gap: 4px; margin-bottom: 2px; }
+        /* Three cameras side by side as columns instead of stacked
+           rows - each column is narrow (one square image's width) but
+           tall, which uses the available width far better than a wide
+           short row does once everything else has already been
+           shrunk. Mirrors the same column layout the narrow-viewport
+           breakpoint below already uses, for the same reason (a
+           .cam-box that's taller than it is wide wants its label and
+           the two images stacked, not side by side). */
+        body.compact .cam-grid { flex-direction: row; gap: 4px; }
+        body.compact .cam-box { flex: 1; flex-direction: column; align-items: stretch; padding: 4px; gap: 4px; }
+        body.compact .cam-box h4 { writing-mode: horizontal-tb; transform: none; text-align: center; }
+        body.compact .latest-image { grid-template-columns: 1fr; gap: 4px; margin-bottom: 2px; }
         body.compact .latest-image img { height: 140px; }
         body.compact .latest-image-info { font-size: 9px; }
         body.compact .webcam-grid { gap: 4px; }
@@ -317,7 +335,7 @@
                     <h2>Ondřejov Observatory</h2>
                 </div>
                 <div id="status-info">
-                    <div class="status-value"><strong>Status:</strong> <span id="loading">Loading...</span></div>
+                    <div class="status-value"><strong>Status:</strong> <span id="serverd-status">...</span></div>
                     <div id="telescope-status"></div>
                     <div id="dome-status"></div>
                     <hr>
@@ -485,6 +503,7 @@
         ];
 
         let systemData = {
+            centrald: {},
             EXEC: {}, T0: {}, DOME: {},
             C1: {}, C2: {}, C3: {},
             F1: {}, F2: {}, F3: {},
@@ -705,12 +724,35 @@
                 <div class="status-value"><strong>Disk free:</strong> ${diskFreeGB} GB</div>
                 <div class="status-value"><strong>UPS:</strong> <span class="${onBattery ? 'error' : 'good'}">${upsStatus}</span> - load ${fmt(upsLoad)}%, charge ${fmt(upsCharge, 0)}%</div>
             `;
+        }
 
-            document.getElementById('loading').style.display = 'none';
+        // centrald's on/standby/off - not a named Value, it's the raw
+        // RTS2 protocol state (SERVERD_ONOFF_MASK, status.h), which
+        // rts2-httpd now includes as a "state" field alongside every
+        // device's values (sendConnectionValues() in jsonvalue.cpp).
+        // Deliberately just this, not weather - "Weather allows
+        // opening" under Dome already covers that.
+        function updateServerdStatus() {
+            const el = document.getElementById('serverd-status');
+            const state = safeValue(systemData.centrald, 'state', NaN);
+            if (Number.isNaN(state)) {
+                el.textContent = 'N/A';
+                el.className = '';
+                return;
+            }
+            const [text, cls] = {
+                0x000: ['ON', 'good'],
+                0x010: ['STANDBY', 'standby'],
+                0x020: ['OFF (soft)', 'error'],
+                0x030: ['OFF (hard)', 'error'],
+            }[state & 0x030] || ['N/A', ''];
+            el.textContent = text;
+            el.className = cls;
         }
 
         async function updateStatus() {
             await Promise.all([updateAllDeviceData(), loadFilterNames()]);
+            updateServerdStatus();
             updateTelescopeStatus();
             updateDomeStatus();
             updateCameraStatus();
@@ -758,6 +800,12 @@
         function toggleDarkMode() {
             const on = document.body.classList.toggle('dark');
             setCookie('darkMode', on ? '1' : '0');
+            // The sky chart picks its palette off body.dark itself
+            // (see drawSkyChart()) rather than the --variables
+            // everything else uses, so it needs an explicit redraw -
+            // otherwise it'd sit with the wrong palette until the next
+            // 10s status poll happens to redraw it anyway.
+            drawSkyChart();
         }
 
         function toggleCompactMode() {
@@ -897,8 +945,24 @@
             const W = canvas.width, Hh = canvas.height;
             const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 2 - 14;
 
+            // Space itself doesn't care about the page's light/dark
+            // toggle, but a medium-blue "daytime sky" with green
+            // "ground" below the horizon reads far better in light
+            // mode than the near-black/brown pair that's right for
+            // dark mode - so, unlike the rest of the page, this picks
+            // its palette off body.dark explicitly rather than off the
+            // --variables (which are deliberately not touched here).
+            const dark = document.body.classList.contains('dark');
+            const skyBg = dark ? '#05070d' : '#4a7fc9';
+            const groundFill = dark ? 'rgba(80,50,20,0.55)' : 'rgba(45,110,55,0.85)';
+            const groundStroke = dark ? '#c08030' : '#2d5a26';
+            const gridColor = dark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.25)';
+            const labelColor = dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.7)';
+            const starColor = dark ? '#fff' : '#182449';
+            const haloColor = 'rgba(255,255,255,0.9)';
+
             ctx.clearRect(0, 0, W, Hh);
-            ctx.fillStyle = '#05070d';
+            ctx.fillStyle = skyBg;
             ctx.beginPath();
             ctx.arc(cx, cy, R, 0, 2 * Math.PI);
             ctx.fill();
@@ -930,10 +994,10 @@
                     if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
                 });
                 ctx.closePath();
-                ctx.fillStyle = 'rgba(80,50,20,0.55)';
+                ctx.fillStyle = groundFill;
                 ctx.fill('evenodd');
 
-                ctx.strokeStyle = '#c08030';
+                ctx.strokeStyle = groundStroke;
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 horizonInfo.horizon.forEach(([az, alt], i) => {
@@ -945,8 +1009,8 @@
             }
 
             // Alt grid (0/30/60) + az grid (N/E/S/W spokes)
-            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.strokeStyle = gridColor;
+            ctx.fillStyle = labelColor;
             ctx.font = '10px sans-serif';
             ctx.lineWidth = 1;
             for (const alt of [0, 30, 60]) {
@@ -966,7 +1030,7 @@
 
             // Stars
             if (starCatalog) {
-                ctx.fillStyle = '#fff';
+                ctx.fillStyle = starColor;
                 for (const [ra, dec, mag] of starCatalog) {
                     const hz = equToHrz(lst - ra, dec, lat);
                     if (hz.alt <= 0)
@@ -977,6 +1041,35 @@
                     ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
                     ctx.fill();
                 }
+            } else {
+                // Silent by default otherwise (see loadStarCatalog()'s
+                // console.error) - surfaced here too since a fetch
+                // failure (e.g. bsc-stars.json not deployed alongside
+                // this page) would otherwise just look like "no stars
+                // tonight" with no indication anything's wrong.
+                ctx.fillStyle = labelColor;
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('stars unavailable', cx, cy + R - 10);
+                ctx.textAlign = 'left';
+            }
+
+            // Marker halo: strokes the given path twice - a wide light
+            // stroke first, then the real color on top - so telescope/
+            // target markers stay visible regardless of what's under
+            // them (dark space or the light-mode blue sky/green
+            // ground).
+            function strokeWithHalo(color, width, pathFn) {
+                ctx.lineWidth = width + 2.5;
+                ctx.strokeStyle = haloColor;
+                ctx.beginPath();
+                pathFn();
+                ctx.stroke();
+                ctx.lineWidth = width;
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                pathFn();
+                ctx.stroke();
             }
 
             // Sun & Moon
@@ -995,9 +1088,12 @@
             if (moonHz.alt > 0) {
                 const p = project(moonHz.alt, moonHz.az);
                 ctx.fillStyle = '#c8c8d0';
+                ctx.strokeStyle = haloColor;
+                ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
                 ctx.fill();
+                ctx.stroke();
             }
 
             // Telescope position - T0's TEL_ is already Alt/Az (libnova
@@ -1008,12 +1104,10 @@
             const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
             if (!Number.isNaN(telAlt) && !Number.isNaN(telAz)) {
                 const p = project(telAlt, telAz);
-                ctx.strokeStyle = '#ff4040';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
-                ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
-                ctx.stroke();
+                strokeWithHalo('#ff4040', 2, () => {
+                    ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
+                    ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
+                });
             }
 
             // Target position - T0's TAR (RA/Dec with corrections
@@ -1022,11 +1116,9 @@
             if (!Number.isNaN(tarRa) && !Number.isNaN(tarDec)) {
                 const tarHz = equToHrz(lst - tarRa, tarDec, lat);
                 const p = project(tarHz.alt, tarHz.az);
-                ctx.strokeStyle = '#4090ff';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
-                ctx.stroke();
+                strokeWithHalo('#4090ff', 2, () => {
+                    ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
+                });
             }
         }
 
