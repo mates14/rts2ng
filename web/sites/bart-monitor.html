@@ -5,11 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Small Binocular Telescope - Ondřejov Observatory</title>
     <style>
+        :root {
+            --bg: #f5f5f5;
+            --panel-bg: #ffffff;
+            --border: #ccc;
+            --text: #000000;
+            --text-muted: #555;
+            --th-bg: #ddd;
+            --logo-bg: #e8e8e8;
+            --good: #008b00;
+            --warn: #8B0000;
+            --error: #ff0000;
+        }
+
+        body.dark {
+            --bg: #1a1a1a;
+            --panel-bg: #262626;
+            --border: #444;
+            --text: #ddd;
+            --text-muted: #aaa;
+            --th-bg: #333;
+            --logo-bg: #2f2f2f;
+            --good: #4fd14f;
+            --warn: #ff8a8a;
+            --error: #ff5c5c;
+        }
+
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 10px;
-            background-color: #f5f5f5;
+            background-color: var(--bg);
+            color: var(--text);
             font-size: 12px;
         }
 
@@ -34,17 +61,17 @@
         }
 
         .status-panel, .image-panel, .webcam-panel, .cam-panel {
-            background: white;
-            border: 1px solid #ccc;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
             padding: 10px;
             border-radius: 5px;
         }
 
         .logo {
             text-align: center;
-            border: 2px solid #000;
+            border: 2px solid var(--text);
             padding: 10px;
-            background-color: #e8e8e8;
+            background-color: var(--logo-bg);
         }
 
         .logo h1 { margin: 5px 0; font-size: 24px; }
@@ -58,12 +85,12 @@
         }
 
         .temp-table th, .temp-table td {
-            border: 1px solid #000;
+            border: 1px solid var(--border);
             padding: 3px;
             text-align: center;
         }
 
-        .temp-table th { background-color: #ddd; font-weight: bold; }
+        .temp-table th { background-color: var(--th-bg); font-weight: bold; }
 
         .webcam-panel {
             /* Placed as a direct grid child of .container (not nested
@@ -86,7 +113,7 @@
         }
 
         .cam-box {
-            border: 1px solid #ccc;
+            border: 1px solid var(--border);
             border-radius: 4px;
             padding: 8px;
             display: flex;
@@ -115,13 +142,13 @@
             height: 480px;
             object-fit: contain;
             background: #111;
-            border: 1px solid #ccc;
+            border: 1px solid var(--border);
             cursor: pointer;
         }
 
         .latest-image-info {
             font-size: 10px;
-            color: #555;
+            color: var(--text-muted);
             white-space: pre-line;
             text-align: left;
             margin: 0 0 6px 0;
@@ -145,7 +172,7 @@
             aspect-ratio: 4 / 3;
             object-fit: contain;
             background: #000;
-            border: 1px solid #ccc;
+            border: 1px solid var(--border);
             cursor: pointer;
         }
 
@@ -155,15 +182,24 @@
             padding: 5px 10px;
             font-size: 11px;
             cursor: pointer;
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
         }
+
+        .state-buttons button { font-weight: bold; padding: 8px 10px; font-size: 12px; flex: 1; }
+        .state-buttons .state-on { border-color: var(--good); color: var(--good); }
+        .state-buttons .state-standby { border-color: #b8860b; color: #b8860b; }
+        .state-buttons .state-off { border-color: var(--warn); color: var(--warn); }
 
         .status-value { margin: 3px 0; }
 
-        .error { color: #ff0000; font-weight: bold; }
-        .good { color: #008b00; }
-        .warn { color: #8B0000; }
+        .error { color: var(--error); font-weight: bold; }
+        .good { color: var(--good); }
+        .warn { color: var(--warn); }
 
-        hr { margin: 10px 0; border: 1px solid #ccc; }
+        hr { margin: 10px 0; border: 1px solid var(--border); }
 
         /* Lightbox */
         .lightbox {
@@ -201,6 +237,28 @@
         .lightbox-close:hover { color: #ccc; }
         .lightbox-info { color: white; font-size: 14px; margin-top: 10px; text-align: center; }
 
+        /* Compact mode (toggled via JS, persisted in a cookie, not tied
+           to viewport width like the media queries below) - squeezes
+           the page enough to fit on one screen for a quick glance,
+           per the ask that the default layout is "děsně roztahaný". */
+        body.compact .container { max-width: none; gap: 6px; }
+        body.compact .status-panel, body.compact .image-panel,
+        body.compact .webcam-panel, body.compact .cam-panel { padding: 5px; }
+        body.compact .logo { padding: 4px; }
+        body.compact .logo h1 { font-size: 16px; margin: 2px 0; }
+        body.compact .logo h2 { font-size: 11px; margin: 2px 0; }
+        body.compact .cam-grid { gap: 4px; }
+        body.compact .cam-box { padding: 4px; gap: 6px; }
+        body.compact .latest-image { gap: 4px; margin-bottom: 2px; }
+        body.compact .latest-image img { height: 140px; }
+        body.compact .latest-image-info { font-size: 9px; }
+        body.compact .webcam-grid { gap: 4px; }
+        body.compact .webcam-column img { aspect-ratio: 16 / 9; }
+        body.compact .temp-table { margin: 4px 0; }
+        body.compact .control-buttons { gap: 3px; }
+        body.compact .control-buttons button { padding: 3px 6px; }
+        body.compact hr { margin: 4px 0; }
+
         @media (max-width: 1200px) {
             .container { grid-template-columns: 1fr; }
             .webcam-grid { grid-template-columns: repeat(2, 1fr); }
@@ -217,6 +275,16 @@
     </style>
 </head>
 <body>
+    <script>
+        // Applied inline, before the rest of the page renders, so
+        // dark/compact mode doesn't flash the default theme first.
+        (function () {
+            const m = document.cookie.match(/(?:^|; )darkMode=1(?:;|$)/);
+            if (m) document.body.classList.add('dark');
+            const c = document.cookie.match(/(?:^|; )compactMode=1(?:;|$)/);
+            if (c) document.body.classList.add('compact');
+        })();
+    </script>
     <div id="lightbox" class="lightbox">
         <div class="lightbox-content">
             <span class="lightbox-close">&times;</span>
@@ -242,9 +310,18 @@
                 </div>
             </div>
 
+            <div class="control-buttons state-buttons">
+                <button class="state-on" onclick="switchState('on')">ON</button>
+                <button class="state-standby" onclick="switchState('standby')">STANDBY</button>
+                <button class="state-off" onclick="switchState('off')">OFF</button>
+            </div>
+            <div id="state-msg" class="status-value"></div>
+
             <div class="control-buttons">
                 <button onclick="reloadWebcams()">reload webcams</button>
                 <button onclick="openArchive()">image archive</button>
+                <button onclick="toggleDarkMode()">dark mode</button>
+                <button onclick="toggleCompactMode()">compact mode</button>
             </div>
         </div>
 
@@ -549,6 +626,50 @@
 
         function openArchive() {
             window.open('/images/', '_blank');
+        }
+
+        // Preferences (dark/compact mode), persisted via cookie so they
+        // survive a reload - this page has no backend of its own to
+        // store per-user settings in.
+        function setCookie(name, value) {
+            document.cookie = `${name}=${value};path=/;max-age=31536000;samesite=lax`;
+        }
+
+        function toggleDarkMode() {
+            const on = document.body.classList.toggle('dark');
+            setCookie('darkMode', on ? '1' : '0');
+        }
+
+        function toggleCompactMode() {
+            const on = document.body.classList.toggle('compact');
+            setCookie('compactMode', on ? '1' : '0');
+        }
+
+        // System-wide on/standby/off - queues centrald's raw "on"/
+        // "standby"/"off" text command via /api/switchstate (see
+        // Block::queAllCentralds() server-side). Fire-and-forget, same
+        // as /api/set - the next 10s status poll will reflect the new
+        // state once devices ack it.
+        async function switchState(state) {
+            const msg = document.getElementById('state-msg');
+            msg.textContent = `sending ${state}...`;
+            msg.className = 'status-value';
+            try {
+                const res = await fetch(`${API_BASE}/switchstate?state=${state}`);
+                if (res.status === 401) {
+                    msg.textContent = 'not authorized (login required for this action)';
+                    msg.className = 'status-value error';
+                    return;
+                }
+                if (!res.ok)
+                    throw new Error(`${res.status}`);
+                msg.textContent = `sent "${state}" to centrald`;
+                msg.className = 'status-value good';
+                updateStatus().catch(e => console.error(e));
+            } catch (e) {
+                msg.textContent = `failed to send "${state}": ${e}`;
+                msg.className = 'status-value error';
+            }
         }
 
         // Lightbox

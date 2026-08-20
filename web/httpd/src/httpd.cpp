@@ -1401,6 +1401,28 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 
 			sendConnectionValues (conn, os);
 		}
+		else if (!strcmp (url, "/api/switchstate"))
+		{
+			// System-wide on/standby/off, the same "on"/"standby"/"off"
+			// raw text commands classic's nmonitor.cpp sends to every
+			// centrald connection (see Block::queAllCentralds()) - this
+			// is not a per-device value write, it flips the whole
+			// system's state, so gate it on "centrald" rather than a
+			// specific device name.
+			const char *newState = getParam (connection, "state", "");
+			if (strcmp (newState, "on") && strcmp (newState, "standby") && strcmp (newState, "off"))
+				throw ApiError ("state must be one of on, standby, off");
+
+			std::string authError;
+			if (!checkWriteAuth (connection, "centrald", authError))
+				return sendUnauthorized (connection, authError.c_str ());
+
+			queAllCentralds (newState);
+
+			os << "{\"state\":";
+			jsonString (newState, os);
+			os << "}";
+		}
 		else if (!strcmp (url, "/api/messages"))
 		{
 			os << "[";
