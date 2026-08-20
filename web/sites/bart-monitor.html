@@ -60,7 +60,7 @@
             align-self: start;
         }
 
-        .status-panel, .image-panel, .webcam-panel, .cam-panel {
+        .status-panel, .image-panel, .webcam-panel, .cam-panel, .legacy-panel {
             background: var(--panel-bg);
             border: 1px solid var(--border);
             padding: 10px;
@@ -92,13 +92,15 @@
 
         .temp-table th { background-color: var(--th-bg); font-weight: bold; }
 
-        .webcam-panel {
+        .webcam-panel, .legacy-panel {
             /* Placed as a direct grid child of .container (not nested
                inside .left-panel, which is fixed at 320px) so it can
                span the full page width, below the title/status +
                cameras row. */
             grid-column: 1 / -1;
         }
+
+        .legacy-panel img { max-width: 100%; border: 1px solid var(--border); }
 
         /* cam-panel stays beside .left-panel (title/status), occupying
            .container's second (flexible) column - not full width, per
@@ -252,7 +254,7 @@
            per the ask that the default layout is "děsně roztahaný". */
         body.compact .container { max-width: none; gap: 6px; }
         body.compact .status-panel, body.compact .image-panel,
-        body.compact .webcam-panel, body.compact .cam-panel { padding: 5px; }
+        body.compact .webcam-panel, body.compact .cam-panel, body.compact .legacy-panel { padding: 5px; }
         body.compact .logo { padding: 4px; }
         body.compact .logo h1 { font-size: 16px; margin: 2px 0; }
         body.compact .logo h2 { font-size: 11px; margin: 2px 0; }
@@ -423,6 +425,27 @@
                 URL convention wasn't confirmed yet (can wait, per the
                 site's own feedback).
             -->
+        </div>
+
+        <div class="legacy-panel">
+            <h3 style="margin-top: 0;">Cloud graph (legacy)</h3>
+            <!--
+                TODO(sky/cloud graphs): this is classic httpd's own
+                /images/graph/DEVICE/VALUE/... plotter, still running on
+                D50 (lascaux50) and embedded here as-is rather than
+                ported - it reads from Postgres recvals/records_* tables
+                that classic's httpd populates via a value-change hook,
+                and on lascaux's own DB those tables are empty (nothing
+                has been recording history there), so porting the
+                renderer alone onto rts2ng wouldn't show anything yet.
+                Once D50 itself moves onto rts2ng, this needs a real
+                implementation - and per the site's own suggestion, this
+                is a good opportunity to replace these old GraphicsMagick
+                JPEGs with something more modern (e.g. a client-side
+                canvas/SVG plot fed by a plain JSON time-series
+                endpoint) rather than a straight port.
+            -->
+            <img src="https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=900&h=220&t=l&lw=2&sh=1" alt="Cloud sensor temperature difference, last 8h (from D50)">
         </div>
     </div>
 
