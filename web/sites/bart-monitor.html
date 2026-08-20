@@ -180,7 +180,7 @@
 
         /* Space is dark regardless of page theme, so this doesn't
            follow --panel-bg/--text like everything else. */
-        #sky-canvas { width: 100%; height: auto; aspect-ratio: 1; border-radius: 50%; }
+        #sky-canvas { width: 100%; height: auto; aspect-ratio: 1; border-radius: 50%; cursor: pointer; }
 
         .control-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
 
@@ -199,14 +199,14 @@
         .state-buttons .state-standby { border-color: #b8860b; color: #b8860b; }
         .state-buttons .state-off { border-color: var(--warn); color: var(--warn); }
 
-        #equalize-btn {
+        #equalize-btn, #live-btn {
             cursor: pointer;
             background: var(--panel-bg);
             color: var(--text);
             border: 1px solid var(--border);
             border-radius: 3px;
         }
-        #equalize-btn.active { background: var(--good); color: white; border-color: var(--good); }
+        #equalize-btn.active, #live-btn.active { background: var(--good); color: white; border-color: var(--good); }
 
         .status-value { margin: 3px 0; }
 
@@ -258,12 +258,18 @@
             justify-content: center;
             overflow: hidden;
         }
-        .lightbox img {
+        .lightbox img, .lightbox-img-wrap canvas {
             display: block;
             object-fit: contain;
             border: 2px solid white;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
         }
+
+        /* Enlarged sky chart shown in the lightbox - round, like the
+           sidebar one, and hidden by default since the lightbox is
+           normally showing #lightbox-img instead (openLightbox() vs.
+           openSkyLightbox() toggle which of the two is visible). */
+        #lightbox-sky-canvas { display: none; border-radius: 50%; }
 
         .lightbox-title { color: white; font-size: 18px; font-weight: bold; margin-bottom: 10px; text-align: center; }
         .lightbox-close { position: absolute; top: 10px; right: 25px; color: white; font-size: 35px; font-weight: bold; cursor: pointer; user-select: none; }
@@ -308,18 +314,35 @@
         body.compact .control-buttons button { padding: 3px 6px; }
         body.compact hr { margin: 4px 0; }
 
+        /* Non-compact mode reflows at these breakpoints. Compact mode
+           gets its own, much narrower ones below - it's already dense
+           (small fonts, side-by-side camera columns), so it doesn't
+           need to fall back to the same "stack everything, one column"
+           phone layout non-compact mode needs at 1200/700px. Without
+           this split, a window taking up half of a wide (e.g. 2560px)
+           screen - easily still >1200 real CSS px, or squeezed further
+           by OS display scaling - dropped straight into that stacked
+           layout even in compact mode, defeating the point of turning
+           compact mode on in the first place. */
         @media (max-width: 1200px) {
-            .container { grid-template-columns: 1fr; }
-            .webcam-grid { grid-template-columns: repeat(2, 1fr); }
-            .latest-image img { height: 320px; }
+            body:not(.compact) .container { grid-template-columns: 1fr; }
+            body:not(.compact) .webcam-grid { grid-template-columns: repeat(2, 1fr); }
+            body:not(.compact) .latest-image img { height: 320px; }
         }
 
         @media (max-width: 700px) {
-            .webcam-grid { grid-template-columns: 1fr; }
-            .cam-box { flex-direction: column; align-items: stretch; }
-            .cam-box h4 { writing-mode: horizontal-tb; transform: none; text-align: center; }
-            .latest-image { grid-template-columns: 1fr; }
-            .latest-image img { height: 220px; }
+            body:not(.compact) .webcam-grid { grid-template-columns: 1fr; }
+            body:not(.compact) .cam-box { flex-direction: column; align-items: stretch; }
+            body:not(.compact) .cam-box h4 { writing-mode: horizontal-tb; transform: none; text-align: center; }
+            body:not(.compact) .latest-image { grid-template-columns: 1fr; }
+            body:not(.compact) .latest-image img { height: 220px; }
+
+            body.compact .webcam-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 480px) {
+            body.compact .container { grid-template-columns: 1fr; }
+            body.compact .webcam-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -340,6 +363,7 @@
             <div class="lightbox-title" id="lightbox-title"></div>
             <div class="lightbox-img-wrap">
                 <img id="lightbox-img" src="" alt="Lightbox Image">
+                <canvas id="lightbox-sky-canvas"></canvas>
             </div>
             <div class="lightbox-info" id="lightbox-info">Click anywhere to close</div>
         </div>
@@ -363,7 +387,7 @@
 
             <div class="status-panel" style="text-align: center;">
                 <h3 style="margin: 0 0 6px 0;">Sky</h3>
-                <canvas id="sky-canvas" width="300" height="300"></canvas>
+                <canvas id="sky-canvas" width="300" height="300" title="Click to enlarge"></canvas>
             </div>
 
             <div class="control-buttons state-buttons">
@@ -433,6 +457,7 @@
             <h3 style="margin-top: 0;">
                 Webcams
                 <button id="equalize-btn" onclick="toggleEqualize()" style="font-size: 11px; padding: 3px 8px; margin-left: 10px;">equalize</button>
+                <button id="live-btn" onclick="toggleLive()" style="font-size: 11px; padding: 3px 8px; margin-left: 6px;">live</button>
             </h3>
             <div class="webcam-grid">
                 <div class="webcam-column">
@@ -453,22 +478,17 @@
                 </div>
             </div>
             <!--
-                Only the periodically-refreshed snapshot files under
-                /webcam/ are wired up here (proxied by Apache to a
-                separate LAN host, 10.0.0.52, not this box's own
-                filesystem - confirmed live via Last-Modified headers on
-                the real public URLs, since a same-named local directory
-                on lascaux itself turned out to be a stale, unrelated
-                2010-2011 leftover). Plain and "_eq" (locally
-                equalized-contrast) variants both confirmed present for
-                all four cameras, toggled via the WEBCAMS table below.
-                The numbered /webcam2, /webcam3, /webcam4 proxy paths in
-                Apache's vhost point at the cameras' own web UIs
-                (ports 81/82/83 on 10.0.0.52) for a live MJPEG-style
-                feed, like D50's page offers via a "Live"/"1min avg"
-                toggle - not wired up here since their exact stream
-                URL convention wasn't confirmed yet (can wait, per the
-                site's own feedback).
+                Periodically-refreshed snapshot files under /webcam/
+                (proxied by Apache to a separate LAN host, 10.0.0.52,
+                not this box's own filesystem - confirmed live via
+                Last-Modified headers on the real public URLs, since a
+                same-named local directory on lascaux itself turned out
+                to be a stale, unrelated 2010-2011 leftover). Plain and
+                "_eq" (locally equalized-contrast) variants both
+                confirmed present for all four cameras, toggled via the
+                WEBCAMS table below - and the "live" button switches all
+                four to their live MJPEG feed instead (see WEBCAMS'
+                `live` field and toggleLive()).
             -->
         </div>
 
@@ -505,19 +525,41 @@
         // webcam - both variants confirmed live on the real site (curl
         // -I, fresh Last-Modified) rather than guessed from the naming
         // of the one dead local leftover directory that looked similar.
+        // `live` is each camera's raw MJPEG multipart stream (mjpg-
+        // streamer's own ?action=stream convention) - confirmed live
+        // via curl on lascaux itself (200, multipart/x-mixed-replace)
+        // for allsky/3/4, which Apache proxies same-origin from
+        // 10.0.0.52:81/82/83 (see /etc/apache2/sites-available on
+        // lascaux). Sentinel is a different camera on a different host
+        // entirely (sentinel.asu.cas.cz) and its stream URL embeds HTTP
+        // basic-auth credentials directly - that's how classic's own
+        // index-old.php/fr_webcam_live.php already did it, but modern
+        // browsers block <img>/fetch subresource loads whose URL has
+        // embedded userinfo (Chrome's "embedded credentials" mitigation),
+        // so this one likely won't load as-is despite the URL itself
+        // being correct. Fixing that for real needs an Apache
+        // ProxyPass on lascaux (mod_proxy, unlike browsers, is fine with
+        // credentials in the backend URL) so this page can hit it
+        // same-origin and credential-free, like the other three already
+        // do - not done here since it's a production Apache config
+        // change, not a page change.
         const WEBCAMS = [
             { id: 'allsky', label: 'AllSky',
                 small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
-                full: 'allsky.jpg', fullEq: 'allsky_eq.jpg' },
+                full: 'allsky.jpg', fullEq: 'allsky_eq.jpg',
+                live: '/webcam2/?action=stream' },
             { id: 'sentinel', label: 'Sentinel',
                 small: 'sentinel-sum1_av_small.jpg', smallEq: 'sentinel-sum1_av_eq_small.jpg',
-                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png' },
+                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png',
+                live: 'http://juzr:x@sentinel.asu.cas.cz/video.mjpg' },
             { id: '3', label: 'Webcam 3',
                 small: 'webcam3_small.jpg', smallEq: 'webcam3_eq_small.jpg',
-                full: 'webcam3.jpg', fullEq: 'webcam3_eq.jpg' },
+                full: 'webcam3.jpg', fullEq: 'webcam3_eq.jpg',
+                live: '/webcam3/?action=stream' },
             { id: '4', label: 'Webcam 4',
                 small: 'webcam4_small.jpg', smallEq: 'webcam4_eq_small.jpg',
-                full: 'webcam4.jpg', fullEq: 'webcam4_eq.jpg' },
+                full: 'webcam4.jpg', fullEq: 'webcam4_eq.jpg',
+                live: '/webcam4/?action=stream' },
         ];
 
         let systemData = {
@@ -781,12 +823,23 @@
         function reloadWebcams() {
             const t = new Date().getTime();
             for (const cam of WEBCAMS) {
-                const src = equalizeWebcams ? cam.smallEq : cam.small;
-                document.getElementById(`webcam-${cam.id}`).src = `/webcam/${src}?t=${t}`;
+                const el = document.getElementById(`webcam-${cam.id}`);
+                if (liveWebcams) {
+                    // Setting an <img> to the same src it already has
+                    // is a no-op in every browser (no re-fetch), so
+                    // this 15s-interval call doesn't reconnect the
+                    // stream - only the initial toggleLive() switch does.
+                    el.src = cam.live;
+                } else {
+                    const src = equalizeWebcams ? cam.smallEq : cam.small;
+                    el.src = `/webcam/${src}?t=${t}`;
+                }
             }
         }
 
         function webcamFullSrc(cam) {
+            if (liveWebcams)
+                return cam.live;
             return `/webcam/${equalizeWebcams ? cam.fullEq : cam.full}`;
         }
 
@@ -835,6 +888,14 @@
         }
 
         let equalizeWebcams = getCookie('equalizeWebcams') === '1';
+        let liveWebcams = getCookie('liveWebcams') === '1';
+
+        function toggleLive() {
+            liveWebcams = !liveWebcams;
+            setCookie('liveWebcams', liveWebcams ? '1' : '0');
+            document.getElementById('live-btn').classList.toggle('active', liveWebcams);
+            reloadWebcams();
+        }
 
         function toggleDarkMode() {
             const on = document.body.classList.toggle('dark');
@@ -977,10 +1038,47 @@
             return { alt, az };
         }
 
+        // Overridable from the page's own URL (?starsmag=&starssize=&s=)
+        // - the old GraphicsMagick chart this replaces was itself a
+        // standalone image endpoint with its own query-string params
+        // (.../images/current?s=600&starssize=2.5&starsmag=5); this
+        // page has no equivalent separate endpoint, so the same idea is
+        // applied to the whole page's URL instead, affecting both the
+        // small sidebar chart and the enlarged lightbox view.
+        const skyChartParams = (() => {
+            const p = new URLSearchParams(location.search);
+            const out = {};
+            const mag = parseFloat(p.get('starsmag'));
+            const size = parseFloat(p.get('starssize'));
+            if (!Number.isNaN(mag)) out.starsMag = mag;
+            if (!Number.isNaN(size)) out.starSize = size;
+            return out;
+        })();
+
+        // Enlarged view's target resolution (?s=) - clamped since this
+        // sizes an actual <canvas>, unlike a server-rendered image.
+        const bigSkySize = (() => {
+            const s = parseInt(new URLSearchParams(location.search).get('s'), 10);
+            return Number.isFinite(s) && s > 0 ? Math.min(s, 2000) : 800;
+        })();
+
         function drawSkyChart() {
-            const canvas = document.getElementById('sky-canvas');
+            renderSkyChart(document.getElementById('sky-canvas'), skyChartParams);
+        }
+
+        // canvas: element to draw into - its own width/height attributes
+        // set the render resolution (#sky-canvas is a fixed 300x300;
+        // the enlarged lightbox view sizes itself to the available
+        // space, see openSkyLightbox()).
+        // opts.starsMag: limiting magnitude - stars dimmer than this
+        // aren't drawn. bsc-stars.json is itself pre-filtered to
+        // mag<=5.5, so this can only show FEWER stars than default, not
+        // more - there's no dimmer data past what's already loaded.
+        // opts.starSize: multiplies each star's dot radius.
+        function renderSkyChart(canvas, opts) {
             if (!canvas || !horizonInfo)
                 return;
+            const { starsMag = 5.5, starSize = 1.0 } = opts || {};
             const ctx = canvas.getContext('2d');
             const W = canvas.width, Hh = canvas.height;
             const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 2 - 14;
@@ -1072,11 +1170,13 @@
             if (starCatalog) {
                 ctx.fillStyle = starColor;
                 for (const [ra, dec, mag] of starCatalog) {
+                    if (mag > starsMag)
+                        continue;
                     const hz = equToHrz(lst - ra, dec, lat);
                     if (hz.alt <= 0)
                         continue;
                     const p = project(hz.alt, hz.az);
-                    const size = Math.max(0.4, (5.5 - mag) * 0.5);
+                    const size = Math.max(0.4, (starsMag - mag) * 0.5) * starSize;
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
                     ctx.fill();
@@ -1182,21 +1282,30 @@
         }
         document.getElementById('lightbox-img').addEventListener('load', fitLightboxImage);
 
-        function openLightbox(imageSrc, title) {
+        // noRefresh: for a live MJPEG stream URL, the periodic cache-
+        // busting below would force it to drop and reconnect every
+        // 15s (the "same src -> no reload" trick reloadWebcams() relies
+        // on only works if the src genuinely doesn't change) - skip it
+        // for those, the stream already updates itself continuously.
+        function openLightbox(imageSrc, title, noRefresh) {
             const lightbox = document.getElementById('lightbox');
             const img = document.getElementById('lightbox-img');
-            const t = new Date().getTime();
-            const sep = imageSrc.includes('?') ? '&' : '?';
-            img.src = `${imageSrc}${sep}t=${t}`;
+            document.getElementById('lightbox-sky-canvas').style.display = 'none';
+            img.style.display = '';
+            img.src = noRefresh ? imageSrc : `${imageSrc}${imageSrc.includes('?') ? '&' : '?'}t=${new Date().getTime()}`;
             document.getElementById('lightbox-title').textContent = title;
-            document.getElementById('lightbox-info').textContent = 'Click anywhere to close - auto-refreshing every 15s';
+            document.getElementById('lightbox-info').textContent = noRefresh
+                ? 'Click anywhere to close'
+                : 'Click anywhere to close - auto-refreshing every 15s';
             lightbox.style.display = 'block';
 
-            lightboxInterval = setInterval(() => {
-                const nt = new Date().getTime();
-                const base = img.src.split(/[?&]t=/)[0];
-                img.src = `${base}${base.includes('?') ? '&' : '?'}t=${nt}`;
-            }, 15000);
+            if (!noRefresh) {
+                lightboxInterval = setInterval(() => {
+                    const nt = new Date().getTime();
+                    const base = img.src.split(/[?&]t=/)[0];
+                    img.src = `${base}${base.includes('?') ? '&' : '?'}t=${nt}`;
+                }, 15000);
+            }
         }
 
         function closeLightbox() {
@@ -1205,6 +1314,38 @@
                 clearInterval(lightboxInterval);
                 lightboxInterval = null;
             }
+        }
+
+        // Enlarged sky chart - reuses the same lightbox as the webcam/
+        // camera images, but shows #lightbox-sky-canvas instead of
+        // #lightbox-img (see openLightbox(), which hides the canvas
+        // again whenever it opens instead). Re-rendered every 10s so
+        // the telescope/target markers keep moving while it's open,
+        // rather than freezing at whatever position it had when opened.
+        function openSkyLightbox() {
+            const lightbox = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            const canvas = document.getElementById('lightbox-sky-canvas');
+            img.style.display = 'none';
+            canvas.style.display = 'block';
+            document.getElementById('lightbox-title').textContent = 'Sky chart';
+            document.getElementById('lightbox-info').textContent =
+                'Click anywhere to close - tweak with ?starsmag=&starssize=&s= in the page URL';
+            // Must be shown before measuring the wrap below - it's
+            // display:none up to this point, so getBoundingClientRect()
+            // on anything inside it would still read 0x0.
+            lightbox.style.display = 'block';
+
+            const wrap = document.querySelector('.lightbox-img-wrap');
+            const rect = wrap.getBoundingClientRect();
+            const size = Math.round(Math.min(bigSkySize, rect.width, rect.height));
+            canvas.width = size;
+            canvas.height = size;
+            canvas.style.width = size + 'px';
+            canvas.style.height = size + 'px';
+
+            renderSkyChart(canvas, skyChartParams);
+            lightboxInterval = setInterval(() => renderSkyChart(canvas, skyChartParams), 10000);
         }
 
         document.getElementById('lightbox').addEventListener('click', function (e) {
@@ -1219,11 +1360,13 @@
 
         async function init() {
             document.getElementById('equalize-btn').classList.toggle('active', equalizeWebcams);
+            document.getElementById('live-btn').classList.toggle('active', liveWebcams);
             for (const cam of WEBCAMS) {
                 document.getElementById(`webcam-${cam.id}`).addEventListener('click', () => {
-                    openLightbox(webcamFullSrc(cam), `${cam.label} - Full View`);
+                    openLightbox(webcamFullSrc(cam), `${cam.label} - Full View`, liveWebcams);
                 });
             }
+            document.getElementById('sky-canvas').addEventListener('click', openSkyLightbox);
 
             await Promise.all([loadHorizonInfo(), loadStarCatalog()]);
             await updateStatus();
