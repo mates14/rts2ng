@@ -240,17 +240,26 @@
             flex-direction: column;
         }
 
-        /* title/info take their natural height; the image flexes to
-           fill whatever's left of the 90vh box and object-fit:contain
-           scales it to fill that - up as well as down, so a small
-           source image (e.g. the webcam thumbnails) still fills the
-           box instead of showing at its native (smaller) size. */
+        /* title/info take their natural height; the wrap flexes to
+           fill whatever's left of the 90vh box, and centers the image
+           inside it. The image's own box is sized in JS to its actual
+           fitted (scaled up or down) pixel size - not just left at
+           100%/100% of the wrap - so the border/shadow hug the visible
+           picture instead of an invisible, letterboxed square around
+           it (which read as "transparent and buggy" for anything not
+           already the wrap's exact aspect ratio). */
         .lightbox-title, .lightbox-info { flex: 0 0 auto; }
-        .lightbox img {
+        .lightbox-img-wrap {
             flex: 1 1 auto;
             min-height: 0;
             width: 100%;
-            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .lightbox img {
+            display: block;
             object-fit: contain;
             border: 2px solid white;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
@@ -283,7 +292,14 @@
         body.compact .cam-box { flex: 1; flex-direction: column; align-items: stretch; padding: 4px; gap: 4px; }
         body.compact .cam-box h4 { writing-mode: horizontal-tb; transform: none; text-align: center; }
         body.compact .latest-image { grid-template-columns: 1fr; gap: 4px; margin-bottom: 2px; }
-        body.compact .latest-image img { height: 140px; }
+        /* Unlike everywhere else, compact mode doesn't fix a height
+           here - two square images plus a few lines of text is exactly
+           what compact mode is squeezing for, so let each image size
+           itself off the column's width instead of being letterboxed
+           (black padding) into a fixed box. C3's 3:2 webcam naturally
+           ends up a different height than C1/C2's square ones - fine,
+           per the site's own call. */
+        body.compact .latest-image img { height: auto; object-fit: initial; background: none; }
         body.compact .latest-image-info { font-size: 9px; }
         body.compact .webcam-grid { gap: 4px; }
         body.compact .webcam-column img { aspect-ratio: 16 / 9; }
@@ -322,7 +338,9 @@
         <div class="lightbox-content">
             <span class="lightbox-close">&times;</span>
             <div class="lightbox-title" id="lightbox-title"></div>
-            <img id="lightbox-img" src="" alt="Lightbox Image">
+            <div class="lightbox-img-wrap">
+                <img id="lightbox-img" src="" alt="Lightbox Image">
+            </div>
             <div class="lightbox-info" id="lightbox-info">Click anywhere to close</div>
         </div>
     </div>
@@ -472,7 +490,7 @@
                 canvas/SVG plot fed by a plain JSON time-series
                 endpoint) rather than a straight port.
             -->
-            <img src="https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=900&h=220&t=l&lw=2&sh=1" alt="Cloud sensor temperature difference, last 8h (from D50)">
+            <img id="cloud-graph-img" src="https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=900&h=220&t=l&lw=2&sh=1" alt="Cloud sensor temperature difference, last 8h (from D50)">
         </div>
     </div>
 
@@ -772,6 +790,27 @@
             return `/webcam/${equalizeWebcams ? cam.fullEq : cam.full}`;
         }
 
+        // D50's graph server renders a fixed-pixel JPEG, not a vector
+        // image - CSS max-width alone can shrink it but never widen it
+        // past whatever w= it was requested at. Request it at the
+        // panel's actual width instead, so it genuinely fills the
+        // viewport rather than sitting at a fixed 900px.
+        function reloadCloudGraph() {
+            const panel = document.querySelector('.legacy-panel');
+            const img = document.getElementById('cloud-graph-img');
+            if (!panel || !img)
+                return;
+            const w = Math.max(400, Math.round(panel.clientWidth - 24));
+            const t = new Date().getTime();
+            img.src = `https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=${w}&h=220&t=l&lw=2&sh=1&_=${t}`;
+        }
+
+        let cloudGraphResizeTimer = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(cloudGraphResizeTimer);
+            cloudGraphResizeTimer = setTimeout(reloadCloudGraph, 300);
+        });
+
         function toggleEqualize() {
             equalizeWebcams = !equalizeWebcams;
             setCookie('equalizeWebcams', equalizeWebcams ? '1' : '0');
@@ -811,6 +850,7 @@
         function toggleCompactMode() {
             const on = document.body.classList.toggle('compact');
             setCookie('compactMode', on ? '1' : '0');
+            reloadCloudGraph();
         }
 
         // System-wide on/standby/off - queues centrald's raw "on"/
@@ -1125,6 +1165,23 @@
         // Lightbox
         let lightboxInterval = null;
 
+        // Sizes the image to its actual fitted (scaled up or down)
+        // pixel size within .lightbox-img-wrap, rather than leaving it
+        // at width:100%/height:100% (which would letterbox smaller/
+        // differently-shaped images inside an invisible box the
+        // border/shadow would still wrap around).
+        function fitLightboxImage() {
+            const wrap = document.querySelector('.lightbox-img-wrap');
+            const img = document.getElementById('lightbox-img');
+            if (!wrap || !img.naturalWidth || !img.naturalHeight)
+                return;
+            const rect = wrap.getBoundingClientRect();
+            const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight);
+            img.style.width = Math.round(img.naturalWidth * scale) + 'px';
+            img.style.height = Math.round(img.naturalHeight * scale) + 'px';
+        }
+        document.getElementById('lightbox-img').addEventListener('load', fitLightboxImage);
+
         function openLightbox(imageSrc, title) {
             const lightbox = document.getElementById('lightbox');
             const img = document.getElementById('lightbox-img');
@@ -1173,12 +1230,14 @@
             reloadWebcams();
             reloadCameraImages();
             updateImageInfo();
+            reloadCloudGraph();
         }
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
         setInterval(reloadWebcams, 15000);
         setInterval(reloadCameraImages, 15000);
         setInterval(updateImageInfo, 15000);
+        setInterval(reloadCloudGraph, 60000);
 
         window.addEventListener('load', init);
     </script>
