@@ -1112,13 +1112,17 @@
             ctx.arc(cx, cy, R, 0, 2 * Math.PI);
             ctx.fill();
 
-            // libnova az -> screen (North up, East right, like a map -
-            // not the mirrored "lying on your back" convention).
+            // libnova az -> screen. North up, but East on the LEFT and
+            // West on the RIGHT - the mirror of a geographic map. A sky
+            // chart is a view from *inside* the celestial sphere looking
+            // up, not from outside looking down at the ground, so it's
+            // the compass directions that get mirrored, not just an
+            // arbitrary style choice.
             function project(altDeg, azLibnovaDeg) {
                 const r = Math.min(R, R * (90 - altDeg) / 90);
                 const compassAz = normDeg(azLibnovaDeg + 180);
                 const a = compassAz * Math.PI / 180;
-                return { x: cx + r * Math.sin(a), y: cy - r * Math.cos(a) };
+                return { x: cx - r * Math.sin(a), y: cy - r * Math.cos(a) };
             }
 
             const now = new Date();
