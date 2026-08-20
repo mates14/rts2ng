@@ -22,6 +22,8 @@
 #include "status.h"
 #include "command.h"
 #include "option.h"
+#include "configuration.h"
+#include "objectcheck.h"
 
 #include "jsonvalue.h"
 #include "preview.h"
@@ -1296,7 +1298,36 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 	// classic surface.
 	try
 	{
-		if (!strcmp (url, "/api/devices"))
+		if (!strcmp (url, "/api/horizon"))
+		{
+			// Site geometry for a client-side alt-az sky chart (BART
+			// monitor page) - deliberately not the classic
+			// GraphicsMagick-rendered JPEG (see graphreq.cpp's
+			// CurrentPosition in the old tree): that would pull in a
+			// whole new image-rendering dependency this daemon doesn't
+			// otherwise need, when a browser can draw a canvas plot from
+			// plain JSON just as well. This is the one piece of that
+			// plot rts2-httpd is actually in a position to answer - the
+			// horizon polygon rts2ng already loads and uses for real
+			// (dome safety / ignoreHorizon), plus the observer's
+			// position. Stars, sun, moon and the actual plotting stay
+			// entirely client-side.
+			struct ln_lnlat_posn *obs = Configuration::instance ()->getObserver ();
+			os << "{\"lat\":" << obs->lat << ",\"lon\":" << obs->lng
+				<< ",\"alt\":" << Configuration::instance ()->getObservatoryAltitude ()
+				<< ",\"horizon\":[";
+			bool first = true;
+			for (horizon_t::iterator iter = Configuration::instance ()->getObjectChecker ()->begin ();
+				iter != Configuration::instance ()->getObjectChecker ()->end (); iter++)
+			{
+				if (!first)
+					os << ",";
+				first = false;
+				os << "[" << iter->hrz.az << "," << iter->hrz.alt << "]";
+			}
+			os << "]}";
+		}
+		else if (!strcmp (url, "/api/devices"))
 		{
 			os << "[";
 			connections_t *conns = getConnections ();

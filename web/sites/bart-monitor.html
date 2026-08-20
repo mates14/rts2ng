@@ -178,6 +178,10 @@
             cursor: pointer;
         }
 
+        /* Space is dark regardless of page theme, so this doesn't
+           follow --panel-bg/--text like everything else. */
+        #sky-canvas { width: 100%; height: auto; aspect-ratio: 1; border-radius: 50%; }
+
         .control-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
 
         .control-buttons button {
@@ -319,6 +323,11 @@
                     <hr>
                     <div id="weather-status"></div>
                 </div>
+            </div>
+
+            <div class="status-panel" style="text-align: center;">
+                <h3 style="margin: 0 0 6px 0;">Sky</h3>
+                <canvas id="sky-canvas" width="300" height="300"></canvas>
             </div>
 
             <div class="control-buttons state-buttons">
@@ -706,6 +715,7 @@
             updateDomeStatus();
             updateCameraStatus();
             updateWeatherStatus();
+            drawSkyChart();
         }
 
         function reloadWebcams() {
@@ -782,6 +792,244 @@
             }
         }
 
+        // Sky chart: alt-az plot with horizon, bright stars, Sun, Moon,
+        // and the telescope's current/target position. Client-side
+        // canvas rendering rather than porting classic's
+        // GraphicsMagick-based /images/current (see graphreq.cpp's
+        // CurrentPosition in the old tree) - that would pull a whole
+        // new image-rendering dependency into rts2-httpd for this one
+        // feature. Site geometry (observer lat/lon, horizon polygon)
+        // comes from the new /api/horizon endpoint - the one piece
+        // only the daemon can answer, since it's the same horizon file
+        // rts2ng already uses for real dome-safety checks. The star
+        // catalog, Sun/Moon position and the actual plotting all
+        // happen right here instead.
+        //
+        // Azimuth convention throughout matches libnova's (used by
+        // rts2ng itself for TEL_ and the horizon file): 0=South,
+        // 90=West, 180=North, 270=East - not compass convention.
+        // Converted to a North-up, East-right screen layout (like a
+        // map) only at the final projection step.
+        let horizonInfo = null;
+        let starCatalog = null;
+
+        async function loadHorizonInfo() {
+            try {
+                const res = await fetch(`${API_BASE}/horizon`);
+                if (res.ok)
+                    horizonInfo = await res.json();
+            } catch (e) {
+                console.error('Failed to load horizon info:', e);
+            }
+        }
+
+        async function loadStarCatalog() {
+            try {
+                const res = await fetch('bsc-stars.json');
+                if (res.ok)
+                    starCatalog = await res.json();
+            } catch (e) {
+                console.error('Failed to load star catalog:', e);
+            }
+        }
+
+        function normDeg(deg) {
+            deg = deg % 360;
+            return deg < 0 ? deg + 360 : deg;
+        }
+
+        function julianDate(date) {
+            return date.getTime() / 86400000 + 2440587.5;
+        }
+
+        // Greenwich Mean Sidereal Time, in degrees.
+        function gmstDeg(jd) {
+            const T = (jd - 2451545.0) / 36525.0;
+            return normDeg(280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T - T * T * T / 38710000.0);
+        }
+
+        // Standard low-precision Sun position (US Naval Observatory /
+        // Astronomical Almanac formula, ~0.01deg accuracy - plenty for
+        // a dot on this chart). Equatorial coordinates, degrees.
+        function sunEquatorial(jd) {
+            const d = jd - 2451545.0;
+            const g = normDeg(357.529 + 0.98560028 * d) * Math.PI / 180;
+            const q = normDeg(280.459 + 0.98564736 * d);
+            const L = normDeg(q + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * Math.PI / 180;
+            const e = (23.439 - 0.00000036 * d) * Math.PI / 180;
+            const ra = normDeg(Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)) * 180 / Math.PI);
+            const dec = Math.asin(Math.sin(e) * Math.sin(L)) * 180 / Math.PI;
+            return { ra, dec };
+        }
+
+        // Standard low-precision Moon position (main terms only,
+        // ~0.3-1deg accuracy - fine for a dot on this chart, not for
+        // pointing anything at it).
+        function moonEquatorial(jd) {
+            const d = jd - 2451545.0;
+            const L = normDeg(218.316 + 13.176396 * d) * Math.PI / 180;
+            const M = normDeg(134.963 + 13.064993 * d) * Math.PI / 180;
+            const F = normDeg(93.272 + 13.229350 * d) * Math.PI / 180;
+            const lam = L + 6.289 * Math.PI / 180 * Math.sin(M);
+            const bet = 5.128 * Math.PI / 180 * Math.sin(F);
+            const e = (23.439 - 0.0000004 * d) * Math.PI / 180;
+            const ra = normDeg(Math.atan2(Math.sin(lam) * Math.cos(e) - Math.tan(bet) * Math.sin(e), Math.cos(lam)) * 180 / Math.PI);
+            const dec = Math.asin(Math.sin(bet) * Math.cos(e) + Math.cos(bet) * Math.sin(e) * Math.sin(lam)) * 180 / Math.PI;
+            return { ra, dec };
+        }
+
+        // Equatorial (hour angle, Dec) -> horizontal (Alt, Az),
+        // libnova convention (Az: 0=South, 90=West). Standard formula
+        // (Meeus 13.5/13.6).
+        function equToHrz(haDeg, decDeg, latDeg) {
+            const Hr = haDeg * Math.PI / 180, decr = decDeg * Math.PI / 180, latr = latDeg * Math.PI / 180;
+            const sinAlt = Math.sin(latr) * Math.sin(decr) + Math.cos(latr) * Math.cos(decr) * Math.cos(Hr);
+            const alt = Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180 / Math.PI;
+            const az = normDeg(Math.atan2(Math.sin(Hr), Math.cos(Hr) * Math.sin(latr) - Math.tan(decr) * Math.cos(latr)) * 180 / Math.PI);
+            return { alt, az };
+        }
+
+        function drawSkyChart() {
+            const canvas = document.getElementById('sky-canvas');
+            if (!canvas || !horizonInfo)
+                return;
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, Hh = canvas.height;
+            const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 2 - 14;
+
+            ctx.clearRect(0, 0, W, Hh);
+            ctx.fillStyle = '#05070d';
+            ctx.beginPath();
+            ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // libnova az -> screen (North up, East right, like a map -
+            // not the mirrored "lying on your back" convention).
+            function project(altDeg, azLibnovaDeg) {
+                const r = Math.min(R, R * (90 - altDeg) / 90);
+                const compassAz = normDeg(azLibnovaDeg + 180);
+                const a = compassAz * Math.PI / 180;
+                return { x: cx + r * Math.sin(a), y: cy - r * Math.cos(a) };
+            }
+
+            const now = new Date();
+            const jd = julianDate(now);
+            const lst = normDeg(gmstDeg(jd) + horizonInfo.lon);
+            const lat = horizonInfo.lat;
+
+            // Horizon polygon - shade the region between it and the
+            // plot's outer edge (evenodd punches the polygon out of
+            // the full circle, regardless of the polygon's winding
+            // direction).
+            if (horizonInfo.horizon && horizonInfo.horizon.length > 2) {
+                ctx.beginPath();
+                ctx.moveTo(cx + R, cy);
+                ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+                horizonInfo.horizon.forEach(([az, alt], i) => {
+                    const p = project(alt, az);
+                    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(80,50,20,0.55)';
+                ctx.fill('evenodd');
+
+                ctx.strokeStyle = '#c08030';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                horizonInfo.horizon.forEach(([az, alt], i) => {
+                    const p = project(alt, az);
+                    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.stroke();
+            }
+
+            // Alt grid (0/30/60) + az grid (N/E/S/W spokes)
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.font = '10px sans-serif';
+            ctx.lineWidth = 1;
+            for (const alt of [0, 30, 60]) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, R * (90 - alt) / 90, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            for (const [label, azLibnova] of [['N', 180], ['E', 270], ['S', 0], ['W', 90]]) {
+                const edge = project(0, azLibnova);
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(edge.x, edge.y);
+                ctx.stroke();
+                const lp = project(-8, azLibnova);
+                ctx.fillText(label, lp.x - 4, lp.y + 4);
+            }
+
+            // Stars
+            if (starCatalog) {
+                ctx.fillStyle = '#fff';
+                for (const [ra, dec, mag] of starCatalog) {
+                    const hz = equToHrz(lst - ra, dec, lat);
+                    if (hz.alt <= 0)
+                        continue;
+                    const p = project(hz.alt, hz.az);
+                    const size = Math.max(0.4, (5.5 - mag) * 0.5);
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+
+            // Sun & Moon
+            const sun = sunEquatorial(jd);
+            const sunHz = equToHrz(lst - sun.ra, sun.dec, lat);
+            if (sunHz.alt > -6) {
+                const p = project(Math.max(sunHz.alt, 0), sunHz.az);
+                ctx.fillStyle = '#ffb020';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+
+            const moon = moonEquatorial(jd);
+            const moonHz = equToHrz(lst - moon.ra, moon.dec, lat);
+            if (moonHz.alt > 0) {
+                const p = project(moonHz.alt, moonHz.az);
+                ctx.fillStyle = '#c8c8d0';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+
+            // Telescope position - T0's TEL_ is already Alt/Az (libnova
+            // convention), no equatorial transform needed. Reuses
+            // parseRaDec() purely because it's the same "two
+            // space-separated floats" wire format T0 uses for every
+            // paired value, not because this is actually RA/Dec.
+            const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
+            if (!Number.isNaN(telAlt) && !Number.isNaN(telAz)) {
+                const p = project(telAlt, telAz);
+                ctx.strokeStyle = '#ff4040';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
+                ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
+                ctx.stroke();
+            }
+
+            // Target position - T0's TAR (RA/Dec with corrections
+            // applied), same value classic's CurrentPosition uses.
+            const [tarRa, tarDec] = parseRaDec(safeValue(systemData.T0, 'TAR', ''));
+            if (!Number.isNaN(tarRa) && !Number.isNaN(tarDec)) {
+                const tarHz = equToHrz(lst - tarRa, tarDec, lat);
+                const p = project(tarHz.alt, tarHz.az);
+                ctx.strokeStyle = '#4090ff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+        }
+
         // Lightbox
         let lightboxInterval = null;
 
@@ -828,6 +1076,7 @@
                 });
             }
 
+            await Promise.all([loadHorizonInfo(), loadStarCatalog()]);
             await updateStatus();
             reloadWebcams();
             reloadCameraImages();
