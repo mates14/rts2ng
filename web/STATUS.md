@@ -1804,6 +1804,29 @@ nothing to exercise them against meaningfully. Both now exist:
     `stars_peer` database) restored/removed and verified clean
     afterward.
 
+    **Real-deployment finding (2026-08-26), both `/d50` (lascaux) and
+    `/sbt` (d50) proxy paths**: went live returning a generic Apache
+    "Internal Server Error" on both sides symmetrically. Root cause
+    (confirmed by the user, not just guessed): `ProxyPass`/
+    `ProxyPassReverse` to an `https://` upstream needs `SSLProxyEngine
+    on` inside the *same* `<VirtualHost>` block - a separate switch from
+    the server-side `mod_ssl` that terminates the incoming connection,
+    easy to miss since neither vhost had it and the resulting 500 gives
+    no hint what's actually wrong. Also worth recording since it cost
+    real debugging time: `d50.asu.cas.cz`/`lascaux.asu.cas.cz` are each
+    just aliases that redirect to a *different* canonical hostname
+    (`lascaux50.asu.cas.cz` for D50), so a `ProxyPass` naively pointed at
+    the alias would send the browser off-origin via that redirect,
+    defeating the whole same-origin design - both real vhosts were
+    already correctly written against the canonical names from the
+    start (`ProxyPass /d50 https://lascaux50.asu.cas.cz/images`, and
+    symmetrically `/sbt` -> `https://lascaux.asu.cas.cz/images`), this
+    was a real gotcha checked for and confirmed already handled
+    correctly, not one that needed fixing. Verified working end to end
+    after the `SSLProxyEngine on` fix: `curl https://lascaux.asu.cas.cz/
+    d50/api/devices` returns D50's real live device list through the
+    full real proxy chain.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.
