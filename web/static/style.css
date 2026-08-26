@@ -350,3 +350,116 @@ header h1 {
 	color: var(--text-muted);
 	word-break: break-all;
 }
+
+/* target.html - target editor page */
+
+.back-link {
+	font-size: 13px;
+	color: var(--accent);
+	text-decoration: none;
+}
+
+.back-link:hover {
+	text-decoration: underline;
+}
+
+.inline-form {
+	display: flex;
+	gap: 12px;
+	align-items: flex-end;
+}
+
+.inline-form label, #target-form label, #scheduling-form label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.inline-form input, #target-form input, #target-form textarea, #scheduling-form textarea {
+	font-size: 13px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font-family: inherit;
+}
+
+.inline-form button, #target-form button, #scheduling-form button {
+	font-size: 13px;
+	padding: 7px 14px;
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: white;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.inline-form button:hover, #target-form button:hover, #scheduling-form button:hover {
+	filter: brightness(1.1);
+}
+
+.field-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: 12px;
+	margin-bottom: 12px;
+}
+
+.checkbox-row {
+	display: flex;
+	gap: 20px;
+	margin-bottom: 12px;
+}
+
+.checkbox-row label {
+	flex-direction: row !important;
+	align-items: center;
+	gap: 6px !important;
+	color: var(--text) !important;
+}
+
+.block-label {
+	display: block;
+	margin-bottom: 12px;
+}
+
+.block-label textarea {
+	width: 100%;
+	margin-top: 4px;
+	resize: vertical;
+}
+
+#scheduling-form textarea {
+	width: 100%;
+	resize: vertical;
+}
+
+.hint {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin: 0 0 12px 0;
+}
+
+.hint code {
+	font-family: var(--mono);
+	background: var(--bg);
+	padding: 1px 4px;
+	border-radius: 3px;
+}
+
+.status-line {
+	margin-top: 10px;
+	font-family: var(--mono);
+	font-size: 12px;
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.status-line.ok {
+	color: var(--good);
+}
+
+.status-line.err {
+	color: var(--bad);
+}

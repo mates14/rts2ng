@@ -22,6 +22,18 @@ CREATE TABLE targets (
 	tar_bonus_time  timestamp with time zone
 );
 
+-- Scheduling parameters for the site's separate Python scheduler
+-- (sch/ - see rts2db/scheduling.h) - not read by rts2ng's own C++
+-- scheduler/executor. Added 2026-08-26: this table already existed on
+-- real production DBs (lascaux/d50), added directly to production SQL
+-- outside any versioned migration - this is the first time it's part of
+-- rts2ng's own schema, with a primary key production's copy lacks (see
+-- rts2db::Scheduling::setSinfo()'s comment for how that's handled).
+CREATE TABLE scheduling (
+	tar_id		integer PRIMARY KEY REFERENCES targets (tar_id),
+	sinfo		varchar(2000) NOT NULL DEFAULT ''
+);
+
 CREATE TABLE phot (
 	tar_id		integer REFERENCES targets (tar_id),
 	phot_type	integer,

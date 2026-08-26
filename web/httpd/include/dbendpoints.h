@@ -39,6 +39,86 @@ void dbListTargets (std::ostringstream &os);
  * rts2core::Error if id doesn't exist. */
 void dbGetTarget (int targetId, std::ostringstream &os);
 
+/**
+ * Fields accepted by dbUpdateTarget() - a pointer member is non-null iff
+ * the corresponding request parameter was actually present, so a save
+ * only touches what the caller sent (the frontend only ever sends the
+ * fields its form for the target's current type shows) rather than
+ * clobbering everything else with defaults.
+ *
+ * Deliberately no `type` field yet - changing a target's type_id after
+ * creation would mean re-instantiating a different rts2db::Target
+ * subclass with its own type-specific save semantics (e.g. turning a
+ * plain ConstTarget into an EllTarget), not just writing a column. Not
+ * supported by this first write-path pass; a target's type is fixed at
+ * creation.
+ */
+struct TargetUpdate
+{
+	const std::string *name = nullptr;
+	const std::string *comment = nullptr;
+	// Freeform tar_info edit - only meaningful for target types that
+	// don't interpret tar_info themselves (i.e. not TYPE_ELLIPTICAL,
+	// which uses `mpec` below instead). Ignored if `mpec` is also set.
+	const std::string *info = nullptr;
+	// MPC one-line orbital element string - TYPE_ELLIPTICAL only. Parsed
+	// via EllTarget::orbitFromMPC(), which also derives the target's
+	// name from the designation it parses out - rejected (throws) if it
+	// doesn't parse as either an MPC minor-planet or comet line.
+	const std::string *mpec = nullptr;
+	const float *priority = nullptr;
+	const float *bonus = nullptr;
+	const bool *enabled = nullptr;
+	const bool *interruptible = nullptr;
+	// Equatorial coordinates (degrees) - only applicable to targets
+	// backed by rts2db::ConstTarget (plain equatorial targets; also
+	// TYPE_TERESTIAL, which is a legacy fixed-RA/Dec type despite its
+	// name - see STATUS.md's target-editor design note). Rejected for
+	// any other target type (e.g. EllTarget, whose position is derived
+	// from its orbit, not stored directly).
+	const double *ra = nullptr;
+	const double *dec = nullptr;
+	// Proper motion, arcdeg/year - same ConstTarget-only restriction as ra/dec.
+	const double *pmRa = nullptr;
+	const double *pmDec = nullptr;
+};
+
+/**
+ * PUT-style partial update of an existing target's editable fields (see
+ * TargetUpdate for what's supported and why). Loads the target via
+ * createTarget() (so it round-trips through the correct rts2db::Target
+ * subclass for its existing type), applies only the fields present in
+ * upd, saves, then writes the fresh post-save detail to os in the same
+ * shape as dbGetTarget(). Throws rts2core::Error if the target doesn't
+ * exist, if a field is set that doesn't apply to this target's type, if
+ * an `mpec` value fails to parse, or if the save itself fails.
+ */
+void dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostringstream &os);
+
+/**
+ * GET /api/db/scheduling?id=N - the target's scheduling.sinfo string
+ * ("" if the target has no scheduling row yet - not an error, that's
+ * the common case for a target nobody has configured scheduling
+ * parameters for). Throws rts2core::Error if the target itself doesn't
+ * exist (same existence check as dbListObservations()).
+ */
+void dbGetScheduling (int targetId, std::ostringstream &os);
+
+/**
+ * POST-style upsert of scheduling.sinfo for a target (the free-text
+ * key=value scheduling parameter bag - duration=/mag=/snr=/filters=/
+ * count=/pscale=/type=and, per this session's investigation of the
+ * user's sch/ scheduler scripts). Confirms the target exists first, same
+ * as dbGetScheduling(). Written as delete-then-insert inside one
+ * transaction rather than a plain UPDATE-or-INSERT: real production
+ * (lascaux)'s scheduling table predates this code and has no unique/
+ * primary key on tar_id (added here only for fresh rts2ng installs, see
+ * db/sql/update/rel_1_0_2.sql), so this is written to also be correct -
+ * collapsing to exactly one row - against that already-deployed,
+ * unconstrained shape.
+ */
+void dbSaveScheduling (int targetId, const std::string &sinfo, std::ostringstream &os);
+
 /** GET /api/db/observations?id=N - every observation of target id
  * (empty array, not an error, if the target exists but was never
  * observed - the common case on a fresh test DB). Throws

@@ -5,8 +5,10 @@
 #include "jsonvalue.h"
 
 #include "rts2db/target.h"
+#include "rts2db/targetell.h"
 #include "rts2db/observationset.h"
 #include "rts2db/imageset.h"
+#include "rts2db/scheduling.h"
 #include "configuration.h"
 
 #include <libnova/libnova.h>
@@ -140,6 +142,62 @@ void rts2web::dbListTargets (std::ostringstream &os)
 	os << "]";
 }
 
+namespace
+{
+
+/**
+ * Full target detail, shared by dbGetTarget() and dbUpdateTarget()'s
+ * post-save response so both return the same shape - the editor page
+ * re-renders itself from whichever one it just got. `hasPosition` and
+ * `isElliptical` tell the frontend which form fields apply to this
+ * target's actual type (see TargetUpdate's doc comment in dbendpoints.h)
+ * rather than it having to hardcode a type_id char -> form-shape table
+ * of its own.
+ */
+void writeTargetDetail (rts2db::Target *tar, std::ostringstream &os)
+{
+	struct ln_equ_posn pos;
+	tar->getPosition (&pos);
+
+	rts2db::ConstTarget *ct = dynamic_cast <rts2db::ConstTarget *> (tar);
+	bool isElliptical = dynamic_cast <rts2db::EllTarget *> (tar) != nullptr;
+
+	os << "{\"id\":" << tar->getTargetID () << ",\"name\":";
+	jsonString (tar->getTargetName (), os);
+	os << ",\"type\":\"" << tar->getTargetType () << "\",\"comment\":";
+	jsonString (tar->getTargetComment () ? tar->getTargetComment () : "", os);
+	os << ",\"info\":";
+	jsonString (tar->getTargetInfo (), os);
+	os << ",\"priority\":";
+	jsonNumber (tar->getTargetPriority (), os);
+	os << ",\"bonus\":";
+	jsonNumber (tar->getTargetBonus (), os);
+	os << ",\"enabled\":" << (tar->getTargetEnabled () ? "true" : "false");
+	os << ",\"interruptible\":" << (tar->getInterruptible () ? "true" : "false");
+	os << ",\"isElliptical\":" << (isElliptical ? "true" : "false");
+	os << ",\"hasPosition\":" << (ct ? "true" : "false");
+	os << ",\"ra\":";
+	jsonNumber (pos.ra, os);
+	os << ",\"dec\":";
+	jsonNumber (pos.dec, os);
+	os << ",\"pmRa\":";
+	if (ct)
+	{
+		struct ln_equ_posn pm;
+		ct->getProperMotion (&pm);
+		jsonNumber (pm.ra, os);
+		os << ",\"pmDec\":";
+		jsonNumber (pm.dec, os);
+	}
+	else
+	{
+		os << "null,\"pmDec\":null";
+	}
+	os << "}";
+}
+
+}
+
 void rts2web::dbGetTarget (int targetId, std::ostringstream &os)
 {
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
@@ -148,21 +206,130 @@ void rts2web::dbGetTarget (int targetId, std::ostringstream &os)
 	// targetId doesn't exist - propagates to httpd.cpp's handleRequest(),
 	// caught there the same way as ApiError.
 	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
-
-	struct ln_equ_posn pos;
-	tar->getPosition (&pos);
-
-	os << "{\"id\":" << tar->getTargetID () << ",\"name\":";
-	jsonString (tar->getTargetName (), os);
-	os << ",\"type\":\"" << tar->getTargetType () << "\",\"comment\":";
-	jsonString (tar->getTargetComment () ? tar->getTargetComment () : "", os);
-	os << ",\"ra\":";
-	jsonNumber (pos.ra, os);
-	os << ",\"dec\":";
-	jsonNumber (pos.dec, os);
-	os << "}";
-
+	writeTargetDetail (tar, os);
 	delete tar;
+}
+
+void rts2web::dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+
+	rts2db::ConstTarget *ct = dynamic_cast <rts2db::ConstTarget *> (tar);
+	rts2db::EllTarget *ell = dynamic_cast <rts2db::EllTarget *> (tar);
+
+	if ((upd.ra || upd.dec || upd.pmRa || upd.pmDec) && !ct)
+	{
+		delete tar;
+		throw rts2core::Error ("ra/dec/pmRa/pmDec only apply to targets with a directly stored equatorial position - this target's position is computed from other data");
+	}
+	if (upd.mpec && !ell)
+	{
+		delete tar;
+		throw rts2core::Error ("mpec only applies to elliptical (minor planet/comet) targets");
+	}
+
+	// Target::saveWithID() now clamps these to the column width rather
+	// than overflowing (see target.ec), but silently truncating an
+	// over-length value a caller actually sent is a worse API contract
+	// than telling them clearly - reject it here instead.
+	if (upd.name && upd.name->length () > 150)
+	{
+		delete tar;
+		throw rts2core::Error ("name is too long (max 150 characters)");
+	}
+	if (upd.comment && upd.comment->length () > 2000)
+	{
+		delete tar;
+		throw rts2core::Error ("comment is too long (max 2000 characters)");
+	}
+
+	if (upd.name)
+		tar->setTargetName (upd.name->c_str ());
+	if (upd.comment)
+		tar->setTargetComment (upd.comment->c_str ());
+	if (upd.priority)
+		tar->setTargetPriority (*upd.priority);
+	if (upd.bonus)
+		tar->setTargetBonus (*upd.bonus);
+	if (upd.enabled)
+		tar->setTargetEnabled (*upd.enabled, false);
+	if (upd.interruptible)
+		tar->setInterruptible (*upd.interruptible);
+
+	if (upd.mpec)
+	{
+		// orbitFromMPC() also derives and sets name/info/type from the
+		// parsed line - apply it before any explicit name override
+		// above so an explicit name (if the caller also sent one) wins.
+		if (ell->orbitFromMPC (upd.mpec->c_str ()))
+		{
+			delete tar;
+			throw rts2core::Error (std::string ("cannot parse mpec as an MPC minor-planet or comet one-line element: ") + *upd.mpec);
+		}
+		if (upd.name)
+			tar->setTargetName (upd.name->c_str ());
+	}
+	else if (upd.info)
+	{
+		tar->setTargetInfo (*upd.info);
+	}
+
+	if (ct && (upd.ra || upd.dec))
+	{
+		struct ln_equ_posn rawPos;
+		ct->getRawPosition (&rawPos);
+		ct->setPosition (upd.ra ? *upd.ra : rawPos.ra, upd.dec ? *upd.dec : rawPos.dec);
+	}
+	if (ct && (upd.pmRa || upd.pmDec))
+	{
+		struct ln_equ_posn rawPm;
+		ct->getProperMotion (&rawPm);
+		ct->setProperMotion (upd.pmRa ? *upd.pmRa : rawPm.ra, upd.pmDec ? *upd.pmDec : rawPm.dec);
+	}
+
+	int ret = tar->save (true);
+	delete tar;
+	if (ret)
+		throw rts2core::Error ("failed to save target - see the daemon log for details");
+
+	// Re-load fresh from the DB rather than trusting the in-memory
+	// object post-save, so the response genuinely reflects what's
+	// stored (e.g. confirms an mpec-derived name/type actually
+	// persisted) instead of assuming save() did exactly what was asked.
+	rts2db::Target *fresh = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	writeTargetDetail (fresh, os);
+	delete fresh;
+}
+
+void rts2web::dbGetScheduling (int targetId, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	// Same existence check as dbListObservations() - a bad target id
+	// should be a 400, not a misleading empty-string sinfo.
+	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	delete tar;
+
+	std::string sinfo = rts2db::Scheduling::getSinfo (targetId);
+	os << "{\"tarId\":" << targetId << ",\"sinfo\":";
+	jsonString (sinfo.c_str (), os);
+	os << "}";
+}
+
+void rts2web::dbSaveScheduling (int targetId, const std::string &sinfo, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	delete tar;
+
+	rts2db::Scheduling::setSinfo (targetId, sinfo);
+
+	os << "{\"tarId\":" << targetId << ",\"sinfo\":";
+	jsonString (sinfo.c_str (), os);
+	os << "}";
 }
 
 void rts2web::dbListObservations (int targetId, std::ostringstream &os)

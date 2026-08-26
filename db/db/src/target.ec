@@ -184,6 +184,7 @@ Target::Target (int in_tar_id, struct ln_lnlat_posn *in_obs, double in_altitude)
 	rts2core::Configuration *config = rts2core::Configuration::instance ();
 
 	tar_telescope_mode = -1;
+	interruptible = true;
 
 	observer = in_obs;
 	obs_altitude = in_altitude;
@@ -221,6 +222,7 @@ Target::Target ()
 	config = rts2core::Configuration::instance ();
 
 	tar_telescope_mode = -1;
+	interruptible = true;
 
 	observer = config->getObserver ();
 	obs_altitude = config->getObservatoryAltitude ();
@@ -282,6 +284,8 @@ void Target::loadTarget (int in_tar_id)
 	EXEC SQL BEGIN DECLARE SECTION;
 	// cannot use TARGET_NAME_LEN, as some versions of ecpg complains about it
 	VARCHAR d_tar_name[150];
+	VARCHAR d_tar_comment[2000];
+	int d_tar_comment_ind;
 	VARCHAR d_tar_info[2000];
 	int d_tar_info_ind;
 	float d_tar_priority;
@@ -293,6 +297,7 @@ void Target::loadTarget (int in_tar_id)
 	double d_tar_next_observable;
 	int d_tar_next_observable_ind;
 	bool d_tar_enabled;
+	bool d_interruptible;
 	int db_tar_id = in_tar_id;
 	int d_tar_telescope_mode;
 	int db_tar_telescope_mode_ind;
@@ -301,22 +306,26 @@ void Target::loadTarget (int in_tar_id)
 	EXEC SQL
 	SELECT
 		tar_name,
+		tar_comment,
 		tar_info,
 		tar_priority,
 		tar_bonus,
 		EXTRACT (EPOCH FROM tar_bonus_time),
 		EXTRACT (EPOCH FROM tar_next_observable),
 		tar_enabled,
-		tar_telescope_mode
+		tar_telescope_mode,
+		interruptible
 	INTO
 		:d_tar_name,
+		:d_tar_comment :d_tar_comment_ind,
 		:d_tar_info :d_tar_info_ind,
 		:d_tar_priority :d_tar_priority_ind,
 		:d_tar_bonus :d_tar_bonus_ind,
 		:d_tar_bonus_time :d_tar_bonus_time_ind,
 		:d_tar_next_observable :d_tar_next_observable_ind,
 		:d_tar_enabled,
-		:d_tar_telescope_mode :db_tar_telescope_mode_ind
+		:d_tar_telescope_mode :db_tar_telescope_mode_ind,
+		:d_interruptible
 	FROM
 		targets
 	WHERE
@@ -333,6 +342,24 @@ void Target::loadTarget (int in_tar_id)
 	target_name = new char[d_tar_name.len + 1];
 	strncpy (target_name, d_tar_name.arr, d_tar_name.len);
 	target_name[d_tar_name.len] = '\0';
+
+	// db note: tar_comment was written by saveWithID() but never read
+	// back here at all until now - loadTarget()'s SELECT simply omitted
+	// it (a pre-existing gap, found live: a comment set via a fresh
+	// httpd /api/db/target-save round-tripped into the DB correctly but
+	// came back as "" from the very next GET). getTargetComment() can
+	// legitimately be nullptr (see its callers' "comment ? comment : """
+	// checks throughout the codebase) - only replace it when the column
+	// is actually non-null, matching that convention rather than turning
+	// a real NULL into an empty string.
+	delete[] target_comment;
+	target_comment = nullptr;
+	if (d_tar_comment_ind >= 0)
+	{
+		target_comment = new char[d_tar_comment.len + 1];
+		strncpy (target_comment, d_tar_comment.arr, d_tar_comment.len);
+		target_comment[d_tar_comment.len] = '\0';
+	}
 
 	if (d_tar_info_ind >= 0)
 	{
@@ -370,6 +397,8 @@ void Target::loadTarget (int in_tar_id)
 		tar_telescope_mode = d_tar_telescope_mode;
 	else
 		tar_telescope_mode = -1;
+
+	interruptible = d_interruptible;
 
 	setTargetEnabled (d_tar_enabled, false);
 }
@@ -440,15 +469,27 @@ int Target::saveWithID (bool overwrite, int tar_id)
 	bool db_tar_enabled = getTargetEnabled ();
 	VARCHAR db_tar_info[2000];
 	int db_tar_info_ind;
+	bool db_interruptible = interruptible;
 
 	int d_tar_telescope_mode = tar_telescope_mode;
 	int db_tar_telescope_mode_ind = tar_telescope_mode < 0 ? -1 : 0;
 	EXEC SQL END DECLARE SECTION;
 	// fill in name and comment..
+	//
+	// db note: both used a plain strcpy() into a fixed VARCHAR[150]/[2000]
+	// buffer with no length check - harmless while every caller was
+	// internal/trusted (rts2-addtarget etc.), but now a real stack-buffer-
+	// overflow risk since web/httpd's /api/db/target-save lets an HTTP
+	// client set name/comment directly (an over-length value here would
+	// write straight past the VARCHAR's fixed-size .arr). Clamped the
+	// same way tar_info already was below, instead of leaving this as the
+	// one field an external caller could still overflow.
 	if (getTargetName ())
 	{
 		db_tar_name.len = strlen (getTargetName ());
-		strcpy (db_tar_name.arr, getTargetName ());
+		if (db_tar_name.len > 150)
+			db_tar_name.len = 150;
+		strncpy (db_tar_name.arr, getTargetName (), db_tar_name.len);
 	}
 	else
 	{
@@ -459,7 +500,9 @@ int Target::saveWithID (bool overwrite, int tar_id)
 	if (getTargetComment ())
 	{
 		db_tar_comment.len = strlen (getTargetComment ());
-		strcpy (db_tar_comment.arr, getTargetComment ());
+		if (db_tar_comment.len > 2000)
+			db_tar_comment.len = 2000;
+		strncpy (db_tar_comment.arr, getTargetComment (), db_tar_comment.len);
 	}
 	else
 	{
@@ -514,7 +557,8 @@ int Target::saveWithID (bool overwrite, int tar_id)
 			tar_next_observable,
 			tar_enabled,
 			tar_info,
-			tar_telescope_mode
+			tar_telescope_mode,
+			interruptible
 			)
 		VALUES
 			(
@@ -528,7 +572,8 @@ int Target::saveWithID (bool overwrite, int tar_id)
 			null,
 			:db_tar_enabled,
 			:db_tar_info :db_tar_info_ind,
-			:d_tar_telescope_mode :db_tar_telescope_mode_ind
+			:d_tar_telescope_mode :db_tar_telescope_mode_ind,
+			:db_interruptible
 			);
 	// insert failed - try update
 	if (sqlca.sqlcode)
@@ -552,7 +597,8 @@ int Target::saveWithID (bool overwrite, int tar_id)
 				tar_bonus_time = to_timestamp(:db_tar_bonus_time :db_tar_bonus_time_ind),
 				tar_enabled = :db_tar_enabled,
 				tar_info = :db_tar_info :db_tar_info_ind,
-				tar_telescope_mode = :d_tar_telescope_mode :db_tar_telescope_mode_ind
+				tar_telescope_mode = :d_tar_telescope_mode :db_tar_telescope_mode_ind,
+				interruptible = :db_interruptible
 			WHERE
 				tar_id = :db_tar_id;
 

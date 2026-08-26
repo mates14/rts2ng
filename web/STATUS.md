@@ -1417,6 +1417,180 @@ nothing to exercise them against meaningfully. Both now exist:
    daemon reachable through the public proxy, even a short one.
 9. **DEFERRED, not scheduled** - Big Brother federation client, pending
    confirmation a real site still needs it.
+10. **DONE, phase 1 of 2 (2026-08-26)** - Target/scheduling *write* path -
+    everything task 7 built was read-only until now. User request: a web
+    page to edit any property of an existing target (equatorial or MPEC/
+    elliptical - Alt/Az deferred, see below) plus the site's separate
+    `scheduling` table, eventually across both D50's and SBT's independent
+    databases. Scoped to single-DB first (user's explicit choice - see
+    the phase-2 note below) so the write path itself gets proven correct
+    before the dual-ECPG-connection plumbing is added on top of it.
+
+    **Investigated before writing anything** (this took real digging, not
+    assumption): read `db/db`'s `Target`/`ConstTarget`/`EllTarget` save
+    paths, the real production schema on lascaux (`\d scheduling`,
+    `\d targets` via `ssh l`), and the user's own Python scheduler
+    (`sch/database.py`, `request.py`, `scheduler_core.py`,
+    `kernel/reservation.py`) to find out what already exists vs. what's
+    still just an idea:
+    - `tar_telescope_mode` (schema since `rel_0_9_5.sql`) is loaded/saved
+      but genuinely unused by the scheduler - "any/specific telescope" is
+      entirely implied by per-DB `tar_enabled`, not a stored mode.
+    - The real "simultaneous" mechanism is `scheduling.sinfo`'s `type=`
+      keyword feeding `kernel/reservation.py`'s `CompoundReservation`
+      (`single`/`oneof`/`and`/`sim`). Only `type=and` is actually wired
+      end to end (`request.py`'s `has_and_type()` ->
+      `scheduler_core.py`'s `cr_type='and'`) - `sim` ("starting together",
+      what the user meant by "simultaneous") is solver-supported but
+      nothing in `sch/` translates a sinfo keyword into it yet. This
+      editor lets `sinfo`'s `type=` be set to anything including `sim`,
+      but making `sim` actually take effect needs a `sch/` change that's
+      out of this pass's scope.
+    - `TYPE_TERESTIAL` (the closest existing thing to "Alt/Az terrestrial")
+      is legacy HAM/FRAM-specific and is just a fixed-RA/Dec `ConstTarget`
+      - it does not track a fixed Alt/Az position over time. Real Alt/Az
+      support needs a new `getPosition()` override doing the hrz->equ
+      conversion each call - deferred (user's explicit choice); this pass
+      only ships equatorial + MPEC/elliptical editing.
+    - `scheduling(tar_id, sinfo)` already exists on real production DBs,
+      added directly to production SQL, never through a versioned rts2ng
+      migration - and has no primary/unique key on `tar_id` there. Given
+      a proper migration now (`db/sql/update/rel_1_0_2.sql`, also added to
+      `db/sql/create/tables.sql` for fresh installs) with a primary key
+      this time; the write path (`rts2db::Scheduling::setSinfo()`,
+      `db/db/src/scheduling.ec`) is deliberately delete-then-insert in one
+      transaction rather than UPDATE-or-INSERT so it's correct either way
+      - collapsing to exactly one row - against production's unconstrained
+      copy too, not just a fresh schema.
+
+    **Real bugs found in `db/db`'s existing (pre-`web`) code while wiring
+    this up, not hypothetical**:
+    - `interruptible` (schema since `rel_0_8_1.sql`) was never read or
+      written by `rts2db` at all - `Target::loadTarget()`'s SELECT simply
+      omitted it, `saveWithID()` too. Added a real
+      `getInterruptible()`/`setInterruptible()` pair and wired both the
+      load and save paths (`target.h`/`target.ec`).
+    - `tar_comment` is even worse: `saveWithID()` writes it, but
+      `loadTarget()`'s SELECT omits it - so a comment set via any existing
+      classic tool round-tripped fine at the DB level but every C++ reader
+      of a freshly-loaded `Target` always saw `nullptr`. Found live: a
+      comment set through this session's own new endpoint round-tripped
+      into Postgres correctly but came back empty from the very next GET.
+      Fixed at `loadTarget()` (now selects and populates `target_comment`,
+      `nullptr`-preserving for a real SQL NULL, matching every existing
+      `comment ? comment : ""` call site's expectation).
+    - `setTargetComment()` freed `target_comment` with plain `delete`
+      against a `new char[]` allocation - a `new[]`/`delete` mismatch
+      (undefined behaviour), inconsistent with the destructor's own
+      `delete[]` for the same pointer. Fixed to `delete[]`.
+    - `Target::saveWithID()`'s name/comment handling did an unbounded
+      `strcpy()` into a fixed-size `VARCHAR[150]`/`VARCHAR[2000]` ecpg host
+      buffer with no length check - harmless while every caller was
+      internal/trusted, but a real stack-buffer-overflow risk now that
+      `/api/db/target-save` lets an HTTP client set these directly.
+      Clamped both (matching the truncation guard `tar_info` already had),
+      and added an explicit length check at the `dbUpdateTarget()` API
+      layer so an over-length value gets a clean 400 instead of silent
+      truncation.
+    - `rts2db::SqlError`'s default constructor issues its own
+      `EXEC SQL ROLLBACK` (after capturing `sqlca`'s message/code into the
+      exception) - this session's first draft of `scheduling.ec` also
+      rolled back explicitly *before* `throw SqlError()`, which wiped
+      `sqlca` with the rollback's own (successful, empty) result before
+      `SqlError()` ever read it, turning every real failure into a
+      content-free `"error:  (#0)"`. Found by testing the literal failure
+      path live (a first `scheduling-save` attempt), not by inspection -
+      fixed by not rolling back before constructing `SqlError()`. Also
+      found live: ecpg reports a 0-row `DELETE` the same way it reports a
+      singleton `SELECT INTO` matching no row (`ECPG_NOT_FOUND`/sqlcode
+      100) - the expected case on a target's first scheduling save, not a
+      real error; `setSinfo()`'s delete-then-insert now treats that
+      specifically as non-fatal.
+
+    **New endpoints** (`web/httpd/include/dbendpoints.h`+`.cpp`, routed in
+    `httpd.cpp`'s `handleDb()` on the same worker-pool/suspend-resume
+    pattern every other DB endpoint already uses): `POST /api/db/
+    target-save?id=N&...` (partial update - a field's absent from the
+    query string means "leave it alone", not "clear it"; see
+    `TargetUpdate`'s doc comment for exactly which fields apply to which
+    target type and why type itself isn't editable yet), `GET`/`POST
+    /api/db/scheduling` / `/api/db/scheduling-save?id=N&sinfo=...`. Gated
+    by the same `checkWriteAuth()`/`--auth-file` mechanism as `/api/set`
+    (task 6) under a new `"db-targets"` permission token. `dbGetTarget()`'s
+    JSON grew `info`/`priority`/`bonus`/`enabled`/`interruptible`/
+    `isElliptical`/`hasPosition`/`pmRa`/`pmDec` alongside what task 7
+    already sent - `hasPosition`/`isElliptical` exist specifically so the
+    frontend doesn't need its own copy of "which type_id chars mean
+    what".
+
+    **A second real bug found by this session's own browser testing, in
+    already-shipped task-8 code**: `handleStatic()` used
+    `MHD_create_response_from_fd()` (zero-copy) for every static file;
+    turns out *any* static asset at or above 4096 bytes hung indefinitely
+    past its first 4096-byte chunk under this daemon's external-polling
+    `Block`+`libmicrohttpd` integration (confirmed with `curl --max-time
+    30` genuinely never completing, not just being slow). Reproduced with
+    the pre-existing `app.js` (14570 bytes) too, not just this session's
+    new `target.js` - meaning this has apparently always been broken for
+    any client that actually blocks on the full body; not chased into
+    *why* libmicrohttpd's internal epoll write-continuation doesn't
+    reliably re-signal `mhdEpollFd` in this integration, since every other
+    response in this file already uses `MHD_create_response_from_buffer`
+    successfully - switched `handleStatic()` to match (read the whole
+    file, buffer it) rather than root-causing the zero-copy path. Verified
+    fixed: `app.js`/`target.js` now serve byte-identical to their on-disk
+    copies via `diff`.
+
+    **Smoke-tested end to end** against the local `stars` test DB (121
+    targets) - a real, not synthetic, exercise of every new code path:
+    - `target-save` on a real Landolt-standard (`ConstTarget`) row: name/
+      comment/priority/interruptible/ra/pm_ra all round-tripped correctly
+      through a partial update (only `ra`/`pm_ra` sent - `dec`/`pm_dec`
+      correctly left at their prior stored values, via the new
+      `ConstTarget::getRawPosition()` - deliberately *not*
+      `getPosition()`, which would have applied proper-motion correction
+      and drifted the stored value on every save).
+    - A scratch `TYPE_ELLIPTICAL` target (inserted directly, a
+      hand-verified valid MPC one-line element for "Ceres") correctly
+      loaded (`isElliptical:true`, `hasPosition:false`, real computed RA/
+      Dec via `EllTarget::getPosition()`'s orbit propagation) and a
+      `mpec=`-only update to a different valid line (for "Pallas")
+      correctly re-derived the name (`placeholder` -> `Pallas`) and orbit
+      in one call, alongside an unrelated `priority` change in the same
+      request.
+    - Cross-type rejection verified both directions: `ra=` against the
+      elliptical target and `mpec=` against the `ConstTarget` both
+      correctly 400 with a clear message, neither touched the DB.
+    - `scheduling-save`/`scheduling` get/set/upsert-collapse (two saves
+      in a row leave exactly one row), unauthenticated-write 401,
+      nonexistent-target 400 on both endpoints, oversized-name 400.
+    - The new `web/static/target.html`/`target.js` editor page itself,
+      real-browser-tested (headless `google-chrome` + raw CDP, this
+      sandbox has no `claude-in-chrome` extension available - same
+      fallback task 8 used): loads a target via `?id=` or the form,
+      renders the right fields for its type, submits a real save via
+      `form.requestSubmit()`, confirmed in Postgres afterward. One
+      false alarm chased down and ruled out during this: RA/Dec displayed
+      with a comma (`20,9208`) on this Czech-locale (`cs_CZ.UTF-8`) test
+      machine - confirmed via CDP (`element.value` is `"20.9208"`, period-
+      based, and the actual saved DB value was unchanged/correct) that
+      this is `<input type="number">`'s locale-aware *display* only, not
+      a real data bug.
+    - All test data cleaned up afterward (scratch elliptical target
+      deleted, `scheduling` table emptied, target 202's edited fields
+      restored to their original values) - confirmed via a final DB
+      query, not just assumed.
+
+    **Not yet done, explicitly phase 2**: the second named ECPG
+    connection (D50 + SBT simultaneously in one process, `EXEC SQL SET
+    CONNECTION` bracketed by the existing `dbAccessMutex`), the cross-DB
+    "present/enabled in D50 / SBT / both" status view, and a structured
+    telescope-mode/`sim` picker in the UI (today the scheduling panel is
+    a plain `sinfo` textarea - functional, not yet a dedicated control).
+    Also not done: creating new targets via `web` (this pass is edit-only
+    - `rts2-addtarget`/`rtspy.cli.addtarget` remain the creation path),
+    and Alt/Az terrestrial targets (needs new `getPosition()` logic in
+    `db/db`, not just a `web` change - see above).
 
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 

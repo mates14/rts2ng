@@ -243,6 +243,14 @@ class Target:public Rts2Target
 
 		int getTelescopeMode () { return tar_telescope_mode; }
 
+		/**
+		 * Whether this target may be interrupted by a higher-priority
+		 * target once observation has started. Loaded from/saved to the
+		 * targets.interruptible column.
+		 */
+		bool getInterruptible () { return interruptible; }
+		void setInterruptible (bool _interruptible) { interruptible = _interruptible; }
+
 		// return target semi-diameter, in degrees
 		double getSDiam () { return getSDiam (ln_get_julian_from_sys ()); }
 
@@ -437,7 +445,10 @@ class Target:public Rts2Target
 		const char *getTargetComment () { return target_comment; }
 		void setTargetComment (const char *in_target_comment)
 		{
-			delete target_comment;
+			// target_comment is allocated with new char[] (see loadTarget()/
+			// the destructor) - this used to free it with plain delete, a
+			// new[]/delete mismatch (undefined behaviour, not just style).
+			delete[] target_comment;
 			target_comment = new char[strlen (in_target_comment) + 1];
 			strcpy (target_comment, in_target_comment);
 		}
@@ -860,6 +871,8 @@ class Target:public Rts2Target
 
 		int tar_telescope_mode;			// telescope mode - from modefiles, target will be set to it before movement start
 
+		bool interruptible;
+
 		int startCalledNum;			// how many times startObservation was called - good to know for targets
 		double airmassScale;
 
@@ -919,6 +932,17 @@ class ConstTarget:public Target
 		virtual int getRST (struct ln_rst_time *rst, double jd, double horizon);
 		virtual int compareWithTarget (Target * in_target, double grb_sep_limit);
 		virtual void printExtra (Rts2InfoValStream & _os, double JD);
+
+		/**
+		 * Return the raw stored position, with no proper-motion
+		 * correction applied (unlike getPosition(pos, JD), which applies
+		 * it whenever proper motion is set). Needed for a caller that
+		 * wants to edit ra or dec alone while leaving the other
+		 * unchanged - reading getPosition()'s JD-corrected value back
+		 * and re-saving it would drift the stored position by whatever
+		 * proper motion has accumulated since it was last saved.
+		 */
+		void getRawPosition (struct ln_equ_posn *pos) { *pos = position; }
 
 		void setPosition (double ra, double dec) { position.ra = ra; position.dec = dec; }
 		void setProperMotion (double pm_ra, double pm_dec) { proper_motion.ra = pm_ra; proper_motion.dec = pm_dec; }

@@ -51,6 +51,7 @@
 #include <deque>
 #include <fcntl.h>
 #include <filesystem>
+#include <fstream>
 #include <vector>
 #include <list>
 #include <mutex>
@@ -83,6 +84,84 @@ const char *getParam (struct MHD_Connection *connection, const char *key, const 
 	const char *v = MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, key);
 	return v ? v : def;
 }
+
+#ifdef WEB_HAVE_DB
+bool hasParam (struct MHD_Connection *connection, const char *key)
+{
+	return MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, key) != nullptr;
+}
+
+/**
+ * Query-string parameters for /api/db/target-save, parsed on the main
+ * thread (getParam()'s returned pointers are only valid for the
+ * duration of this call) into a value this handler's worker-pool job
+ * can capture and own for its own lifetime - same reasoning as
+ * handleDb()'s existing imagesDirCopy for /api/db/images. Only fields
+ * whose query parameter was actually present get a non-null pointer out
+ * of toUpdate(), so an unset field is left untouched by dbUpdateTarget()
+ * rather than being reset to this struct's zero-value default - see
+ * rts2web::TargetUpdate's doc comment.
+ */
+struct ParsedTargetUpdate
+{
+	bool hasName = false, hasComment = false, hasInfo = false, hasMpec = false;
+	bool hasPriority = false, hasBonus = false, hasEnabled = false, hasInterruptible = false;
+	bool hasRa = false, hasDec = false, hasPmRa = false, hasPmDec = false;
+
+	std::string name, comment, info, mpec;
+	float priority = 0, bonus = 0;
+	bool enabled = false, interruptible = false;
+	double ra = 0, dec = 0, pmRa = 0, pmDec = 0;
+
+	rts2web::TargetUpdate toUpdate () const
+	{
+		rts2web::TargetUpdate u;
+		if (hasName) u.name = &name;
+		if (hasComment) u.comment = &comment;
+		if (hasInfo) u.info = &info;
+		if (hasMpec) u.mpec = &mpec;
+		if (hasPriority) u.priority = &priority;
+		if (hasBonus) u.bonus = &bonus;
+		if (hasEnabled) u.enabled = &enabled;
+		if (hasInterruptible) u.interruptible = &interruptible;
+		if (hasRa) u.ra = &ra;
+		if (hasDec) u.dec = &dec;
+		if (hasPmRa) u.pmRa = &pmRa;
+		if (hasPmDec) u.pmDec = &pmDec;
+		return u;
+	}
+};
+
+ParsedTargetUpdate parseTargetUpdate (struct MHD_Connection *connection)
+{
+	ParsedTargetUpdate p;
+	if ((p.hasName = hasParam (connection, "name")))
+		p.name = getParam (connection, "name", "");
+	if ((p.hasComment = hasParam (connection, "comment")))
+		p.comment = getParam (connection, "comment", "");
+	if ((p.hasInfo = hasParam (connection, "info")))
+		p.info = getParam (connection, "info", "");
+	if ((p.hasMpec = hasParam (connection, "mpec")))
+		p.mpec = getParam (connection, "mpec", "");
+	if ((p.hasPriority = hasParam (connection, "priority")))
+		p.priority = atof (getParam (connection, "priority", "0"));
+	if ((p.hasBonus = hasParam (connection, "bonus")))
+		p.bonus = atof (getParam (connection, "bonus", "0"));
+	if ((p.hasEnabled = hasParam (connection, "enabled")))
+		p.enabled = strcmp (getParam (connection, "enabled", "1"), "0") != 0;
+	if ((p.hasInterruptible = hasParam (connection, "interruptible")))
+		p.interruptible = strcmp (getParam (connection, "interruptible", "1"), "0") != 0;
+	if ((p.hasRa = hasParam (connection, "ra")))
+		p.ra = atof (getParam (connection, "ra", "0"));
+	if ((p.hasDec = hasParam (connection, "dec")))
+		p.dec = atof (getParam (connection, "dec", "0"));
+	if ((p.hasPmRa = hasParam (connection, "pm_ra")))
+		p.pmRa = atof (getParam (connection, "pm_ra", "0"));
+	if ((p.hasPmDec = hasParam (connection, "pm_dec")))
+		p.pmDec = atof (getParam (connection, "pm_dec", "0"));
+	return p;
+}
+#endif
 
 // STATUS.md task 8: minimal extension-based Content-Type guess for
 // files under --static-dir - just enough for the shipped web/static/
@@ -291,13 +370,34 @@ class HttpD:public HttpDBase
 		std::string authFile;
 		UserLogins userLogins;
 
-		// STATUS.md task 8: the static frontend (web/static/) - served
-		// by the daemon itself directly (MHD_create_response_from_fd,
-		// zero-copy), matching the "daemon is fully self-sufficient,
-		// proxy is opportunistic, not required" deployment decision. "/"
-		// maps to "<staticDir>/index.html". Empty (unset) disables this
-		// route entirely, same convention as images-dir/cache-dir/
-		// auth-file.
+		// STATUS.md task 8: the static frontend (web/static/) - served by
+		// the daemon itself directly, matching the "daemon is fully
+		// self-sufficient, proxy is opportunistic, not required"
+		// deployment decision. "/" maps to "<staticDir>/index.html".
+		// Empty (unset) disables this route entirely, same convention as
+		// images-dir/cache-dir/auth-file.
+		//
+		// Originally MHD_create_response_from_fd() (zero-copy) - changed
+		// to a plain read-into-buffer + MHD_create_response_from_buffer()
+		// (2026-08-26) after live-testing this session's new target.html/
+		// target.js (both >4KB) found every static file at or above 4096
+		// bytes hung indefinitely past its first 4096-byte chunk (curl
+		// stuck forever, not just slow - confirmed with --max-time 30).
+		// Reproduced with the pre-existing app.js (14570 bytes) too, so
+		// this was never new-page-specific: any static asset this size or
+		// larger has apparently always hung for any client unlucky enough
+		// to actually block on the full body (a real browser fetching
+		// app.js as a <script src> may not have surfaced this the same
+		// way curl does - not independently confirmed either way). Root
+		// cause not chased into libmicrohttpd's own internal-epoll write-
+		// continuation logic under this daemon's external-polling
+		// integration; every other response in this file already uses
+		// MHD_create_response_from_buffer (JSON bodies, preview JPEGs),
+		// so switching this one path to match is the same fix by
+		// analogy, not a guess - and these are small (KB-scale) JS/CSS/
+		// HTML files, so reading the whole thing per request is a
+		// perfectly reasonable cost, not a real regression versus the
+		// zero-copy path it replaces.
 		std::string staticDir;
 
 		static const size_t maxMessages = 200;
@@ -909,18 +1009,17 @@ bool HttpD::handleStatic (struct MHD_Connection *connection, const char *url, MH
 	if (ec || cf.compare (0, cr.size (), cr) != 0)
 		return false;
 
-	int fd = open (fullPath.c_str (), O_RDONLY);
-	if (fd < 0)
+	// See staticDir's doc comment (class HttpD, above) for why this reads
+	// the whole file into memory instead of the zero-copy
+	// MHD_create_response_from_fd() path it used to use.
+	std::ifstream in (fullPath, std::ios::binary);
+	if (!in)
 		return false;
+	std::ostringstream contents;
+	contents << in.rdbuf ();
+	std::string body = contents.str ();
 
-	struct stat st;
-	if (fstat (fd, &st) != 0 || !S_ISREG (st.st_mode))
-	{
-		close (fd);
-		return false;
-	}
-
-	struct MHD_Response *response = MHD_create_response_from_fd (st.st_size, fd);
+	struct MHD_Response *response = MHD_create_response_from_buffer (body.length (), (void *) body.data (), MHD_RESPMEM_MUST_COPY);
 	MHD_add_response_header (response, "Content-Type", staticContentType (relPath));
 	result = MHD_queue_response (connection, MHD_HTTP_OK, response);
 	MHD_destroy_response (response);
@@ -1232,6 +1331,120 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 					dbSearchImagesByTarget (imagesDirCopy, targetId, os);
 				else
 					dbSearchImagesByNight (imagesDirCopy, year, month, day, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (!strcmp (url, "/api/db/target-save"))
+	{
+		const char *idStr = getParam (connection, "id", "");
+		if (idStr[0] == '\0')
+		{
+			static const char *msg = "{\"error\":\"missing id parameter\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+		int targetId = atoi (idStr);
+
+		// Editing a target is a write, gated the same way /api/set is
+		// (STATUS.md task 6) - "db-targets" is a permission-file token an
+		// admin grants explicitly (or covers via a "*" wildcard line),
+		// distinct from bus device names since this isn't one.
+		std::string authError;
+		if (!checkWriteAuth (connection, "db-targets", authError))
+			return sendUnauthorized (connection, authError.c_str ());
+
+		ParsedTargetUpdate upd = parseTargetUpdate (connection);
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, upd] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbUpdateTarget (targetId, upd.toUpdate (), os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (!strcmp (url, "/api/db/scheduling") || !strcmp (url, "/api/db/scheduling-save"))
+	{
+		bool wantSave = !strcmp (url, "/api/db/scheduling-save");
+
+		const char *idStr = getParam (connection, "id", "");
+		if (idStr[0] == '\0')
+		{
+			static const char *msg = "{\"error\":\"missing id parameter\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+		int targetId = atoi (idStr);
+
+		std::string sinfo;
+		if (wantSave)
+		{
+			std::string authError;
+			if (!checkWriteAuth (connection, "db-targets", authError))
+				return sendUnauthorized (connection, authError.c_str ());
+			sinfo = getParam (connection, "sinfo", "");
+		}
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, wantSave, sinfo] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				if (wantSave)
+					dbSaveScheduling (targetId, sinfo, os);
+				else
+					dbGetScheduling (targetId, os);
 				r.body = os.str ();
 				r.httpStatus = MHD_HTTP_OK;
 			}
