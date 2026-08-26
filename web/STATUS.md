@@ -1827,6 +1827,90 @@ nothing to exercise them against meaningfully. Both now exist:
     d50/api/devices` returns D50's real live device list through the
     full real proxy chain.
 
+    **Phase 4, DONE (2026-08-26) - reframed the whole page around the
+    user's own correction: "This is not SBT - this is SBT+D50 unified
+    target database... except of course, that it is two databases that
+    want to be maintained in sync."** Phases 2-3 modeled this as "I am
+    one telescope, optionally synced with a peer" (a `currentTarget`/
+    `peerTarget` split, "Local"/"Peer" table columns, a de-emphasized
+    opt-in settings panel). That was the wrong mental model for a page
+    whose *only* real users are people who think of D50+SBT as one
+    facility - reworked around a `siteData = {d50, sbt}` structure with
+    no privileged "local" side, and three purpose-named boxes instead of
+    one generic target form:
+    - **What** (`target-form`) - fields genuinely shared between both
+      telescopes: name, comment, position-or-MPC-line, info. Exactly the
+      phase 2/3 reconciliation algorithm (missing-on-one-side auto-fills
+      immediately and for real - verified via `psql`, not just the UI;
+      present-and-different-on-both is never auto-written, SBT's value
+      is shown for review instead), just operating on `siteData.d50`/
+      `.sbt` and feeding *one* form rather than two. Save now always
+      writes to both telescopes that have the target at all - there's no
+      more "save locally, then push" asymmetry, because there's no more
+      "locally".
+    - **How** - unchanged script-editing mechanics (STATUS.md phase 3),
+      now showing both telescopes' camera groups (D50: C0/C1, SBT:
+      C1/C2/C3 - 5 rows total) in the same box instead of only the
+      locally-served telescope's cameras, fetching each group through
+      `apiUrl(site, ...)`.
+    - **When** - genuinely restructured, not just moved: priority and a
+      new `duration=` (scheduling.sinfo's actual production-used key -
+      confirmed by the user the other sinfo keys this session had
+      speculatively supported, `mag=`/`snr=`/`filters=`/`count=`/
+      `pscale=`, are unused in production and not worth keeping in the
+      UI at all) are **per-telescope and deliberately never reconciled**
+      - a checkbox + priority + duration row per telescope, matching
+      exactly how `sch/scheduler_core.py` already treats them (its own
+      priority×duration aperture-equalization logic assumes they
+      legitimately differ per telescope). One shared "request type"
+      dropdown (`oneof`/`and` labelled "All"/`sim`) writes `sinfo`'s
+      `type=` key identically to both sides on save, merged in
+      preserving each side's own `duration=` - verified via `psql` that
+      a save changing D50's priority/duration and the shared request
+      type left SBT's own priority/duration genuinely untouched while
+      both sides picked up the same `type=`.
+    - **Dropped entirely per explicit direction, not deferred**: `bonus`
+      (internal, user doesn't need to see it), `interruptible` (never
+      used in practice - everything is interruptible), every sinfo key
+      except `duration=`/`type=`. None of these are hidden-but-still-
+      wired - the frontend simply no longer reads or writes them, so an
+      existing value in the database is left exactly as it was, never
+      touched by this page again.
+    - Layout: `.target-boxes` (new `style.css` rule) is a CSS grid,
+      `repeat(auto-fit, minmax(340px, 1fr))` - three side by side on a
+      wide screen, wrapping to 2+1 then 1-per-row on narrower ones, per
+      the user's own description; built to accept a fourth
+      scheduler-output box later without a layout rewrite.
+    - The site-identity/peer-path settings survive (still needed - the
+      page still only gets served by one of the two daemons and reaches
+      the other through the same-origin proxy) but are now purely a
+      fallback for when hostname auto-detection guesses wrong, tucked
+      into one `<details>` at the very bottom of the page instead of
+      being a named, prominent "peer sync" section - there is no more
+      user-facing concept of "peer" at all, only "D50" and "SBT" shown
+      as equal rows.
+
+    **Smoke-tested end to end**, same two-genuinely-separate-local-DBs
+    methodology, headless-Chrome/CDP with `Fetch.enable
+    ({handleAuthRequests:true})` for the write paths: seeded a missing
+    comment on D50 only, different priority/duration on each side, and
+    `type=and` on SBT only, then confirmed after one load that the
+    comment was genuinely auto-filled into D50's database (not just
+    displayed) while priority/duration stayed independently different
+    on each side (no cross-contamination) and the request-type dropdown
+    correctly showed SBT's `and`; then, via real button clicks, renamed
+    the target (What box Save) and changed D50's priority/duration plus
+    the shared request type to `sim` (When box Save), and confirmed via
+    `psql` on both real databases that the name landed on both, D50's
+    priority/duration changed while SBT's stayed exactly as seeded, and
+    both sides ended up with `type=sim` while keeping their own
+    `duration=`. Screenshotted the resulting three-box layout (and,
+    incidentally, the "one side unreachable" degradation path, hit for
+    free by a fresh browser profile defaulting to the wrong site
+    identity - D50's box correctly grayed out with a clear "not present"
+    note in all three boxes rather than erroring or showing stale data).
+    All seeded test data restored/removed and verified clean afterward.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

@@ -608,3 +608,101 @@ header h1 {
 	margin-top: 0;
 	flex-basis: 100%;
 }
+
+/* target.html - unified What/How/When layout */
+
+.unified-heading {
+	font-size: 16px;
+	margin: 4px 0 12px 0;
+}
+
+.target-boxes {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+	gap: 16px;
+	align-items: start;
+}
+
+.target-box {
+	margin-bottom: 0;
+}
+
+.script-group-label {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	margin: 14px 0 4px 0;
+}
+
+.script-group-label:first-child {
+	margin-top: 0;
+}
+
+.telescope-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--border);
+	flex-wrap: wrap;
+}
+
+.telescope-row:last-child {
+	border-bottom: none;
+}
+
+.telescope-row .telescope-name {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+	width: 70px;
+	flex-shrink: 0;
+}
+
+.telescope-row label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.telescope-row input[type="number"] {
+	font-size: 13px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	width: 90px;
+}
+
+.telescope-row.unavailable {
+	opacity: 0.5;
+}
+
+#request-type-label select {
+	font-size: 13px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	width: 100%;
+	margin-top: 4px;
+}
+
+#what-log ul {
+	margin: 0 0 12px 0;
+	padding-left: 18px;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+#what-log li {
+	margin-bottom: 4px;
+}
+
+#peer-settings {
+	margin-top: 16px;
+	font-size: 12px;
+}

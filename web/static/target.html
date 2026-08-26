@@ -20,118 +20,95 @@
 		<div id="load-status" class="status-line"></div>
 	</section>
 
-	<section id="target-panel" class="panel" hidden>
-		<h2>Target <span id="tar-id-label"></span></h2>
-		<form id="target-form">
-			<div class="field-grid">
-				<label>Name <input id="f-name" type="text" maxlength="150"></label>
-				<label>Type <input id="f-type" type="text" disabled></label>
-				<label>Priority <input id="f-priority" type="number" step="any"></label>
-				<label>Bonus <input id="f-bonus" type="number" step="any"></label>
-			</div>
+	<h2 id="tar-id-label" class="unified-heading" hidden></h2>
 
-			<div class="checkbox-row">
-				<label><input id="f-enabled" type="checkbox"> Enabled</label>
-				<label><input id="f-interruptible" type="checkbox"> Interruptible</label>
-			</div>
+	<div id="target-boxes" class="target-boxes" hidden>
+		<section id="what-panel" class="panel target-box">
+			<h2>What</h2>
+			<p class="hint">
+				Shared across both telescopes - one target, one set of
+				coordinates. A value missing on one side is filled in from the
+				other automatically; a value genuinely different on both
+				(rare, but happens - e.g. a marginal position update applied
+				to only one side) is never silently overwritten - shown here
+				for review instead, applied to both sides only when you Save.
+			</p>
+			<div id="what-log"></div>
+			<form id="target-form">
+				<div class="field-grid">
+					<label>Name <input id="f-name" type="text" maxlength="150"></label>
+					<label>Type <input id="f-type" type="text" disabled></label>
+				</div>
 
-			<label class="block-label">Comment <textarea id="f-comment" rows="2"></textarea></label>
+				<label class="block-label">Comment <textarea id="f-comment" rows="2"></textarea></label>
 
-			<div id="position-fields" class="field-grid" hidden>
-				<label>RA (deg) <input id="f-ra" type="number" step="any"></label>
-				<label>Dec (deg) <input id="f-dec" type="number" step="any"></label>
-				<label>PM RA (arcdeg/yr) <input id="f-pmra" type="number" step="any"></label>
-				<label>PM Dec (arcdeg/yr) <input id="f-pmdec" type="number" step="any"></label>
-			</div>
+				<div id="position-fields" class="field-grid" hidden>
+					<label>RA (deg) <input id="f-ra" type="number" step="any"></label>
+					<label>Dec (deg) <input id="f-dec" type="number" step="any"></label>
+					<label>PM RA (arcdeg/yr) <input id="f-pmra" type="number" step="any"></label>
+					<label>PM Dec (arcdeg/yr) <input id="f-pmdec" type="number" step="any"></label>
+				</div>
 
-			<label id="mpec-label" class="block-label" hidden>
-				MPC one-line orbital element
-				<textarea id="f-mpec" rows="2" spellcheck="false"></textarea>
-			</label>
-
-			<label id="info-label" class="block-label">
-				Info (tar_info)
-				<textarea id="f-info" rows="2" spellcheck="false"></textarea>
-			</label>
-
-			<div class="cmd-buttons">
-				<button type="submit">Save target</button>
-			</div>
-		</form>
-		<div id="save-status" class="status-line"></div>
-	</section>
-
-	<section id="scripts-panel" class="panel" hidden>
-		<h2>Scripts</h2>
-		<p class="hint">
-			Per-camera observing script override for this target. A camera
-			with no override falls back to its own device's configured
-			default (<code>rts2.ini</code>'s per-camera <code>script</code>
-			setting) - click <strong>[*] default</strong> to clear an
-			override and go back to that. Scripts are always per-telescope
-			(D50 and SBT don't share cameras) - never synced with the peer.
-		</p>
-		<div id="scripts-list"></div>
-	</section>
-
-	<section id="scheduling-panel" class="panel" hidden>
-		<h2>Scheduling</h2>
-		<p class="hint">
-			Free-text <code>key=value</code> parameters read by the site's separate
-			Python scheduler (not by rts2ng itself). Known keys: <code>duration=</code>
-			(seconds, overrides the estimator), <code>mag=</code>, <code>snr=</code>,
-			<code>filters=</code> (e.g. <code>gri</code>), <code>count=</code>,
-			<code>pscale=</code> (priority timescale, days), <code>type=</code>
-			(<code>oneof</code>/<code>and</code>/<code>sim</code> - compound-reservation
-			mode across telescopes; <code>sim</code> is not yet acted on by the
-			scheduler as of this page being written).
-		</p>
-		<form id="scheduling-form">
-			<textarea id="f-sinfo" rows="2" spellcheck="false" placeholder="e.g. duration=600 filters=gri count=5"></textarea>
-			<div class="cmd-buttons">
-				<button type="submit">Save scheduling</button>
-			</div>
-		</form>
-		<div id="scheduling-status" class="status-line"></div>
-	</section>
-
-	<section id="peer-panel" class="panel" hidden>
-		<h2>D50 / SBT sync <span id="peer-site-label"></span></h2>
-		<p class="hint">
-			D50/SBT-specific, purely a browser-side convenience (see
-			web/STATUS.md task 10 phase 2) - neither daemon knows the other
-			exists. On load this always fetches the same target ID from the
-			peer telescope (a same-origin Apache proxy path, preconfigured
-			per site below) and keeps name/comment/priority/interruptible/
-			position-or-MPC-line/scheduling's <code>type=</code> in sync:
-			a field missing on one side is filled in from the other
-			immediately; a field present but genuinely different on both
-			sides is never auto-written - the SBT value is shown here for
-			editing (and saved locally only if you click Save), the other
-			side is left untouched. Saving here also pushes these same
-			fields to the peer. Enabled/bonus/the rest of scheduling stay
-			deliberately per-telescope.
-		</p>
-		<details id="peer-settings">
-			<summary>Site / peer path (auto-detected, override only if wrong)</summary>
-			<form id="peer-config-form" class="inline-form">
-				<label>This telescope
-					<select id="peer-site">
-						<option value="sbt">SBT</option>
-						<option value="d50">D50</option>
-					</select>
+				<label id="mpec-label" class="block-label" hidden>
+					MPC one-line orbital element
+					<textarea id="f-mpec" rows="2" spellcheck="false"></textarea>
 				</label>
-				<label>Peer proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt - empty disables sync"></label>
-				<button type="submit">Save</button>
+
+				<label id="info-label" class="block-label">
+					Info (tar_info)
+					<textarea id="f-info" rows="2" spellcheck="false"></textarea>
+				</label>
+
+				<div class="cmd-buttons">
+					<button type="submit">Save target</button>
+				</div>
 			</form>
-		</details>
-		<div id="peer-status" class="status-line"></div>
-		<div id="peer-log"></div>
-		<div id="peer-compare"></div>
-		<div class="cmd-buttons">
-			<button type="button" id="peer-refresh">Refresh peer comparison</button>
-		</div>
-	</section>
+			<div id="save-status" class="status-line"></div>
+		</section>
+
+		<section id="how-panel" class="panel target-box">
+			<h2>How</h2>
+			<p class="hint">
+				Per-camera observing script. Always per-telescope - D50 and SBT
+				don't share cameras, so nothing here is synced. <strong>[*]
+				default</strong> clears an override and falls back to that
+				camera's own configured default.
+			</p>
+			<div id="scripts-list"></div>
+		</section>
+
+		<section id="when-panel" class="panel target-box">
+			<h2>When</h2>
+			<p class="hint">Not really "when" - how the scheduler should place this target.</p>
+			<div id="telescope-rows"></div>
+			<label class="block-label" id="request-type-label">
+				Request type
+				<select id="f-request-type">
+					<option value="">any one telescope (default)</option>
+					<option value="and">all checked telescopes, no timing constraint</option>
+					<option value="sim">all checked telescopes, starting together</option>
+				</select>
+			</label>
+			<div class="cmd-buttons">
+				<button type="button" id="save-when">Save scheduling</button>
+			</div>
+			<div id="when-status" class="status-line"></div>
+		</section>
+	</div>
+
+	<details id="peer-settings">
+		<summary>Advanced: telescope identity / proxy path (auto-detected, override only if wrong)</summary>
+		<form id="peer-config-form" class="inline-form">
+			<label>This page is served by
+				<select id="peer-site">
+					<option value="sbt">SBT</option>
+					<option value="d50">D50</option>
+				</select>
+			</label>
+			<label>Other telescope's proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt"></label>
+			<button type="submit">Save</button>
+		</form>
+	</details>
 
 	<script src="target.js"></script>
 </body>
