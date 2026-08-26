@@ -512,3 +512,99 @@ header h1 {
 .peer-compare-table tr.info-row td {
 	color: var(--text-muted);
 }
+
+#peer-log ul {
+	margin: 10px 0 0 0;
+	padding-left: 18px;
+	font-size: 13px;
+}
+
+#peer-log li {
+	margin-bottom: 4px;
+}
+
+/* target.html - collapsible peer site/path settings */
+
+#peer-settings {
+	margin-bottom: 4px;
+}
+
+#peer-settings summary {
+	cursor: pointer;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+#peer-settings .inline-form {
+	margin-top: 10px;
+}
+
+#peer-settings select {
+	font-size: 13px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+
+/* target.html - per-camera script rows */
+
+.script-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--border);
+	flex-wrap: wrap;
+}
+
+.script-row:last-child {
+	border-bottom: none;
+}
+
+.script-camera-name {
+	font-weight: 600;
+	width: 32px;
+	flex-shrink: 0;
+}
+
+.script-input {
+	flex: 1;
+	min-width: 200px;
+	font-size: 13px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font-family: var(--mono);
+}
+
+.script-default-btn {
+	font-size: 12px;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	background: var(--panel-bg);
+	color: var(--text-muted);
+	border-radius: 6px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.script-default-btn.active {
+	border-color: var(--good);
+	color: var(--good);
+	background: #dcfce7;
+}
+
+.script-row button:not(.script-default-btn) {
+	font-size: 13px;
+	padding: 6px 12px;
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: white;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.script-row-status {
+	margin-top: 0;
+	flex-basis: 100%;
+}

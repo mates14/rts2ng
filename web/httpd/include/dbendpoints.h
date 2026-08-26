@@ -119,6 +119,29 @@ void dbGetScheduling (int targetId, std::ostringstream &os);
  */
 void dbSaveScheduling (int targetId, const std::string &sinfo, std::ostringstream &os);
 
+/**
+ * GET /api/db/scripts?id=N - every camera that has a script override
+ * stored for this target: {"tarId":N,"scripts":{"C0":"...",...}}. A
+ * camera absent from the map is using its device's configured default
+ * (rts2.ini's per-camera "script" setting) - see rts2db::Target::
+ * getScript()'s doc comment. Throws rts2core::Error if the target
+ * itself doesn't exist.
+ */
+void dbListScripts (int targetId, std::ostringstream &os);
+
+/**
+ * POST /api/db/script-save?id=N&camera=C1&script=... - set (upsert)
+ * the target's script override for one camera.
+ */
+void dbSaveScript (int targetId, const std::string &camera, const std::string &script, std::ostringstream &os);
+
+/**
+ * POST /api/db/script-delete?id=N&camera=C1 - clear the target's
+ * script override for one camera, reverting it to the device's
+ * configured default. Not an error if there was no override.
+ */
+void dbDeleteScript (int targetId, const std::string &camera, std::ostringstream &os);
+
 /** GET /api/db/observations?id=N - every observation of target id
  * (empty array, not an error, if the target exists but was never
  * observed - the common case on a fresh test DB). Throws

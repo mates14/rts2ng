@@ -1006,6 +1006,30 @@ void Target::setScript (const char *device_name, const char *buf)
 	EXEC SQL COMMIT;
 }
 
+void Target::deleteScript (const char *device_name)
+{
+	if (checkDbConnection ())
+		throw SqlError ();
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	VARCHAR d_camera_name[8];
+	int d_tar_id = getTargetID ();
+	EXEC SQL END DECLARE SECTION;
+
+	d_camera_name.len = strlen (device_name);
+	if (d_camera_name.len > 8)
+		d_camera_name.len = 8;
+	strncpy (d_camera_name.arr, device_name, d_camera_name.len);
+
+	EXEC SQL DELETE FROM scripts WHERE tar_id = :d_tar_id AND camera_name = :d_camera_name;
+	// ECPG_NOT_FOUND (0 rows matched) just means there was no override to
+	// begin with - not an error. Same ecpg quirk documented at length in
+	// rts2db::Scheduling::setSinfo() (scheduling.ec).
+	if (sqlca.sqlcode && sqlca.sqlcode != ECPG_NOT_FOUND)
+		throw SqlError ();
+	EXEC SQL COMMIT;
+}
+
 std::string Target::getPIName ()
 {
 	return labels.getTargetLabels (getTargetID (), LABEL_PI).getString ("", ",");

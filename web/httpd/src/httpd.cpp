@@ -1467,6 +1467,110 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/scripts"))
+	{
+		const char *idStr = getParam (connection, "id", "");
+		if (idStr[0] == '\0')
+		{
+			static const char *msg = "{\"error\":\"missing id parameter\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+		int targetId = atoi (idStr);
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbListScripts (targetId, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (!strcmp (url, "/api/db/script-save") || !strcmp (url, "/api/db/script-delete"))
+	{
+		bool wantDelete = !strcmp (url, "/api/db/script-delete");
+
+		const char *idStr = getParam (connection, "id", "");
+		const char *camera = getParam (connection, "camera", "");
+		if (idStr[0] == '\0' || camera[0] == '\0')
+		{
+			static const char *msg = "{\"error\":\"missing id or camera parameter\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+		int targetId = atoi (idStr);
+		std::string cameraStr (camera);
+		std::string script = wantDelete ? std::string () : getParam (connection, "script", "");
+
+		// Writes gated the same way target-save/scheduling-save are
+		// (STATUS.md task 6) - shares the "db-targets" permission token.
+		std::string authError;
+		if (!checkWriteAuth (connection, "db-targets", authError))
+			return sendUnauthorized (connection, authError.c_str ());
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, cameraStr, script, wantDelete] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				if (wantDelete)
+					dbDeleteScript (targetId, cameraStr, os);
+				else
+					dbSaveScript (targetId, cameraStr, script, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 
 	static const char *notFound = "{\"error\":\"not found\"}";
 	struct MHD_Response *response = MHD_create_response_from_buffer (strlen (notFound), (void *) notFound, MHD_RESPMEM_PERSISTENT);

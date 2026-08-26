@@ -1694,6 +1694,116 @@ nothing to exercise them against meaningfully. Both now exist:
     daemons/centralds, seeded drift on `stars`) cleaned up and verified
     removed afterward.
 
+    **Phase 3, DONE (2026-08-26) - per-camera script overrides, and the
+    peer-sync UX redesigned again from "manual push/pull" to "always
+    syncs".** Both driven by the user's own explicit design, not open
+    questions this pass had to resolve itself.
+
+    **Scripts** (`db/db/include/rts2db/targetscripts.h`+`.ec`, new
+    `Target::deleteScript()` in target.h/target.ec, three new endpoints
+    `GET /api/db/scripts` / `POST .../script-save` / `.../script-delete`,
+    new "Scripts" panel in `target.html`/`target.js`): a target's
+    per-camera observing-script override, editable and clearable. `Target::
+    getScript()`/`setScript()` already existed (classic-derived, unchanged)
+    but nothing could *list* which cameras have an override without
+    already knowing their names, and nothing could *delete* one at all -
+    `TargetScripts::listForTarget()` and `Target::deleteScript()` are both
+    genuinely new. Deleting an override (the "[*] default" button) reverts
+    the camera to its own device's configured default per `getScript()`'s
+    existing `rts2.ini` fallback - the button doesn't invent that
+    mechanism, it just clears the row that was overriding it. Camera list
+    per site is a hardcoded `SITES` constant in `target.js` (D50: C0, C1;
+    SBT: C1, C2, C3, per the user directly) - scripts are never synced
+    between telescopes (they don't share cameras), so this is the one new
+    panel with no cross-DB logic at all.
+
+    **Real pre-existing bug found while wiring the DB layer for this**:
+    `scripts(tar_id, camera_name)` has no unique constraint in
+    `create/tables.sql` (same gap `scheduling` had) even though both real
+    production DBs already carry one (`scripts_uniq_cam_tar`, most likely
+    from `rts2-configdb`'s original bootstrap) - without it,
+    `Target::setScript()`'s insert-then-update-on-failure upsert pattern
+    silently degrades into "keeps inserting duplicate rows" on repeated
+    edits of the same (target, camera). Added the constraint to
+    `create/tables.sql` and a guarded `db/sql/update/rel_1_0_3.sql` (a
+    no-op where it already exists, e.g. real production) rather than
+    leaving fresh installs exposed to it.
+
+    **Peer sync redesigned**: phase 2's manual Push/Pull buttons are gone.
+    User's framing - "a smart tool that always syncs the given fields,
+    and actually handles the state of synchronisation" - meant three
+    concrete behaviour changes, all in `target.js` only (still zero
+    daemon changes, still entirely browser-side):
+    - **Site identity and peer path are now preconfigured defaults, not
+      something the operator types in.** `SITES.sbt`/`SITES.d50` give
+      each a sensible peer proxy path (`/d50`/`/sbt`); `detectSite()`
+      guesses from `location.hostname` (containing "d50" -> D50, else
+      SBT - matches the real `d50.asu.cas.cz`/`lascaux.asu.cas.cz`
+      hostnames) and both remain overridable via a de-emphasized
+      `<details>` settings widget for the rare case the guess is wrong.
+    - **Auto-fill runs on every load, unconditionally, for the synced
+      field set** (name/comment/priority/interruptible/position-or-mpec,
+      plus sinfo's `type=` token): whichever side is missing a value
+      gets it written immediately from the side that has it - no button,
+      no confirmation, per "we can trust people... a desync makes no
+      true harm". Verified this is a real write, not just a display
+      change, by checking Postgres directly on both sides after a load.
+    - **A field present-and-different on both sides is never
+      auto-written** (the one case explicitly called out as not safe to
+      resolve blindly) - **the SBT value is authoritative for display**:
+      on the non-SBT instance, the local *form* (not the DB) is
+      overridden to show SBT's value, flagged in a new sync log; on the
+      SBT instance itself, nothing changes (it's already the source of
+      truth) and the log just notes D50 wasn't touched. A subsequent
+      Save (on either side, for any reason - a fresh edit or adopting a
+      shown conflict value) now always also pushes the same synced-field
+      set to the peer - verified with a real edit (renaming the target)
+      that correctly landed on both databases after one Save, alongside
+      a conflict-shown priority value that also committed to both sides
+      only once Save was clicked, never before.
+    - Comparison table's columns are now explicitly labeled "(SBT)"/
+      "(D50)" rather than generic "Local"/"Peer", using `currentSite` to
+      know which is which.
+
+    **A real, if minor, validation gap fixed alongside this**:
+    `dbUpdateTarget()` rejected `ra=`/`mpec=` sent to the wrong target
+    type but had no matching rejection for a plain `info=` sent to an
+    *elliptical* target - it would have called `setTargetInfo()` directly,
+    silently bypassing `orbitFromMPC()` and decoupling the stored text
+    from the orbit/name/type it's supposed to drive. Found while making
+    sure the new auto-fill/push logic always routes an elliptical
+    target's info through `mpec`, never `info` - closed the gap at the
+    API layer itself (`dbendpoints.cpp`) so it's not just this page's
+    JS that happens to avoid it.
+
+    **Smoke-tested end to end**, same two-genuinely-separate-local-DBs-
+    plus-headless-CDP methodology as phase 2, now modeling the real
+    camera layout too (`stars` seeded as D50 with cameras C0/C1,
+    `stars_peer` seeded as SBT with C1/C2/C3): scripts panel showed the
+    right camera list per site and round-tripped a save/clear through
+    real button clicks (not just the API) with a real DB write confirmed
+    via `psql`; seeded a genuine three-way drift (comment/pm_ra missing
+    on D50 only, priority conflicting on both) and confirmed after one
+    page load that D50's comment/pm_ra were *actually written* to
+    Postgres while its conflicting priority was *not* (form showed 9,
+    database still had 5) and SBT's database was completely untouched
+    throughout; confirmed the SBT-side load of the same target correctly
+    left its own form alone and explicitly logged "D50 not touched"
+    rather than adopting D50's differing value; a subsequent Save on the
+    D50 page (with both the conflict-shown priority and a fresh,
+    deliberate name edit) correctly landed both changes on *both*
+    databases; `sinfo`'s `type=`-only merge re-verified in this new
+    model, including that it correctly registered as unequal, non-`nan`
+    RA/Dec drift once a proper-motion value from an earlier auto-fill
+    step made the two sides' live-computed positions genuinely diverge
+    by a small but real amount over the seconds between the two fetches
+    - a real instance of exactly the "coordinates marginally differ"
+    case the user flagged as acceptable to just treat as an ordinary
+    conflict, not a hypothetical. All test data (target 202's edited
+    fields, seeded scheduling/scripts/camera rows, the scratch
+    `stars_peer` database) restored/removed and verified clean
+    afterward.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

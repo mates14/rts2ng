@@ -204,6 +204,14 @@ class Target:public Rts2Target
 		void setScript (const char *device_name, const char *buf);
 
 		/**
+		 * Delete this target's script override for a given camera - the
+		 * device falls back to its own configured default (getScript()'s
+		 * rts2.ini "script" fallback) once this row is gone. A no-op, not
+		 * an error, if no override existed for this camera.
+		 */
+		void deleteScript (const char *device_name);
+
+		/**
 		 * Get target project investigator name.
 		 */
 		std::string getPIName ();

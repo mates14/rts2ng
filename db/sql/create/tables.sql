@@ -219,7 +219,14 @@ CREATE TABLE counts (
 CREATE TABLE scripts (
 	tar_id		integer REFERENCES targets(tar_id),
 	camera_name	varchar(8) REFERENCES cameras(camera_name),
-	script		varchar (2000) NOT NULL
+	script		varchar (2000) NOT NULL,
+	-- Both real production DBs (lascaux/d50) already carry this
+	-- constraint (added ad hoc, outside any versioned migration, most
+	-- likely by rts2-configdb's bootstrap) - Target::setScript()'s
+	-- insert-then-update-on-failure upsert pattern silently degrades to
+	-- "keeps inserting duplicate rows" without it. Added here so fresh
+	-- installs start with the schema production already relies on.
+	CONSTRAINT scripts_uniq_cam_tar UNIQUE (tar_id, camera_name)
 );
 
 -- holds script for GRB observations

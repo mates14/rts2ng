@@ -9,6 +9,7 @@
 #include "rts2db/observationset.h"
 #include "rts2db/imageset.h"
 #include "rts2db/scheduling.h"
+#include "rts2db/targetscripts.h"
 #include "configuration.h"
 
 #include <libnova/libnova.h>
@@ -229,6 +230,15 @@ void rts2web::dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostrin
 		delete tar;
 		throw rts2core::Error ("mpec only applies to elliptical (minor planet/comet) targets");
 	}
+	if (upd.info && ell)
+	{
+		// A plain `info` on an elliptical target would call
+		// setTargetInfo() directly, bypassing orbitFromMPC() entirely -
+		// silently decoupling the stored text from the orbit/name/type
+		// it's supposed to drive. Must go through `mpec` instead.
+		delete tar;
+		throw rts2core::Error ("info cannot be set directly on an elliptical target - its tar_info is the MPC orbital line, set via mpec instead");
+	}
 
 	// Target::saveWithID() now clamps these to the column width rather
 	// than overflowing (see target.ec), but silently truncating an
@@ -330,6 +340,75 @@ void rts2web::dbSaveScheduling (int targetId, const std::string &sinfo, std::ost
 	os << "{\"tarId\":" << targetId << ",\"sinfo\":";
 	jsonString (sinfo.c_str (), os);
 	os << "}";
+}
+
+void rts2web::dbListScripts (int targetId, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	// Same existence check as dbGetScheduling() - a bad target id should
+	// be a 400, not a misleadingly empty script map.
+	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	delete tar;
+
+	std::map <std::string, std::string> scripts = rts2db::TargetScripts::listForTarget (targetId);
+
+	os << "{\"tarId\":" << targetId << ",\"scripts\":{";
+	bool first = true;
+	for (std::map <std::string, std::string>::iterator iter = scripts.begin (); iter != scripts.end (); iter++)
+	{
+		if (!first)
+			os << ",";
+		first = false;
+		jsonString (iter->first.c_str (), os);
+		os << ":";
+		jsonString (iter->second.c_str (), os);
+	}
+	os << "}}";
+}
+
+void rts2web::dbSaveScript (int targetId, const std::string &camera, const std::string &script, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	try
+	{
+		tar->setScript (camera.c_str (), script.c_str ());
+	}
+	catch (rts2core::Error &er)
+	{
+		delete tar;
+		throw;
+	}
+	delete tar;
+
+	os << "{\"tarId\":" << targetId << ",\"camera\":";
+	jsonString (camera.c_str (), os);
+	os << ",\"script\":";
+	jsonString (script.c_str (), os);
+	os << "}";
+}
+
+void rts2web::dbDeleteScript (int targetId, const std::string &camera, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	try
+	{
+		tar->deleteScript (camera.c_str ());
+	}
+	catch (rts2core::Error &er)
+	{
+		delete tar;
+		throw;
+	}
+	delete tar;
+
+	os << "{\"tarId\":" << targetId << ",\"camera\":";
+	jsonString (camera.c_str (), os);
+	os << ",\"deleted\":true}";
 }
 
 void rts2web::dbListObservations (int targetId, std::ostringstream &os)

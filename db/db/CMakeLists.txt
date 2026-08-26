@@ -17,6 +17,7 @@ db_ecpg_sources(RTS2DB_ECPG_SOURCES
 	src/sub_targets.ec
 	src/queues.ec
 	src/scheduling.ec
+	src/targetscripts.ec
 )
 
 add_library(db STATIC

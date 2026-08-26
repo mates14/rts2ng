@@ -61,6 +61,19 @@
 		<div id="save-status" class="status-line"></div>
 	</section>
 
+	<section id="scripts-panel" class="panel" hidden>
+		<h2>Scripts</h2>
+		<p class="hint">
+			Per-camera observing script override for this target. A camera
+			with no override falls back to its own device's configured
+			default (<code>rts2.ini</code>'s per-camera <code>script</code>
+			setting) - click <strong>[*] default</strong> to clear an
+			override and go back to that. Scripts are always per-telescope
+			(D50 and SBT don't share cameras) - never synced with the peer.
+		</p>
+		<div id="scripts-list"></div>
+	</section>
+
 	<section id="scheduling-panel" class="panel" hidden>
 		<h2>Scheduling</h2>
 		<p class="hint">
@@ -83,26 +96,40 @@
 	</section>
 
 	<section id="peer-panel" class="panel" hidden>
-		<h2>Peer telescope</h2>
+		<h2>D50 / SBT sync <span id="peer-site-label"></span></h2>
 		<p class="hint">
-			Optional D50/SBT sync - purely a browser-side convenience (see
-			web/STATUS.md task 10 phase 2): this page fetches the same
-			target ID from a peer <code>rts2-httpd</code> reached via a
-			same-origin Apache proxy path (e.g. <code>/d50</code> on
-			lascaux's vhost), compares the fields both telescopes are
-			expected to share, and can push/pull them. Neither daemon
-			knows about the other - if this doesn't apply to your site,
-			leave the path empty.
+			D50/SBT-specific, purely a browser-side convenience (see
+			web/STATUS.md task 10 phase 2) - neither daemon knows the other
+			exists. On load this always fetches the same target ID from the
+			peer telescope (a same-origin Apache proxy path, preconfigured
+			per site below) and keeps name/comment/priority/interruptible/
+			position-or-MPC-line/scheduling's <code>type=</code> in sync:
+			a field missing on one side is filled in from the other
+			immediately; a field present but genuinely different on both
+			sides is never auto-written - the SBT value is shown here for
+			editing (and saved locally only if you click Save), the other
+			side is left untouched. Saving here also pushes these same
+			fields to the peer. Enabled/bonus/the rest of scheduling stay
+			deliberately per-telescope.
 		</p>
-		<form id="peer-config-form" class="inline-form">
-			<label>Peer proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt - empty disables this"></label>
-			<button type="submit">Save</button>
-		</form>
+		<details id="peer-settings">
+			<summary>Site / peer path (auto-detected, override only if wrong)</summary>
+			<form id="peer-config-form" class="inline-form">
+				<label>This telescope
+					<select id="peer-site">
+						<option value="sbt">SBT</option>
+						<option value="d50">D50</option>
+					</select>
+				</label>
+				<label>Peer proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt - empty disables sync"></label>
+				<button type="submit">Save</button>
+			</form>
+		</details>
 		<div id="peer-status" class="status-line"></div>
+		<div id="peer-log"></div>
 		<div id="peer-compare"></div>
-		<div class="cmd-buttons" id="peer-buttons" hidden>
-			<button type="button" id="peer-push">Push synced fields &rarr; peer</button>
-			<button type="button" id="peer-pull">Pull synced fields &larr; peer (fills the form, doesn't save)</button>
+		<div class="cmd-buttons">
+			<button type="button" id="peer-refresh">Refresh peer comparison</button>
 		</div>
 	</section>
 
