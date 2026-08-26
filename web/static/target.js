@@ -56,6 +56,10 @@ function detectSite () {
 
 let currentSite = detectSite ();
 
+function otherSite () {
+	return currentSite === 'sbt' ? 'd50' : 'sbt';
+}
+
 function peerPrefix () {
 	const stored = localStorage.getItem (PEER_PREFIX_KEY);
 	if (stored !== null)
@@ -100,6 +104,68 @@ function nearlyEqual (a, b) {
 	if (a === null || a === undefined || b === null || b === undefined)
 		return a === b;
 	return Math.abs (a - b) < 1e-6;
+}
+
+// --- RA/Dec sexagesimal display/parsing --------------------------------
+//
+// Cosmetic per the user's own request - decimal-degree RA/Dec with a
+// locale comma decimal separator (this session already found <input
+// type=number> renders that way on a comma-decimal system - see phase 1)
+// is hard to read at a glance. Storage/the API stay decimal degrees
+// throughout (rts2db::ConstTarget's position is degrees) - only the
+// display and the user's typed input go through these.
+
+function decToSexagesimal (deg, isRa, secDecimals) {
+	if (deg === null || deg === undefined || typeof deg !== 'number' || isNaN (deg))
+		return '';
+	const sign = deg < 0 ? '-' : (isRa ? '' : '+');
+	let a = Math.abs (deg);
+	if (isRa)
+		a /= 15; // degrees -> hours
+	let h = Math.floor (a);
+	let mFull = (a - h) * 60;
+	let m = Math.floor (mFull);
+	let s = (mFull - m) * 60;
+
+	// Round to secDecimals and carry into m/h if that rounds s up to 60
+	// (and m up to 60) - a plain toFixed() alone can print "60.0".
+	const factor = Math.pow (10, secDecimals);
+	s = Math.round (s * factor) / factor;
+	if (s >= 60) { s -= 60; m += 1; }
+	if (m >= 60) { m -= 60; h += 1; }
+
+	const pad2 = (n) => String (n).padStart (2, '0');
+	const sWidth = secDecimals > 0 ? secDecimals + 3 : 2;
+	return `${sign}${pad2 (h)}:${pad2 (m)}:${s.toFixed (secDecimals).padStart (sWidth, '0')}`;
+}
+
+/** Parse either sexagesimal ("12:34:56.7", "12 34 56.7", "-12 34 56,7")
+ * or plain decimal ("20.9208", "20,9208") - whichever the text looks
+ * like. Returns degrees, or null if unparseable/empty. `isRa` scales a
+ * sexagesimal reading from hours to degrees (*15); plain decimal input
+ * is assumed to already be degrees either way, since nobody types RA as
+ * decimal hours by hand. */
+function parseCoordinate (str, isRa) {
+	str = (str || '').trim ();
+	if (str === '')
+		return null;
+
+	const sex = str.match (/^([+-]?)\s*(\d+)[:\s]+(\d+)[:\s]+([\d.,]+)$/);
+	if (sex) {
+		const sign = sex[1] === '-' ? -1 : 1;
+		const h = parseFloat (sex[2]);
+		const m = parseFloat (sex[3]);
+		const s = parseFloat (sex[4].replace (',', '.'));
+		if (isNaN (h) || isNaN (m) || isNaN (s))
+			return null;
+		let val = h + m / 60 + s / 3600;
+		if (isRa)
+			val *= 15;
+		return sign * val;
+	}
+
+	const val = parseFloat (str.replace (',', '.'));
+	return isNaN (val) ? null : val;
 }
 
 async function fetchJson (url) {
@@ -149,6 +215,7 @@ async function loadTarget (id) {
 	setStatus (loadStatusEl, true, 'loading…');
 	targetBoxesEl.hidden = true;
 	tarIdLabelEl.hidden = true;
+	document.getElementById ('create-type-row').hidden = true;
 
 	const [d50, sbt] = await Promise.all ([loadSiteData ('d50', id), loadSiteData ('sbt', id)]);
 	siteData = { d50, sbt };
@@ -210,7 +277,12 @@ function getWhatFieldDescriptors (tar) {
 }
 
 function writeFormValue (d, value) {
-	d.formEl ().value = value ?? '';
+	if (d.key === 'ra')
+		d.formEl ().value = decToSexagesimal (value, true, 3);
+	else if (d.key === 'dec')
+		d.formEl ().value = decToSexagesimal (value, false, 1);
+	else
+		d.formEl ().value = value ?? '';
 }
 
 async function reconcileWhatBox () {
@@ -291,8 +363,10 @@ function readWhatFormParams () {
 	params.set ('comment', document.getElementById ('f-comment').value);
 
 	if (!document.getElementById ('position-fields').hidden) {
-		params.set ('ra', document.getElementById ('f-ra').value || '0');
-		params.set ('dec', document.getElementById ('f-dec').value || '0');
+		const ra = parseCoordinate (document.getElementById ('f-ra').value, true);
+		const dec = parseCoordinate (document.getElementById ('f-dec').value, false);
+		params.set ('ra', ra ?? '0');
+		params.set ('dec', dec ?? '0');
 		params.set ('pm_ra', document.getElementById ('f-pmra').value || '0');
 		params.set ('pm_dec', document.getElementById ('f-pmdec').value || '0');
 	}
@@ -311,7 +385,6 @@ document.getElementById ('target-form').addEventListener ('submit', async (ev) =
 		return;
 
 	const params = readWhatFormParams ();
-	params.set ('id', currentId);
 	const results = [];
 
 	// A 401 here triggers the browser's own native credential prompt
@@ -320,23 +393,133 @@ document.getElementById ('target-form').addEventListener ('submit', async (ev) =
 	// side (if reached through the proxy) prompts separately the first
 	// time, same reasoning.
 	for (const site of ['d50', 'sbt']) {
-		if (!siteData[site].exists)
-			continue;
-		try {
-			const r = await fetchJson (apiUrl (site, `api/db/target-save?${params.toString ()}`));
-			if (r.ok) {
-				siteData[site].target = r.body;
-				results.push (`${SITES[site].label}: saved`);
-			} else {
-				results.push (`${SITES[site].label}: ${r.body.error || 'error'}`);
+		const cb = document.getElementById (`f-enabled-${site}`);
+
+		if (siteData[site].exists) {
+			const p = new URLSearchParams (params);
+			p.set ('id', currentId);
+			try {
+				const r = await fetchJson (apiUrl (site, `api/db/target-save?${p.toString ()}`));
+				if (r.ok) {
+					siteData[site].target = r.body;
+					results.push (`${SITES[site].label}: saved`);
+				} else {
+					results.push (`${SITES[site].label}: ${r.body.error || 'error'}`);
+				}
+			} catch (e) {
+				results.push (`${SITES[site].label}: unreachable (${e})`);
 			}
-		} catch (e) {
-			results.push (`${SITES[site].label}: unreachable (${e})`);
+		} else if (cb && cb.checked) {
+			// Not present there yet, but checked in the When box - create
+			// it there now with the current What box values (see
+			// target.html's When-box hint). Type is inferred from the
+			// other side if it exists, otherwise from the "new target"
+			// type picker.
+			const type = document.getElementById ('create-type-row').hidden
+				? (document.getElementById ('mpec-label').hidden ? 'equatorial' : 'elliptical')
+				: document.getElementById ('f-create-type').value;
+			const p = new URLSearchParams (params);
+			p.set ('id', currentId);
+			p.set ('type', type);
+			p.set ('enabled', '1');
+			const prInput = document.getElementById (`f-priority-${site}`);
+			if (prInput && prInput.value !== '')
+				p.set ('priority', prInput.value);
+			try {
+				const r = await fetchJson (apiUrl (site, `api/db/target-create?${p.toString ()}`));
+				if (r.ok) {
+					siteData[site] = { exists: true, target: r.body, sinfo: '' };
+					results.push (`${SITES[site].label}: created`);
+				} else {
+					results.push (`${SITES[site].label}: create failed - ${r.body.error || 'error'}`);
+				}
+			} catch (e) {
+				results.push (`${SITES[site].label}: unreachable (${e})`);
+			}
 		}
 	}
 
-	setStatus (saveStatusEl, results.every ((r) => r.includes ('saved')), results.join (' / '));
+	setStatus (saveStatusEl, results.every ((r) => /saved|created/.test (r)), results.join (' / '));
+	document.getElementById ('create-type-row').hidden = true;
+	if (siteData.d50.exists || siteData.sbt.exists)
+		await reconcileWhatBox (); // re-renders the form from confirmed post-save state (e.g. RA/Dec back to sexagesimal display)
+	renderWhenBox ();
+	await renderScriptsBox ();
+});
+
+// --- New target -------------------------------------------------------------
+
+document.getElementById ('new-target-btn').addEventListener ('click', async () => {
+	setStatus (loadStatusEl, true, 'reserving a new target id…');
+
+	let id = null;
+	for (let attempt = 0; attempt < 8 && id === null; attempt++) {
+		let candidate;
+		try {
+			const r = await fetchJson (apiUrl (currentSite, 'api/db/new-target-id'));
+			if (!r.ok) {
+				setStatus (loadStatusEl, false, `cannot reserve an id: ${r.body.error || 'error'}`);
+				return;
+			}
+			candidate = r.body.id;
+		} catch (e) {
+			setStatus (loadStatusEl, false, `cannot reserve an id: ${e}`);
+			return;
+		}
+
+		// tar_id sequences are independent per database - a fresh id from
+		// this site's sequence could already be a real, unrelated target
+		// on the other site. Check, and draw again if so (see
+		// STATUS.md task 10 phase 5).
+		try {
+			const r = await fetchJson (apiUrl (otherSite (), `api/db/target?id=${candidate}`));
+			if (!r.ok)
+				id = candidate; // not found there either - safe on both sides
+		} catch (e) {
+			id = candidate; // other site unreachable - can't check, proceed with what we have
+		}
+	}
+
+	if (id === null) {
+		setStatus (loadStatusEl, false, 'could not find an id free on both telescopes after several tries - try again');
+		return;
+	}
+
+	document.getElementById ('load-id').value = id;
+	currentId = id;
+	siteData = { d50: { exists: false }, sbt: { exists: false } };
+
+	setStatus (loadStatusEl, true, `new target - id ${id} reserved (not created until you Save)`);
+	tarIdLabelEl.hidden = false;
+	tarIdLabelEl.textContent = `Target #${id} (new)`;
+	targetBoxesEl.hidden = false;
+
+	document.getElementById ('f-name').value = '';
+	document.getElementById ('f-type').value = '';
+	document.getElementById ('f-comment').value = '';
+	document.getElementById ('f-info').value = '';
+	document.getElementById ('f-mpec').value = '';
+	document.getElementById ('f-ra').value = '';
+	document.getElementById ('f-dec').value = '';
+	document.getElementById ('f-pmra').value = '';
+	document.getElementById ('f-pmdec').value = '';
+
+	document.getElementById ('create-type-row').hidden = false;
+	document.getElementById ('f-create-type').value = 'equatorial';
+	document.getElementById ('position-fields').hidden = false;
+	document.getElementById ('mpec-label').hidden = true;
+	document.getElementById ('info-label').hidden = false;
+
 	whatLogEl.innerHTML = '';
+	renderWhenBox ();
+	await renderScriptsBox ();
+});
+
+document.getElementById ('f-create-type').addEventListener ('change', (ev) => {
+	const elliptical = ev.target.value === 'elliptical';
+	document.getElementById ('position-fields').hidden = elliptical;
+	document.getElementById ('mpec-label').hidden = !elliptical;
+	document.getElementById ('info-label').hidden = elliptical;
 });
 
 // --- How box: per-camera scripts, per telescope, never synced ---------------
@@ -379,8 +562,8 @@ async function renderScriptsBox () {
 			nameEl.className = 'script-camera-name';
 			nameEl.textContent = cam;
 
-			const input = document.createElement ('input');
-			input.type = 'text';
+			const input = document.createElement ('textarea');
+			input.rows = 2;
 			input.className = 'script-input';
 			input.spellcheck = false;
 			input.value = hasOverride ? overrides[cam] : '';
@@ -401,7 +584,7 @@ async function renderScriptsBox () {
 			saveBtn.addEventListener ('click', () => saveScript (site, cam, input, statusEl));
 			defaultBtn.addEventListener ('click', () => deleteScript (site, cam, input, defaultBtn, hint, statusEl));
 
-			row.append (nameEl, input, defaultBtn, saveBtn, statusEl);
+			row.append (nameEl, defaultBtn, saveBtn, input, statusEl);
 			listEl.appendChild (row);
 		}
 	}
@@ -443,15 +626,16 @@ function renderWhenBox () {
 
 	for (const site of ['d50', 'sbt']) {
 		const d = siteData[site];
+		const unreachable = !d.exists && d.error && d.error.startsWith ('unreachable');
 		const row = document.createElement ('div');
-		row.className = 'telescope-row' + (d.exists ? '' : ' unavailable');
+		row.className = 'telescope-row' + (unreachable ? ' unavailable' : '');
 
 		const nameWrap = document.createElement ('div');
 		nameWrap.className = 'telescope-name';
 		const cb = document.createElement ('input');
 		cb.type = 'checkbox';
 		cb.id = `f-enabled-${site}`;
-		cb.disabled = !d.exists;
+		cb.disabled = unreachable;
 		if (d.exists)
 			cb.checked = !!d.target.enabled;
 		nameWrap.append (cb, document.createTextNode (' ' + SITES[site].label));
@@ -462,7 +646,7 @@ function renderWhenBox () {
 		prInput.type = 'number';
 		prInput.step = 'any';
 		prInput.id = `f-priority-${site}`;
-		prInput.disabled = !d.exists;
+		prInput.disabled = unreachable;
 		if (d.exists)
 			prInput.value = d.target.priority ?? '';
 		prLabel.appendChild (prInput);
@@ -474,7 +658,7 @@ function renderWhenBox () {
 		durInput.step = '1';
 		durInput.min = '0';
 		durInput.id = `f-duration-${site}`;
-		durInput.disabled = !d.exists;
+		durInput.disabled = unreachable;
 		if (d.exists)
 			durInput.value = parseSinfo (d.sinfo).duration ?? '';
 		durLabel.appendChild (durInput);
@@ -484,7 +668,7 @@ function renderWhenBox () {
 		if (!d.exists) {
 			const note = document.createElement ('span');
 			note.className = 'hint';
-			note.textContent = `not present (${d.error})`;
+			note.textContent = unreachable ? `unreachable (${d.error})` : 'not present - check the box and Save target to create it here';
 			row.appendChild (note);
 		}
 
@@ -508,8 +692,11 @@ document.getElementById ('save-when').addEventListener ('click', async () => {
 	const results = [];
 
 	for (const site of ['d50', 'sbt']) {
-		if (!siteData[site].exists)
+		if (!siteData[site].exists) {
+			if (document.getElementById (`f-enabled-${site}`).checked)
+				results.push (`${SITES[site].label}: not created yet - click Save target first`);
 			continue;
+		}
 
 		const enabled = document.getElementById (`f-enabled-${site}`).checked;
 		const priority = document.getElementById (`f-priority-${site}`).value || '0';

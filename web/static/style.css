@@ -568,8 +568,9 @@ header h1 {
 }
 
 .script-input {
-	flex: 1;
-	min-width: 200px;
+	flex-basis: 100%;
+	width: 100%;
+	resize: vertical;
 	font-size: 13px;
 	padding: 6px 8px;
 	border: 1px solid var(--border);

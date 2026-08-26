@@ -16,6 +16,7 @@
 		<form id="load-form" class="inline-form">
 			<label>Target ID <input id="load-id" type="number" min="1" step="1" required></label>
 			<button type="submit">Load</button>
+			<button type="button" id="new-target-btn">New target&hellip;</button>
 		</form>
 		<div id="load-status" class="status-line"></div>
 	</section>
@@ -32,6 +33,10 @@
 				(rare, but happens - e.g. a marginal position update applied
 				to only one side) is never silently overwritten - shown here
 				for review instead, applied to both sides only when you Save.
+				RA/Dec accept either sexagesimal (<code>12:34:56.7</code> or
+				<code>12 34 56.7</code>) or decimal degrees (<code>.</code> or
+				<code>,</code> as the decimal point) - typed however you like,
+				always redisplayed sexagesimally.
 			</p>
 			<div id="what-log"></div>
 			<form id="target-form">
@@ -40,11 +45,18 @@
 					<label>Type <input id="f-type" type="text" disabled></label>
 				</div>
 
-				<label class="block-label">Comment <textarea id="f-comment" rows="2"></textarea></label>
+				<div id="create-type-row" class="field-grid" hidden>
+					<label>New target type
+						<select id="f-create-type">
+							<option value="equatorial">Equatorial (RA/Dec)</option>
+							<option value="elliptical">Elliptical (MPEC)</option>
+						</select>
+					</label>
+				</div>
 
 				<div id="position-fields" class="field-grid" hidden>
-					<label>RA (deg) <input id="f-ra" type="number" step="any"></label>
-					<label>Dec (deg) <input id="f-dec" type="number" step="any"></label>
+					<label>RA <input id="f-ra" type="text" placeholder="HH:MM:SS.SSS or decimal deg"></label>
+					<label>Dec <input id="f-dec" type="text" placeholder="&plusmn;DD:MM:SS.S or decimal deg"></label>
 					<label>PM RA (arcdeg/yr) <input id="f-pmra" type="number" step="any"></label>
 					<label>PM Dec (arcdeg/yr) <input id="f-pmdec" type="number" step="any"></label>
 				</div>
@@ -53,6 +65,8 @@
 					MPC one-line orbital element
 					<textarea id="f-mpec" rows="2" spellcheck="false"></textarea>
 				</label>
+
+				<label class="block-label">Comment <textarea id="f-comment" rows="2"></textarea></label>
 
 				<label id="info-label" class="block-label">
 					Info (tar_info)
@@ -79,7 +93,13 @@
 
 		<section id="when-panel" class="panel target-box">
 			<h2>When</h2>
-			<p class="hint">Not really "when" - how the scheduler should place this target.</p>
+			<p class="hint">
+				Not really "when" - how the scheduler should place this
+				target. Priority and duration are per-telescope on purpose -
+				never synced. Checking a telescope that doesn't have this
+				target yet creates it there (with the current What box
+				values) the next time you Save target.
+			</p>
 			<div id="telescope-rows"></div>
 			<label class="block-label" id="request-type-label">
 				Request type

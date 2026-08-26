@@ -96,6 +96,35 @@ struct TargetUpdate
 void dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostringstream &os);
 
 /**
+ * GET /api/db/new-target-id - mints a fresh, currently-unused target ID
+ * (rts2db::newTargetId()) without creating anything. The frontend's "new
+ * target" / "replicate to the telescope that's missing it" flows use
+ * this to reserve a single ID before deciding which database(s) to
+ * actually create the row in (checking it's free on both first, when
+ * creating a genuinely brand-new target that should exist on both).
+ */
+void dbNewTargetId (std::ostringstream &os);
+
+/**
+ * POST /api/db/target-create?id=N&type=equatorial|elliptical&... -
+ * create a new target row with a specific, already-chosen ID (either a
+ * freshly-minted one from dbNewTargetId(), or an existing ID that's
+ * present in one database and being replicated into another that lacks
+ * it - saveWithID()'s INSERT-then-UPDATE-on-failure upsert makes both
+ * cases the same call). `type` picks which rts2db::Target subclass to
+ * instantiate - "equatorial" (a plain rts2db::ConstTarget, type_id 'O'/
+ * TYPE_OPORTUNITY) needs `ra`/`dec` in upd; "elliptical" needs `mpec`
+ * (parsed via EllTarget::orbitFromMPC(), which also derives name/type
+ * from it, same as dbUpdateTarget()'s mpec handling). Reuses
+ * TargetUpdate for the field payload - `info` is rejected for
+ * "elliptical" the same way dbUpdateTarget() rejects it post-creation.
+ * Alt/Az terrestrial targets remain out of scope (see STATUS.md).
+ * Throws rts2core::Error on a missing required field, an unparseable
+ * mpec, or a save failure.
+ */
+void dbCreateTarget (int targetId, const std::string &type, const TargetUpdate &upd, std::ostringstream &os);
+
+/**
  * GET /api/db/scheduling?id=N - the target's scheduling.sinfo string
  * ("" if the target has no scheduling row yet - not an error, that's
  * the common case for a target nobody has configured scheduling

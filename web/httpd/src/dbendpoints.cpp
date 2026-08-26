@@ -313,6 +313,84 @@ void rts2web::dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostrin
 	delete fresh;
 }
 
+void rts2web::dbNewTargetId (std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	int id = rts2db::newTargetId ();
+	os << "{\"id\":" << id << "}";
+}
+
+void rts2web::dbCreateTarget (int targetId, const std::string &type, const TargetUpdate &upd, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	bool elliptical = (type == "elliptical");
+
+	if (upd.name && upd.name->length () > 150)
+		throw rts2core::Error ("name is too long (max 150 characters)");
+	if (upd.comment && upd.comment->length () > 2000)
+		throw rts2core::Error ("comment is too long (max 2000 characters)");
+	if (upd.info && elliptical)
+		throw rts2core::Error ("info cannot be set directly on an elliptical target - its tar_info is the MPC orbital line, set via mpec instead");
+
+	rts2db::Target *tar;
+	if (elliptical)
+	{
+		if (!upd.mpec)
+			throw rts2core::Error ("mpec is required to create an elliptical target");
+		rts2db::EllTarget *ell = new rts2db::EllTarget ();
+		// orbitFromMPC() also derives and sets name/info/type from the
+		// parsed line - same as dbUpdateTarget()'s mpec handling.
+		if (ell->orbitFromMPC (upd.mpec->c_str ()))
+		{
+			delete ell;
+			throw rts2core::Error (std::string ("cannot parse mpec as an MPC minor-planet or comet one-line element: ") + *upd.mpec);
+		}
+		tar = ell;
+	}
+	else
+	{
+		if (!upd.ra || !upd.dec)
+		{
+			throw rts2core::Error ("ra and dec are required to create an equatorial target");
+		}
+		rts2db::ConstTarget *ct = new rts2db::ConstTarget ();
+		// TYPE_OPORTUNITY ('O') - the generic "just observe this" type
+		// already used elsewhere for ad-hoc science targets (confirmed
+		// against the user's own sch/database.py query, which explicitly
+		// selects type_id='O' as its "opportunity targets" case).
+		// Terrestrial/Alt-Az remains out of scope - see STATUS.md.
+		ct->setTargetType (TYPE_OPORTUNITY);
+		ct->setPosition (*upd.ra, *upd.dec);
+		if (upd.pmRa || upd.pmDec)
+			ct->setProperMotion (upd.pmRa ? *upd.pmRa : 0, upd.pmDec ? *upd.pmDec : 0);
+		tar = ct;
+	}
+
+	if (upd.name)
+		tar->setTargetName (upd.name->c_str ());
+	if (upd.comment)
+		tar->setTargetComment (upd.comment->c_str ());
+	if (upd.info)
+		tar->setTargetInfo (*upd.info);
+	if (upd.priority)
+		tar->setTargetPriority (*upd.priority);
+	// A newly-created target defaults enabled unless the caller
+	// explicitly said otherwise - matches Target::Target()'s own
+	// tar_enabled default (true) rather than inventing a different one.
+	tar->setTargetEnabled (upd.enabled ? *upd.enabled : true, false);
+
+	int ret = tar->saveWithID (true, targetId);
+	delete tar;
+	if (ret)
+		throw rts2core::Error ("failed to create target - see the daemon log for details");
+
+	rts2db::Target *fresh = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+	writeTargetDetail (fresh, os);
+	delete fresh;
+}
+
 void rts2web::dbGetScheduling (int targetId, std::ostringstream &os)
 {
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);

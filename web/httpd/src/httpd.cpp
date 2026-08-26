@@ -1467,6 +1467,101 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/new-target-id"))
+	{
+		// Read-only in effect (mints an ID via nextval but creates
+		// nothing), but treated as a write for auth purposes anyway -
+		// there's no legitimate read-only use for "reserve me an ID",
+		// and it costs nothing to gate it the same as the endpoints it
+		// exists to feed.
+		std::string authError;
+		if (!checkWriteAuth (connection, "db-targets", authError))
+			return sendUnauthorized (connection, authError.c_str ());
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbNewTargetId (os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (!strcmp (url, "/api/db/target-create"))
+	{
+		const char *idStr = getParam (connection, "id", "");
+		const char *typeStr = getParam (connection, "type", "");
+		if (idStr[0] == '\0' || typeStr[0] == '\0')
+		{
+			static const char *msg = "{\"error\":\"missing id or type parameter\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+		int targetId = atoi (idStr);
+		std::string typeCopy (typeStr);
+
+		std::string authError;
+		if (!checkWriteAuth (connection, "db-targets", authError))
+			return sendUnauthorized (connection, authError.c_str ());
+
+		ParsedTargetUpdate upd = parseTargetUpdate (connection);
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, typeCopy, upd] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbCreateTarget (targetId, typeCopy, upd.toUpdate (), os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 	else if (!strcmp (url, "/api/db/scripts"))
 	{
 		const char *idStr = getParam (connection, "id", "");

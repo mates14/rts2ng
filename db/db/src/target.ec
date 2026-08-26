@@ -1839,6 +1839,24 @@ int Target::printImages (double JD, std::ostream &_os, int flags, const char *im
 	return img_set.size ();
 }
 
+int rts2db::newTargetId ()
+{
+	if (checkDbConnection ())
+		throw SqlError ();
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	int db_new_id;
+	EXEC SQL END DECLARE SECTION;
+
+	// Same nextval('tar_id') draw Target::save() already does internally
+	// when no explicit ID is given - see that function's own comment.
+	EXEC SQL SELECT nextval ('tar_id') INTO :db_new_id;
+	if (sqlca.sqlcode)
+		throw SqlError ("cannot get new tar_id");
+	EXEC SQL COMMIT;
+	return db_new_id;
+}
+
 Target *createTarget (int _tar_id, struct ln_lnlat_posn *_obs, double _altitude)
 {
 	if (checkDbConnection ())

@@ -1214,6 +1214,20 @@ class TargetTerestial:public ConstTarget
 // `createTarget()`'s TYPE_PLAN case now throws, same as the other
 // deliberately-unported/removed target types.
 
+/**
+ * Mint a fresh, currently-unused target ID from the same `tar_id`
+ * sequence Target::save() already draws from internally when no
+ * explicit ID is given - factored out as its own function so a caller
+ * (the web target-creation flow) can reserve an ID *before* any fields
+ * are filled in, e.g. to check it's also free in a sibling database
+ * before committing to it. Does not create a target row - a caller that
+ * never follows up just leaves a small gap in the sequence, same as any
+ * other save() that's abandoned mid-edit.
+ *
+ * @throw SqlError on a DB-layer failure.
+ */
+int newTargetId ();
+
 }
 
 // print target information to stdout..

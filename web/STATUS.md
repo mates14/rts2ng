@@ -1911,6 +1911,108 @@ nothing to exercise them against meaningfully. Both now exist:
     note in all three boxes rather than erroring or showing stale data).
     All seeded test data restored/removed and verified clean afterward.
 
+    **Phase 5, DONE (2026-08-27) - target creation (both "replicate an
+    existing target to the telescope missing it" and genuinely brand-new
+    targets), sexagesimal RA/Dec, and a few layout/sizing cosmetics.**
+    Real new capability, not previously in scope (phase 1 deliberately
+    left target creation to `rts2-addtarget`) - the user found the real
+    gap by hand ("target 8040 does not exist in SBT database, if I save
+    the target, will it be inserted there too? Tried, it does not, I
+    think it should be possible").
+
+    **New `db/db` capability**: `rts2db::newTargetId()` (`target.h`/
+    `target.ec`) factors the `nextval('tar_id')` draw `Target::save()`
+    already did internally into its own function, so a caller can
+    reserve an ID *before* deciding where to create the row - needed
+    because `Target::saveWithID(true, id)` (already existed, already
+    used since phase 1 as the upsert both `dbUpdateTarget()` and now
+    target replication rely on) needs a specific ID up front, and
+    genuinely-new-target creation needs one that doesn't collide.
+    **Real cross-database subtlety worth recording**: D50's and SBT's
+    `tar_id` sequences are two independent Postgres sequences in two
+    independent databases - a fresh ID from one is *not* guaranteed free
+    in the other (their histories have diverged for years). The
+    frontend's "New target" flow draws from the current site's sequence,
+    checks the *other* site for a collision via a plain GET, and retries
+    (up to 8 times) if taken - not a hypothetical, this is exactly the
+    kind of assumption that would have silently clobbered an unrelated
+    real target on the other side had it gone unhandled.
+
+    **New endpoints**: `GET /api/db/new-target-id` (mints via
+    `newTargetId()`, does not create anything) and `POST /api/db/
+    target-create?id=N&type=equatorial|elliptical&...` (new `dbCreateTarget()`
+    in `dbendpoints.cpp` - instantiates a bare `rts2db::ConstTarget()`/
+    `EllTarget()` via their no-arg constructors, exactly the "create new
+    target, save() will persist it" usage those constructors' own doc
+    comments already described but nothing had exercised until now;
+    "equatorial" defaults to `TYPE_OPORTUNITY` ('O'), confirmed against
+    the user's own `sch/database.py` query as the real "ad-hoc science
+    target" type; reuses `TargetUpdate` for the field payload and the
+    same `mpec`-must-be-used-not-`info`-for-elliptical validation
+    `dbUpdateTarget()` already enforces). Alt/Az terrestrial remains out
+    of scope, same as every earlier phase.
+
+    **Frontend**: the When box's per-telescope checkbox is no longer
+    `disabled` when a site doesn't have the target - it's clickable, and
+    checking it (then clicking **Save target**) creates the target there
+    using the current What-box field values plus that site's own
+    Priority field, unifying "replicate to the missing side" and "create
+    a brand-new target" into one mechanism (the latter starts with
+    *both* sides missing). A new **New target…** button next to Load
+    reserves a collision-checked ID, shows a blank form with an
+    equatorial-vs-elliptical type picker (only shown when neither side
+    has the target yet - once one side exists, type is inferred from it,
+    same as before), and both telescope checkboxes default unchecked so
+    creation only happens where explicitly requested.
+
+    **Sexagesimal RA/Dec, purely cosmetic per explicit request** (a
+    decimal-degree `<input type=number>` rendering with a locale comma
+    decimal separator - confirmed back in phase 1's own testing on this
+    session's Czech-locale machine - "hurts to be seen"): `f-ra`/`f-dec`
+    are now plain text inputs, always *displayed* sexagesimal
+    (`decToSexagesimal()`, RA in `HH:MM:SS.SSS`, Dec in
+    `±DD:MM:SS.S`, with round-to-60 carry handling) and *parsed*
+    (`parseCoordinate()`) accepting either sexagesimal (colon or
+    space-separated) or plain decimal (`.` or `,`) input - "just
+    recognise what is there," per the user. Storage and the API contract
+    are untouched (still plain decimal degrees) - this is a display/
+    input-parsing layer only, verified by round-tripping a hand-typed
+    mixed-separator value (`"12:34:56.7"` RA, `"-05 06 07.8"` Dec)
+    through creation on both real (test) databases and confirming via
+    `psql` the stored decimal degrees matched the hand-computed
+    conversion exactly (188.73625° / -5.10216666666667°).
+
+    **Two smaller cosmetics, also per explicit request**: Comment moved
+    to sit directly above Info (both textareas, together at the bottom
+    of the What box, instead of Comment being separated from Info by the
+    position fields); the How box's script input is now a `<textarea
+    rows="2">` spanning the full row width (CSS `flex-basis: 100%`)
+    instead of a single-line `<input>`, matching Comment's sizing -
+    "some scripts are simply longer."
+
+    **Smoke-tested end to end** against the same kind of two genuinely
+    separate local databases as every earlier phase, headless-Chrome/CDP
+    with `Fetch.enable({handleAuthRequests:true})`: deleted target 202
+    from the SBT-role database, loaded it (confirmed the checkbox was
+    enabled, not disabled, with the new "check to create" wording),
+    checked SBT's box, set a distinct priority, clicked Save target, and
+    confirmed via `psql` on the real SBT-role database that the row now
+    existed with D50's shared fields (name, RA/Dec correctly round-
+    tripped through sexagesimal display) and its own independently-set
+    priority (77, distinct from D50's). Separately exercised **New
+    target** end to end: reserved an ID, filled the form with
+    intentionally mixed-format sexagesimal RA/Dec and different
+    per-telescope priorities, checked both boxes, saved, and confirmed
+    via `psql` on both databases that the target was created with
+    identical name/position (parsed correctly from the typed sexagesimal
+    text) and independently-correct per-telescope priority. One real
+    test-harness gotcha hit and resolved during this, not a product bug:
+    reusing a long-lived headless-Chrome tab across separate test script
+    invocations serves whatever `target.js` was loaded at the *original*
+    navigation, not the current on-disk file - same class of issue as
+    phase 2's `const`-redeclaration finding. All test targets/data
+    cleaned up and verified removed afterward.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.
