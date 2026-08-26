@@ -1581,16 +1581,118 @@ nothing to exercise them against meaningfully. Both now exist:
       restored to their original values) - confirmed via a final DB
       query, not just assumed.
 
-    **Not yet done, explicitly phase 2**: the second named ECPG
-    connection (D50 + SBT simultaneously in one process, `EXEC SQL SET
-    CONNECTION` bracketed by the existing `dbAccessMutex`), the cross-DB
-    "present/enabled in D50 / SBT / both" status view, and a structured
-    telescope-mode/`sim` picker in the UI (today the scheduling panel is
-    a plain `sinfo` textarea - functional, not yet a dedicated control).
-    Also not done: creating new targets via `web` (this pass is edit-only
-    - `rts2-addtarget`/`rtspy.cli.addtarget` remain the creation path),
-    and Alt/Az terrestrial targets (needs new `getPosition()` logic in
-    `db/db`, not just a `web` change - see above).
+    **Not yet done**: creating new targets via `web` (this pass is
+    edit-only - `rts2-addtarget`/`rtspy.cli.addtarget` remain the
+    creation path), and Alt/Az terrestrial targets (needs new
+    `getPosition()` logic in `db/db`, not just a `web` change - see
+    above).
+
+    **Phase 2, DONE (2026-08-26) - D50/SBT peer sync, entirely
+    client-side, not the dual-ECPG-connection design sketched above
+    when phase 1 landed.** User's own call, and the right one: since
+    "a desync makes no true harm" here (no atomicity/safety requirement),
+    routing sync through a *second daemon's own DB connection* - i.e.
+    the peer's `rts2-httpd` doing its own local write via the exact
+    `target-save`/`scheduling-save` endpoints phase 1 already built and
+    tested - is strictly simpler than teaching one process to hold two
+    live ECPG connections (`EXEC SQL SET CONNECTION` swapping bracketed
+    by `dbAccessMutex`, teaching every call site which connection it's
+    on). **Neither daemon knows the other exists** - zero changes to
+    `db/db` or `dbendpoints.cpp` for this phase; it's entirely new
+    browser-side logic in `web/static/target.js`, gated behind an
+    off-by-default, per-browser (`localStorage`) "peer proxy path"
+    setting that most deployments will never touch.
+
+    **CORS vs. same-origin proxy, decided in favour of the latter**: a
+    page loaded from one telescope's origin fetching the other's API is
+    cross-origin. Considered adding CORS headers (`Access-Control-Allow-
+    Origin`/`-Credentials` + `OPTIONS`-preflight handling in `httpd.cpp`,
+    needed because `Authorization` is a non-"simple" header) but rejected
+    it: real, permanent surface area in the daemon for a feature only
+    this site uses, versus reusing infrastructure that already exists
+    and is already proven - `app.js`'s relative-fetch design was already
+    built and tested (task 7/8) specifically to work correctly when
+    mounted under an Apache `ProxyPass` subpath. User confirmed Apache
+    is already configured this way on both real vhosts (`ProxyPass /d50
+    http://d50.asu.cas.cz:8889` on lascaux's, `/sbt` -> lascaux
+    symmetrically on d50's, matching `rts2-scheduler.cfg`'s own
+    `d50`/`sbt` resource names) - `target.js` just needed to know the
+    local peer-proxy path exists, nothing about the daemon changes.
+
+    **Sync field list is a deliberate, user-specified split, not
+    everything**: synced (both directions) - name, comment, priority,
+    interruptible, position (ra/dec/pm) or the MPC line, and *only*
+    `scheduling.sinfo`'s `type=` token. Never synced: `enabled` (that's
+    what encodes which telescope(s) run the target at all), `bonus`/
+    `bonus_time` (grounded in `create/tables.sql`'s own original
+    comment on those columns: *"here start site dependent part - that
+    depends highly on local object visibility"* - i.e. always meant to
+    be per-site, not a guess made for this feature), and the rest of
+    `sinfo` (`duration=`/`mag=`/`snr=`/`filters=`/`count=`/`pscale=` -
+    user's call: a 50cm and a 20cm scope legitimately want different
+    exposure parameters for the same target). `sinfo` sync merges just
+    the `type=` key into whatever the peer's sinfo already has (parse,
+    overwrite/delete one key, reserialize) - verified this leaves the
+    peer's own `duration=`/etc. genuinely untouched, not overwritten.
+
+    New "Peer telescope" panel in `target.html`/`target.js`: a
+    same-origin-relative "peer proxy path" setting (`localStorage`,
+    empty = feature fully inert - the panel still shows so it's
+    discoverable, but does nothing until set), a comparison table
+    (local vs. peer, per synced field, numeric fields compared with a
+    1e-6 tolerance rather than exact float equality) with mismatched
+    rows highlighted, and two explicit actions: **Push** (writes the
+    locally-loaded/saved target's synced fields to the peer via its own
+    `target-save`/`scheduling-save` - the peer's own auth gates it
+    independently) and **Pull** (fills the local *form* from the peer's
+    values - does not save; the operator still has to click the normal
+    Save buttons to commit, same single write-path mental model as
+    everywhere else on this page).
+
+    **A real, unrelated CSS bug found while testing this** (not
+    specific to the peer feature, but found because the peer buttons
+    are the first `hidden`+flex-classed element exercised in the
+    "should be hidden" state): `[hidden]` and an author class that sets
+    its own `display` (`.cmd-buttons`/`.field-grid`/`.block-label`, all
+    `display: flex/grid/block`) have *equal* CSS specificity - at a
+    specificity tie an author-origin rule always wins over the
+    browser's UA-stylesheet `[hidden]{display:none}`, regardless of
+    source order, so any element combining `hidden` with one of those
+    classes silently stayed visible. Confirmed this silently affected
+    `#position-fields`/`#mpec-label` too (not just the new `#peer-
+    buttons`) - i.e. a real, pre-existing bug in this session's own
+    task-10-phase-1 work, just never noticed because every target
+    tested so far happened to need those fields shown anyway. Fixed
+    with the standard `[hidden] { display: none !important; }` override
+    (same fix Bootstrap etc. ship for exactly this gotcha) rather than
+    stripping `display` from the three classes, since more classes will
+    likely combine with `hidden` later.
+
+    **Smoke-tested end to end against two genuinely separate local
+    databases** (not two connections to one DB - `stars` plus a real
+    `pg_dump`/`pg_restore` copy, `stars_peer`, with deliberately
+    diverged data), two scratch `rts2-httpd` instances, and headless
+    Chrome driven over raw CDP (`--disable-web-security` standing in
+    for what Apache's same-origin proxy provides in real deployment -
+    the only thing that flag is asked to relax here). One real
+    CDP-testing wrinkle worth recording: a cross-origin authenticated
+    `fetch()` to the write endpoint hung forever in headless mode even
+    with an explicit `Authorization` header - not a product bug, traced
+    to headless Chrome having no UI to resolve the native HTTP Basic
+    challenge; fixed the *test* by using CDP's `Fetch.enable
+    ({handleAuthRequests:true})`/`Fetch.continueWithAuth` (the documented
+    mechanism for exactly this), which unblocked it immediately and
+    confirmed the real code path works. Verified: the compare table
+    correctly flagged all real seeded differences (comment/priority/
+    sinfo-type=, plus an incidental PM-null-vs-zero case) and nothing
+    else; Push wrote the synced fields to the peer DB and merged only
+    `type=` into its sinfo, leaving the peer's own `duration=`/`filters=`
+    genuinely intact (checked via `psql` on both databases, not just
+    the UI's own read-back); Pull filled the form correctly and
+    provably did not touch the local DB until a separate explicit Save.
+    All test artifacts (scratch `stars_peer` database, scratch
+    daemons/centralds, seeded drift on `stars`) cleaned up and verified
+    removed afterward.
 
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 

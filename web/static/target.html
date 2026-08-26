@@ -82,6 +82,30 @@
 		<div id="scheduling-status" class="status-line"></div>
 	</section>
 
+	<section id="peer-panel" class="panel" hidden>
+		<h2>Peer telescope</h2>
+		<p class="hint">
+			Optional D50/SBT sync - purely a browser-side convenience (see
+			web/STATUS.md task 10 phase 2): this page fetches the same
+			target ID from a peer <code>rts2-httpd</code> reached via a
+			same-origin Apache proxy path (e.g. <code>/d50</code> on
+			lascaux's vhost), compares the fields both telescopes are
+			expected to share, and can push/pull them. Neither daemon
+			knows about the other - if this doesn't apply to your site,
+			leave the path empty.
+		</p>
+		<form id="peer-config-form" class="inline-form">
+			<label>Peer proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt - empty disables this"></label>
+			<button type="submit">Save</button>
+		</form>
+		<div id="peer-status" class="status-line"></div>
+		<div id="peer-compare"></div>
+		<div class="cmd-buttons" id="peer-buttons" hidden>
+			<button type="button" id="peer-push">Push synced fields &rarr; peer</button>
+			<button type="button" id="peer-pull">Pull synced fields &larr; peer (fills the form, doesn't save)</button>
+		</div>
+	</section>
+
 	<script src="target.js"></script>
 </body>
 </html>

@@ -15,6 +15,20 @@
 	box-sizing: border-box;
 }
 
+/* The [hidden] attribute and an author class that sets its own display
+ * (e.g. .cmd-buttons/.field-grid/.block-label's display:flex/grid/block
+ * below) have equal CSS specificity - an author rule wins over the
+ * browser's UA-stylesheet [hidden]{display:none} at a specificity tie,
+ * regardless of source order, so any element carrying both silently
+ * stays visible. Found live in target.html: #position-fields/#mpec-
+ * label/#peer-buttons all combine `hidden` with such a class. This is
+ * the standard fix (same one Bootstrap etc. use), not a hack specific
+ * to one element - !important is the only way to guarantee `hidden`
+ * always wins here. */
+[hidden] {
+	display: none !important;
+}
+
 body {
 	margin: 0;
 	padding: 16px;
@@ -462,4 +476,39 @@ header h1 {
 
 .status-line.err {
 	color: var(--bad);
+}
+
+/* target.html - peer telescope comparison table */
+
+.peer-compare-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	margin-top: 10px;
+}
+
+.peer-compare-table th, .peer-compare-table td {
+	text-align: left;
+	padding: 5px 8px;
+	border-bottom: 1px solid var(--border);
+}
+
+.peer-compare-table th {
+	color: var(--text-muted);
+	font-weight: 600;
+	font-size: 12px;
+}
+
+.peer-compare-table td {
+	font-family: var(--mono);
+	word-break: break-word;
+}
+
+.peer-compare-table tr.diff td {
+	background: #fef3c7;
+	color: var(--warn);
+}
+
+.peer-compare-table tr.info-row td {
+	color: var(--text-muted);
 }
