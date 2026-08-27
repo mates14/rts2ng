@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D50 Telescope - Ondřejov Observatory</title>
+    <style>
+        :root {
+            --bg: #f5f5f5;
+            --panel-bg: #ffffff;
+            --border: #ccc;
+            --text: #000000;
+            --text-muted: #555;
+            --th-bg: #ddd;
+            --logo-bg: #e8e8e8;
+            --good: #008b00;
+            --warn: #8B0000;
+            --error: #ff0000;
+        }
+
+        body.dark {
+            --bg: #1a1a1a;
+            --panel-bg: #262626;
+            --border: #444;
+            --text: #ddd;
+            --text-muted: #aaa;
+            --th-bg: #333;
+            --logo-bg: #2f2f2f;
+            --good: #4fd14f;
+            --warn: #ff8a8a;
+            --error: #ff5c5c;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background-color: var(--bg);
+            color: var(--text);
+            font-size: 12px;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 10px;
+            max-width: 1500px;
+            margin: 0 auto;
+        }
+
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            /* Otherwise a grid item stretches to match the row height -
+               cam-panel is taller now (two stacked camera rows), and the
+               title/status column should stay its own natural height
+               rather than growing to fill that. Same reasoning as
+               bart-monitor.html's identical rule. */
+            align-self: start;
+        }
+
+        .status-panel, .image-panel, .webcam-panel, .cam-panel, .legacy-panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .logo {
+            text-align: center;
+            border: 2px solid var(--text);
+            padding: 10px;
+            background-color: var(--logo-bg);
+        }
+
+        .logo h1 { margin: 5px 0; font-size: 24px; }
+        .logo h2 { margin: 5px 0; font-size: 14px; font-weight: normal; }
+
+        .temp-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 11px;
+        }
+
+        .temp-table th, .temp-table td {
+            border: 1px solid var(--border);
+            padding: 3px;
+            text-align: center;
+        }
+
+        .temp-table th { background-color: var(--th-bg); font-weight: bold; }
+
+        .webcam-panel, .legacy-panel {
+            /* Placed as a direct grid child of .container (not nested
+               inside .left-panel, which is fixed at 320px) so it can
+               span the full page width, below the title/status +
+               cameras row. */
+            grid-column: 1 / -1;
+        }
+
+        .legacy-panel img { max-width: 100%; border: 1px solid var(--border); }
+
+        /* cam-panel stays beside .left-panel (title/status), occupying
+           .container's second (flexible) column - not full width. One
+           row per camera within it, stacked vertically, each row
+           showing its two images large. Only two rows here (C0/C1) vs
+           bart-monitor.html's three (C1/C2/C3) - same .cam-grid/.cam-box
+           rules handle either count without change. */
+        .cam-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .cam-box {
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .cam-box h4 {
+            margin: 0;
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+            flex-shrink: 0;
+        }
+
+        .cam-box-body { flex: 1; min-width: 0; }
+
+        .latest-image {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .latest-image img {
+            width: 100%;
+            height: 480px;
+            object-fit: contain;
+            background: #111;
+            border: 1px solid var(--border);
+            cursor: pointer;
+        }
+
+        .latest-image-info {
+            font-size: 10px;
+            color: var(--text-muted);
+            white-space: pre-line;
+            text-align: left;
+            margin: 0 0 6px 0;
+        }
+
+        .webcam-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+
+        .webcam-column {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            align-items: center;
+        }
+
+        .webcam-column img {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            object-fit: contain;
+            background: #000;
+            border: 1px solid var(--border);
+            cursor: pointer;
+        }
+
+        /* Space is dark regardless of page theme, so this doesn't
+           follow --panel-bg/--text like everything else. */
+        #sky-canvas { width: 100%; height: auto; aspect-ratio: 1; border-radius: 50%; cursor: pointer; }
+
+        .control-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
+
+        .control-buttons button {
+            padding: 5px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+        }
+
+        .state-buttons button { font-weight: bold; padding: 8px 10px; font-size: 12px; flex: 1; }
+        .state-buttons .state-on { border-color: var(--good); color: var(--good); }
+        .state-buttons .state-standby { border-color: #b8860b; color: #b8860b; }
+        .state-buttons .state-off { border-color: var(--warn); color: var(--warn); }
+
+        #equalize-btn, #live-btn {
+            cursor: pointer;
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+        }
+        #equalize-btn.active, #live-btn.active { background: var(--good); color: white; border-color: var(--good); }
+
+        .status-value { margin: 3px 0; }
+
+        .error { color: var(--error); font-weight: bold; }
+        .good { color: var(--good); }
+        .warn { color: var(--warn); }
+        .standby { color: #b8860b; font-weight: bold; }
+
+        hr { margin: 10px 0; border: 1px solid var(--border); }
+
+        /* Lightbox */
+        .lightbox {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            cursor: pointer;
+        }
+
+        .lightbox-content {
+            position: relative;
+            margin: auto;
+            padding: 20px;
+            width: 90%;
+            height: 90%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        /* title/info take their natural height; the wrap flexes to
+           fill whatever's left of the 90vh box, and centers the image
+           inside it. The image's own box is sized in JS to its actual
+           fitted (scaled up or down) pixel size - not just left at
+           100%/100% of the wrap - so the border/shadow hug the visible
+           picture instead of an invisible, letterboxed square around
+           it. */
+        .lightbox-title, .lightbox-info { flex: 0 0 auto; }
+        .lightbox-img-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .lightbox img, .lightbox-img-wrap canvas {
+            display: block;
+            object-fit: contain;
+            border: 2px solid white;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Enlarged sky chart shown in the lightbox - round, like the
+           sidebar one, and hidden by default since the lightbox is
+           normally showing #lightbox-img instead. */
+        #lightbox-sky-canvas { display: none; border-radius: 50%; }
+
+        .lightbox-title { color: white; font-size: 18px; font-weight: bold; margin-bottom: 10px; text-align: center; }
+        .lightbox-close { position: absolute; top: 10px; right: 25px; color: white; font-size: 35px; font-weight: bold; cursor: pointer; user-select: none; }
+        .lightbox-close:hover { color: #ccc; }
+        .lightbox-info { color: white; font-size: 14px; margin-top: 10px; text-align: center; }
+
+        /* Compact mode (toggled via JS, persisted in a cookie, not tied
+           to viewport width like the media queries below) - squeezes
+           the page enough to fit on one screen for a quick glance. */
+        body.compact .container { max-width: none; gap: 6px; }
+        body.compact .status-panel, body.compact .image-panel,
+        body.compact .webcam-panel, body.compact .cam-panel, body.compact .legacy-panel { padding: 5px; }
+        body.compact .logo { padding: 4px; }
+        body.compact .logo h1 { font-size: 16px; margin: 2px 0; }
+        body.compact .logo h2 { font-size: 11px; margin: 2px 0; }
+        /* Two cameras side by side as columns instead of stacked rows -
+           same reasoning as bart-monitor.html's three-column version,
+           just one column narrower. */
+        body.compact .cam-grid { flex-direction: row; gap: 4px; }
+        body.compact .cam-box { flex: 1; flex-direction: column; align-items: stretch; padding: 4px; gap: 4px; }
+        body.compact .cam-box h4 { writing-mode: horizontal-tb; transform: none; text-align: center; }
+        body.compact .latest-image { grid-template-columns: 1fr; gap: 4px; margin-bottom: 2px; }
+        body.compact .latest-image img { height: auto; object-fit: initial; background: none; }
+        body.compact .latest-image-info { font-size: 9px; }
+        body.compact .webcam-grid { gap: 4px; }
+        body.compact .webcam-column img { aspect-ratio: 16 / 9; }
+        body.compact .temp-table { margin: 4px 0; }
+        body.compact .control-buttons { gap: 3px; }
+        body.compact .control-buttons button { padding: 3px 6px; }
+        body.compact hr { margin: 4px 0; }
+
+        /* Non-compact mode reflows at these breakpoints; compact mode
+           gets its own, narrower ones below - same split as
+           bart-monitor.html, same reasoning (a half-width window on a
+           wide screen shouldn't drop into the phone layout just because
+           compact mode is also on). */
+        @media (max-width: 1200px) {
+            body:not(.compact) .container { grid-template-columns: 1fr; }
+            body:not(.compact) .webcam-grid { grid-template-columns: repeat(2, 1fr); }
+            body:not(.compact) .latest-image img { height: 320px; }
+        }
+
+        @media (max-width: 700px) {
+            body:not(.compact) .webcam-grid { grid-template-columns: 1fr; }
+            body:not(.compact) .cam-box { flex-direction: column; align-items: stretch; }
+            body:not(.compact) .cam-box h4 { writing-mode: horizontal-tb; transform: none; text-align: center; }
+            body:not(.compact) .latest-image { grid-template-columns: 1fr; }
+            body:not(.compact) .latest-image img { height: 220px; }
+
+            body.compact .webcam-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 480px) {
+            body.compact .container { grid-template-columns: 1fr; }
+            body.compact .webcam-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <script>
+        // Applied inline, before the rest of the page renders, so
+        // dark/compact mode doesn't flash the default theme first.
+        (function () {
+            const m = document.cookie.match(/(?:^|; )darkMode=1(?:;|$)/);
+            if (m) document.body.classList.add('dark');
+            const c = document.cookie.match(/(?:^|; )compactMode=1(?:;|$)/);
+            if (c) document.body.classList.add('compact');
+        })();
+    </script>
+    <div id="lightbox" class="lightbox">
+        <div class="lightbox-content">
+            <span class="lightbox-close">&times;</span>
+            <div class="lightbox-title" id="lightbox-title"></div>
+            <div class="lightbox-img-wrap">
+                <img id="lightbox-img" src="" alt="Lightbox Image">
+                <canvas id="lightbox-sky-canvas"></canvas>
+            </div>
+            <div class="lightbox-info" id="lightbox-info">Click anywhere to close</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="left-panel">
+            <div class="status-panel">
+                <div class="logo">
+                    <h1>D50 Telescope</h1>
+                    <h2>Ondřejov Observatory</h2>
+                </div>
+                <div id="status-info">
+                    <div class="status-value"><strong>Status:</strong> <span id="serverd-status">...</span></div>
+                    <div id="telescope-status"></div>
+                    <div id="dome-status"></div>
+                    <hr>
+                    <div id="weather-status"></div>
+                </div>
+            </div>
+
+            <div class="status-panel" style="text-align: center;">
+                <h3 style="margin: 0 0 6px 0;">Sky</h3>
+                <canvas id="sky-canvas" width="300" height="300" title="Click to enlarge"></canvas>
+            </div>
+
+            <div class="control-buttons state-buttons">
+                <button class="state-on" onclick="switchState('on')">ON</button>
+                <button class="state-standby" onclick="switchState('standby')">STANDBY</button>
+                <button class="state-off" onclick="switchState('off')">OFF</button>
+            </div>
+            <div id="state-msg" class="status-value"></div>
+
+            <div class="control-buttons">
+                <button onclick="reloadWebcams()">reload webcams</button>
+                <button onclick="openArchive()">image archive</button>
+                <button onclick="toggleDarkMode()">dark mode</button>
+                <button onclick="toggleCompactMode()">compact mode</button>
+            </div>
+        </div>
+
+        <div class="cam-panel">
+            <h3 style="margin-top: 0;">Cameras</h3>
+            <div class="cam-grid">
+                <div class="cam-box">
+                    <h4>C0</h4>
+                    <div class="cam-box-body">
+                        <div class="latest-image">
+                            <img id="c0-image" src="C0_small.jpg" alt="C0" onclick="openLightbox('C0_full.jpg', 'C0 - Full Image')">
+                            <img id="c0-center" src="C0_center.jpg" alt="C0 center" onclick="openLightbox('C0_full.jpg', 'C0 - Full Image')">
+                        </div>
+                        <div id="c0-info" class="latest-image-info"></div>
+                        <div id="c0-status"></div>
+                    </div>
+                </div>
+                <div class="cam-box">
+                    <h4>C1</h4>
+                    <div class="cam-box-body">
+                        <div class="latest-image">
+                            <img id="c1-image" src="C1_small.jpg" alt="C1" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
+                            <img id="c1-center" src="C1_center.jpg" alt="C1 center" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
+                        </div>
+                        <div id="c1-info" class="latest-image-info"></div>
+                        <div id="c1-status"></div>
+                    </div>
+                </div>
+            </div>
+            <!--
+                C{n}_small.jpg/C{n}_center.jpg/C{n}_full.jpg/C{n}_info.txt
+                are written by the same external dark+flat-correction
+                process bart-monitor.html relies on, as sibling files in
+                this page's own directory - the user confirmed these
+                already work correctly for D50's own deployment ("the
+                images are OK"), so the relative-path convention is kept
+                exactly as-is rather than re-verified via a guessed
+                /images/ absolute path (which 404s - that's simply not
+                where this page or its sibling files actually live).
+                C1 is D50's guide camera (its own SCRIPT value runs
+                /etc/rts2/guide.py, confirmed live) rather than a second
+                science camera - if its pipeline doesn't produce the same
+                small/center/info files C0's does, this box will just show
+                a broken image rather than data, same as any other stale-
+                pipeline-output risk this convention already carries for
+                bart-monitor.html's three cameras.
+            -->
+        </div>
+
+        <div class="webcam-panel">
+            <h3 style="margin-top: 0;">
+                Webcams
+                <button id="equalize-btn" onclick="toggleEqualize()" style="font-size: 11px; padding: 3px 8px; margin-left: 10px;">equalize</button>
+                <button id="live-btn" onclick="toggleLive()" style="font-size: 11px; padding: 3px 8px; margin-left: 6px;">live</button>
+            </h3>
+            <div class="webcam-grid">
+                <div class="webcam-column">
+                    <div>AllSky (BART)</div>
+                    <img id="webcam-allsky" data-cam="allsky" alt="AllSky">
+                </div>
+                <div class="webcam-column">
+                    <div>Axis50</div>
+                    <img id="webcam-axis50" data-cam="axis50" alt="Axis50">
+                </div>
+                <div class="webcam-column">
+                    <div>Sentinel50</div>
+                    <img id="webcam-sentinel50" data-cam="sentinel50" alt="Sentinel50">
+                </div>
+                <div class="webcam-column">
+                    <div>CCTV (BART)</div>
+                    <img id="webcam-cctv" data-cam="cctv" alt="CCTV">
+                </div>
+            </div>
+            <!--
+                AllSky and CCTV are BART's own cameras (shared site-wide,
+                not D50-specific) - same files bart-monitor.html itself
+                uses, fetched cross-origin from lascaux.asu.cas.cz since
+                this page is served from D50/lascaux50's own vhost.
+                Axis50/Sentinel50 are D50-native (relative /webcam/ path,
+                confirmed live directly on lascaux50's Apache, real
+                directory listing checked - not guessed). Two real,
+                confirmed quirks in their naming, unlike BART's cameras:
+                small snapshots are .jpg but the *full-size* images are
+                .png, not .jpg (axis50's non-eq full is the one exception,
+                still .jpg) - each entry's full/fullEq below reflects
+                exactly what 200s, not a guessed extension. Neither has a
+                working live stream: D50's AllSky-D65 (a third, separate
+                camera the previous version of this page also showed)
+                requires HTTP auth this page has no business embedding
+                (401, confirmed) - dropped entirely, same call
+                bart-monitor.html already made for its own Sentinel
+                camera. Axis50/Sentinel50's own live-video endpoints
+                (/observ/axis50/video.cgi, /observ/sentinel50/video.mjpg)
+                are also 401-gated - confirmed, not assumed - so, same as
+                BART's Sentinel, they fall back to their regular
+                (auth-free) snapshot even with "live" toggled on.
+            -->
+        </div>
+
+        <div class="legacy-panel">
+            <h3 style="margin-top: 0;">Cloud graph (legacy)</h3>
+            <!--
+                Classic httpd's own /images/graph/DEVICE/VALUE/... plotter,
+                still running on lascaux50 itself - embedded as-is, exactly
+                the same URL bart-monitor.html already uses for the same
+                CLOUD sensor (shared by both telescopes). See that page's
+                own TODO comment for the plan to eventually replace this
+                with a real client-side plot fed by a JSON time-series
+                endpoint - applies equally here, not duplicated.
+            -->
+            <img id="cloud-graph-img" src="https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=900&h=220&t=l&lw=2&sh=1" alt="Cloud sensor temperature difference, last 8h">
+        </div>
+    </div>
+
+    <script>
+        // Talks directly to rts2ng's rts2-httpd (task 2's JSON API) -
+        // reads are unauthenticated by that daemon's own design
+        // (STATUS.md task 6), so this page embeds no credentials at all
+        // (unlike the classic D50 monitor.html this replaces, which
+        // embedded plaintext dome-control credentials for a Sentinel
+        // relay - dropped entirely, not carried forward).
+        const API_BASE = '/images/api';
+
+        // Plain vs "_eq" (locally contrast-equalized) filenames for each
+        // webcam. allsky/cctv are BART's shared cameras, same file
+        // layout bart-monitor.html itself uses (small/full both .jpg).
+        // axis50/sentinel50 are D50-native - confirmed live via a real
+        // directory listing on lascaux50's own Apache (not guessed):
+        // small snapshots are .jpg, but full-size images are .png except
+        // axis50's plain (non-eq) full, which is .jpg. `live` is only set
+        // where a working stream was actually confirmed (cctv, via
+        // lascaux's existing webcam4 proxy) - axis50/sentinel50's own
+        // video endpoints 401 (HTTP auth this page won't embed), same
+        // situation bart-monitor.html already documented for its own
+        // Sentinel camera, so those two have no `live` entry and always
+        // fall back to their regular snapshot.
+        const WEBCAMS = [
+            { id: 'allsky', label: 'AllSky',
+                small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
+                full: 'allsky.jpg', fullEq: 'allsky_eq.jpg',
+                host: 'https://lascaux.asu.cas.cz/webcam/',
+                live: 'https://lascaux.asu.cas.cz/webcam2/?action=stream' },
+            { id: 'axis50', label: 'Axis50',
+                small: 'axis-sum1_av_small.jpg', smallEq: 'axis-sum1_av_eq_small.jpg',
+                full: 'axis-sum1_av.jpg', fullEq: 'axis-sum1_av_eq.png',
+                host: '/webcam/' },
+            { id: 'sentinel50', label: 'Sentinel50',
+                small: 'sentinel-sum1_av_small.jpg', smallEq: 'sentinel-sum1_av_eq_small.jpg',
+                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png',
+                host: '/webcam/' },
+            { id: 'cctv', label: 'CCTV',
+                small: 'webcam4_small.jpg', smallEq: 'webcam4_detail.jpg',
+                full: 'webcam4.jpg', fullEq: 'webcam4_detail.jpg',
+                host: 'https://lascaux.asu.cas.cz/webcam/',
+                live: 'https://lascaux.asu.cas.cz/webcam4/?action=stream' },
+        ];
+
+        // D50's real device list (confirmed via /api/devices against the
+        // live daemon, not assumed to mirror BART's): cameras C0/C1 (not
+        // C1/C2/C3), focusers F0/F1, DISK_D50/D50UPS (not DISK_BART/
+        // BARTUPS) - but the *same* WEATHER_BART/RAIN_BART/CLOUD as
+        // bart-monitor.html, since those are one shared site-wide
+        // weather station, not per-telescope. D50 also exposes its own
+        // supplementary WEATHER_D50/RAIN_D50 (a simpler on-site sensor -
+        // no wind speed, no outdoor temp/humidity) and SHUTTER1 (OTA/
+        // mirror temperature monitoring) - deliberately not surfaced
+        // here, same "don't invent a panel bart-monitor.html has no
+        // equivalent for" scope call as everywhere else in this port.
+        let systemData = {
+            centrald: {},
+            EXEC: {}, T0: {}, DOME: {},
+            C0: {}, C1: {},
+            F0: {}, F1: {},
+            IMGP: {},
+            WEATHER_BART: {}, RAIN_BART: {}, CLOUD: {},
+            DISK_D50: {}, D50UPS: {}
+        };
+
+        const DEVICES = Object.keys(systemData);
+
+        // rts2ng's httpd uses the RTS2 value's own name as the JSON key
+        // verbatim - some real value names contain a literal "." (e.g.
+        // D50UPS's "ups.status", "battery.charge", confirmed identical to
+        // BARTUPS's field names in this session's live check), which is a
+        // flat key, not a nested object. Try the literal key first; only
+        // fall back to dot-path traversal for genuinely nested data.
+        function getNestedValue(obj, path) {
+            if (obj && obj[path] !== undefined)
+                return obj[path];
+            return path.split('.').reduce((cur, key) => cur && cur[key] !== undefined ? cur[key] : undefined, obj);
+        }
+
+        function safeValue(obj, key, defaultVal = 'N/A') {
+            const val = getNestedValue(obj, key);
+            return val !== undefined ? val : defaultVal;
+        }
+
+        function fmt(val, digits = 1) {
+            return typeof val === 'number' && !Number.isNaN(val) ? val.toFixed(digits) : 'N/A';
+        }
+
+        // rts2ng's httpd serializes RA/Dec-pair values (RTS2_VALUE_RADEC
+        // et al) via their getDisplayValue() fallback - a single "ra dec"
+        // space-separated string (e.g. "313.97 -40.09", or "nan nan" when
+        // unset), not a {ra,dec} nested object. Confirmed against D50's
+        // own live /api/get?d=T0 output (same wire format as BART's).
+        function parseRaDec(str) {
+            if (typeof str !== 'string')
+                return [NaN, NaN];
+            const parts = str.trim().split(/\s+/).map(Number);
+            return parts.length === 2 ? parts : [NaN, NaN];
+        }
+
+        function formatTime(timeVal) {
+            return typeof timeVal === 'number' ? new Date(timeVal * 1000).toLocaleString() : 'N/A';
+        }
+
+        async function fetchDeviceData(deviceName) {
+            try {
+                const res = await fetch(`${API_BASE}/get?d=${deviceName}`);
+                if (!res.ok)
+                    throw new Error(`${res.status}`);
+                const data = await res.json();
+                return data.d || data;
+            } catch (e) {
+                console.error(`Failed to fetch ${deviceName}:`, e);
+                return null;
+            }
+        }
+
+        async function updateAllDeviceData() {
+            await Promise.all(DEVICES.map(async device => {
+                const data = await fetchDeviceData(device);
+                if (data)
+                    systemData[device] = data;
+            }));
+        }
+
+        // rts2ng's /api/getall,get always send a selection value (e.g.
+        // "filter") as its bare numeric index - fetched once per camera
+        // via /api/selval and cached. C1 is D50's guide camera and may
+        // not carry a real filter-wheel selection value at all (its live
+        // data has filter=0 but empty filter_offsets) - handled the same
+        // way an unreachable/non-selection value already is below: the
+        // fetch just returns nothing useful and the raw index (or N/A)
+        // is shown instead, no special-casing needed.
+        const filterNames = { C0: null, C1: null };
+
+        async function loadFilterNames() {
+            await Promise.all(['C0', 'C1'].map(async cam => {
+                if (filterNames[cam])
+                    return;
+                try {
+                    const res = await fetch(`${API_BASE}/selval?d=${cam}&n=filter`);
+                    if (!res.ok)
+                        return;
+                    filterNames[cam] = await res.json();
+                } catch (e) {
+                    console.error(`Failed to fetch filter names for ${cam}:`, e);
+                }
+            }));
+        }
+
+        function updateTelescopeStatus() {
+            const div = document.getElementById('telescope-status');
+            const currentName = safeValue(systemData.EXEC, 'current_name', '');
+            const current = safeValue(systemData.EXEC, 'current', -1);
+            const nextName = safeValue(systemData.EXEC, 'next_name', '');
+            const [objRa, objDec] = parseRaDec(safeValue(systemData.T0, 'OBJ', ''));
+            const airmass = safeValue(systemData.T0, 'AIRMASS', NaN);
+            const tracking = safeValue(systemData.T0, 'TRACKING', 0) == 1;
+
+            div.innerHTML = `
+                <div class="status-value"><strong>Object:</strong> ${currentName || '(none)'} (${current})</div>
+                <div class="status-value"><strong>Next:</strong> ${nextName || '(none)'}</div>
+                <div class="status-value"><strong>Coordinates:</strong> ${fmt(objRa, 4)}&deg; ${fmt(objDec, 4)}&deg;</div>
+                <div class="status-value"><strong>Airmass:</strong> ${fmt(airmass, 2)}</div>
+                <div class="status-value"><strong>Tracking:</strong> <span class="${tracking ? 'good' : 'warn'}">${tracking ? 'On' : 'Off'}</span></div>
+            `;
+        }
+
+        function updateDomeStatus() {
+            const div = document.getElementById('dome-status');
+            // D50's DOME uses plain roof_opened/roof_closed - confirmed
+            // via live /api/get?d=DOME, *not* the south_roof_opened/
+            // south_roof_closed names bart-monitor.html reads (BART's
+            // dome genuinely has north/south roof halves; D50's is a
+            // single roof with no north/south distinction at all).
+            const opened = safeValue(systemData.DOME, 'roof_opened', 0) == 1;
+            const closed = safeValue(systemData.DOME, 'roof_closed', 0) == 1;
+            const weatherOpen = safeValue(systemData.DOME, 'weather_open', 0) == 1;
+            div.innerHTML = `
+                <div class="status-value"><strong>Roof:</strong> <span class="${opened ? 'warn' : 'good'}">${opened ? 'Open' : (closed ? 'Closed' : 'Moving/unknown')}</span></div>
+                <div class="status-value"><strong>Weather allows opening:</strong> <span class="${weatherOpen ? 'good' : 'warn'}">${weatherOpen ? 'Yes' : 'No'}</span></div>
+            `;
+        }
+
+        function updateCameraStatus() {
+            for (const cam of ['C0', 'C1']) {
+                const div = document.getElementById(cam.toLowerCase() + '-status');
+                const d = systemData[cam];
+                const object = safeValue(d, 'OBJECT', '');
+                const exposure = safeValue(d, 'exposure', NaN);
+                const exposureEnd = safeValue(d, 'exposure_end', NaN);
+                const filterIdx = safeValue(d, 'filter', -1);
+                const names = filterNames[cam];
+                const filter = (names && names[filterIdx] !== undefined) ? names[filterIdx] : (filterIdx === -1 ? 'N/A' : filterIdx);
+                const ccdTemp = safeValue(d, 'CCD_TEMP', NaN);
+                const focName = safeValue(d, 'focuser', '');
+                const focPos = safeValue(systemData[focName] || {}, 'FOC_POS', 'N/A');
+                // IMGP's fwhm_C0 is only populated by the image processing
+                // pipeline when it's actually running, same caveat
+                // bart-monitor.html notes for its own cameras. C1 is a
+                // guide camera - IMGP has no fwhm_C1 at all (confirmed
+                // live), so this always reads N/A for it, correctly.
+                const fwhm = safeValue(systemData.IMGP, `fwhm_${cam}`, NaN);
+
+                div.innerHTML = `
+                    <div class="status-value">${object || '(idle)'}</div>
+                    <div class="status-value">Exp: ${fmt(exposure)} s</div>
+                    <div class="status-value">Ends: ${formatTime(exposureEnd)}</div>
+                    <div class="status-value">Filter: ${filter}</div>
+                    <div class="status-value">FWHM: ${fmt(fwhm, 2)}</div>
+                    <div class="status-value">CCD: ${fmt(ccdTemp, 1)}&deg;C</div>
+                    <div class="status-value">Focus (${focName}): ${focPos}</div>
+                `;
+            }
+        }
+
+        // Latest per-camera image, via the same external dark+flat
+        // correction process (C{n}_small.jpg/C{n}_center.jpg/
+        // C{n}_info.txt, sibling files in this page's own directory).
+        // Plain cache-busted <img> reloads, no rts2ng API/DB call at all.
+        function reloadCameraImages() {
+            const t = new Date().getTime();
+            for (const cam of ['C0', 'C1']) {
+                const c = cam.toLowerCase();
+                document.getElementById(c + '-image').src = `${cam}_small.jpg?t=${t}`;
+                document.getElementById(c + '-center').src = `${cam}_center.jpg?t=${t}`;
+            }
+        }
+
+        function updateImageInfo() {
+            for (const cam of ['C0', 'C1']) {
+                const el = document.getElementById(cam.toLowerCase() + '-info');
+                fetch(`${cam}_info.txt`)
+                    .then(res => res.text())
+                    .then(text => { el.textContent = text.trim(); })
+                    .catch(() => { el.textContent = ''; });
+            }
+        }
+
+        function updateWeatherStatus() {
+            const div = document.getElementById('weather-status');
+            const rain = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
+            const rainStr = rain ? '<span class="error">YES</span>' : '<span class="good">No</span>';
+
+            const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
+            const humOut = safeValue(systemData.WEATHER_BART, 'HUM_OUT', NaN);
+            const tempDome = safeValue(systemData.WEATHER_BART, 'TEMP_DOME', NaN);
+            const humDome = safeValue(systemData.WEATHER_BART, 'HUM_DOME', NaN);
+            const windSpeed = safeValue(systemData.WEATHER_BART, 'WIND_SPEED', NaN);
+            const windPeak = safeValue(systemData.WEATHER_BART, 'WIND_SPEED_PEAK', NaN);
+
+            const cloudDiff = safeValue(systemData.CLOUD, 'TEMP_DIFF', NaN);
+            const tempAmb = safeValue(systemData.CLOUD, 'TEMP_AMB', NaN);
+            const tempSky = safeValue(systemData.CLOUD, 'TEMP_SKY', NaN);
+            const heater = safeValue(systemData.CLOUD, 'HEATER', 0) == 1;
+
+            // DISK_D50/D50UPS - same field names as BART's DISK_BART/
+            // BARTUPS (confirmed live), just the device renamed.
+            const diskFree = safeValue(systemData.DISK_D50, 'free', NaN);
+            const diskFreeGB = typeof diskFree === 'number' ? (diskFree / 1e9).toFixed(1) : diskFree;
+
+            const upsStatus = safeValue(systemData.D50UPS, 'ups.status', 'N/A');
+            const upsLoad = safeValue(systemData.D50UPS, 'ups.load', NaN);
+            const upsCharge = safeValue(systemData.D50UPS, 'battery.charge', NaN);
+            const onBattery = upsStatus !== 'OL';
+
+            div.innerHTML = `
+                <div class="status-value"><strong>Rain?:</strong> ${rainStr}</div>
+                <div class="status-value"><strong>Cloud coverage:</strong> ${fmt(cloudDiff)} (${fmt(tempAmb)} - ${fmt(tempSky)})</div>
+                <div class="status-value"><strong>Cloud heater:</strong> ${heater ? 'on' : 'off'}</div>
+                <div class="status-value"><strong>Wind:</strong> ${fmt(windSpeed)} m/s, peak ${fmt(windPeak)} m/s</div>
+
+                <table class="temp-table">
+                    <tr><th></th><th>Out</th><th>Dome</th></tr>
+                    <tr><th>Temp [&deg;C]</th><td>${fmt(tempOut)}</td><td>${fmt(tempDome)}</td></tr>
+                    <tr><th>Hum [%]</th><td>${fmt(humOut)}</td><td>${fmt(humDome)}</td></tr>
+                </table>
+
+                <div class="status-value"><strong>Disk free:</strong> ${diskFreeGB} GB</div>
+                <div class="status-value"><strong>UPS:</strong> <span class="${onBattery ? 'error' : 'good'}">${upsStatus}</span> - load ${fmt(upsLoad)}%, charge ${fmt(upsCharge, 0)}%</div>
+            `;
+        }
+
+        // centrald's on/standby/off - not a named Value, it's the raw
+        // RTS2 protocol state (SERVERD_ONOFF_MASK, status.h), which
+        // rts2-httpd includes as a "state" field alongside every
+        // device's values. Same convention as bart-monitor.html.
+        function updateServerdStatus() {
+            const el = document.getElementById('serverd-status');
+            const state = safeValue(systemData.centrald, 'state', NaN);
+            if (Number.isNaN(state)) {
+                el.textContent = 'N/A';
+                el.className = '';
+                return;
+            }
+            const [text, cls] = {
+                0x000: ['ON', 'good'],
+                0x010: ['STANDBY', 'standby'],
+                0x020: ['OFF (soft)', 'error'],
+                0x030: ['OFF (hard)', 'error'],
+            }[state & 0x030] || ['N/A', ''];
+            el.textContent = text;
+            el.className = cls;
+        }
+
+        async function updateStatus() {
+            await Promise.all([updateAllDeviceData(), loadFilterNames()]);
+            updateServerdStatus();
+            updateTelescopeStatus();
+            updateDomeStatus();
+            updateCameraStatus();
+            updateWeatherStatus();
+            drawSkyChart();
+        }
+
+        function reloadWebcams() {
+            const t = new Date().getTime();
+            for (const cam of WEBCAMS) {
+                const el = document.getElementById(`webcam-${cam.id}`);
+                if (liveWebcams && cam.live) {
+                    // Setting an <img> to the same src it already has is
+                    // a no-op in every browser (no re-fetch), so this
+                    // 15s-interval call doesn't reconnect the stream -
+                    // only the initial toggleLive() switch does.
+                    el.src = cam.live;
+                } else {
+                    const src = equalizeWebcams ? cam.smallEq : cam.small;
+                    el.src = `${cam.host}${src}?t=${t}`;
+                }
+            }
+        }
+
+        function webcamFullSrc(cam) {
+            if (liveWebcams && cam.live)
+                return cam.live;
+            return `${cam.host}${equalizeWebcams ? cam.fullEq : cam.full}`;
+        }
+
+        // D50's graph server renders a fixed-pixel JPEG, not a vector
+        // image - CSS max-width alone can shrink it but never widen it
+        // past whatever w= it was requested at. Request it at the
+        // panel's actual width instead, so it genuinely fills the
+        // viewport rather than sitting at a fixed 900px. Same logic as
+        // bart-monitor.html's identical function.
+        function reloadCloudGraph() {
+            const panel = document.querySelector('.legacy-panel');
+            const img = document.getElementById('cloud-graph-img');
+            if (!panel || !img)
+                return;
+            const w = Math.max(400, Math.round(panel.clientWidth - 24));
+            const t = new Date().getTime();
+            img.src = `https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=${w}&h=220&t=l&lw=2&sh=1&_=${t}`;
+        }
+
+        let cloudGraphResizeTimer = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(cloudGraphResizeTimer);
+            cloudGraphResizeTimer = setTimeout(reloadCloudGraph, 300);
+        });
+
+        function toggleEqualize() {
+            equalizeWebcams = !equalizeWebcams;
+            setCookie('equalizeWebcams', equalizeWebcams ? '1' : '0');
+            document.getElementById('equalize-btn').classList.toggle('active', equalizeWebcams);
+            reloadWebcams();
+        }
+
+        function openArchive() {
+            window.open('/images/', '_blank');
+        }
+
+        // Preferences (dark/compact/equalize mode), persisted via cookie
+        // so they survive a reload - this page has no backend of its own
+        // to store per-user settings in.
+        function setCookie(name, value) {
+            document.cookie = `${name}=${value};path=/;max-age=31536000;samesite=lax`;
+        }
+
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return match ? match[1] : null;
+        }
+
+        let equalizeWebcams = getCookie('equalizeWebcams') === '1';
+        let liveWebcams = getCookie('liveWebcams') === '1';
+
+        function toggleLive() {
+            liveWebcams = !liveWebcams;
+            setCookie('liveWebcams', liveWebcams ? '1' : '0');
+            document.getElementById('live-btn').classList.toggle('active', liveWebcams);
+            reloadWebcams();
+        }
+
+        function toggleDarkMode() {
+            const on = document.body.classList.toggle('dark');
+            setCookie('darkMode', on ? '1' : '0');
+            // The sky chart picks its palette off body.dark itself
+            // rather than the --variables everything else uses, so it
+            // needs an explicit redraw.
+            drawSkyChart();
+        }
+
+        function toggleCompactMode() {
+            const on = document.body.classList.toggle('compact');
+            setCookie('compactMode', on ? '1' : '0');
+            reloadCloudGraph();
+        }
+
+        // System-wide on/standby/off - queues centrald's raw "on"/
+        // "standby"/"off" text command via /api/switchstate. Fire-and-
+        // forget, same as /api/set - the next 10s status poll reflects
+        // the new state once devices ack it.
+        async function switchState(state) {
+            const msg = document.getElementById('state-msg');
+            msg.textContent = `sending ${state}...`;
+            msg.className = 'status-value';
+            try {
+                const res = await fetch(`${API_BASE}/switchstate?state=${state}`);
+                if (res.status === 401) {
+                    msg.textContent = 'not authorized (login required for this action)';
+                    msg.className = 'status-value error';
+                    return;
+                }
+                if (!res.ok)
+                    throw new Error(`${res.status}`);
+                msg.textContent = `sent "${state}" to centrald`;
+                msg.className = 'status-value good';
+                updateStatus().catch(e => console.error(e));
+            } catch (e) {
+                msg.textContent = `failed to send "${state}": ${e}`;
+                msg.className = 'status-value error';
+            }
+        }
+
+        // Sky chart: alt-az plot with horizon, bright stars, Sun, Moon,
+        // and the telescope's current/target position. Identical to
+        // bart-monitor.html's implementation - site geometry (observer
+        // lat/lon, horizon polygon) comes from this daemon's own
+        // /api/horizon, so it automatically reflects D50's real location
+        // and horizon file with no changes needed here at all.
+        //
+        // Azimuth convention throughout matches libnova's: 0=South,
+        // 90=West, 180=North, 270=East - not compass convention.
+        // Converted to a North-up, East-right screen layout (like a map)
+        // only at the final projection step.
+        let horizonInfo = null;
+        let starCatalog = null;
+
+        async function loadHorizonInfo() {
+            try {
+                const res = await fetch(`${API_BASE}/horizon`);
+                if (res.ok)
+                    horizonInfo = await res.json();
+            } catch (e) {
+                console.error('Failed to load horizon info:', e);
+            }
+        }
+
+        async function loadStarCatalog() {
+            try {
+                const res = await fetch('bsc-stars.json');
+                if (res.ok)
+                    starCatalog = await res.json();
+            } catch (e) {
+                console.error('Failed to load star catalog:', e);
+            }
+        }
+
+        function normDeg(deg) {
+            deg = deg % 360;
+            return deg < 0 ? deg + 360 : deg;
+        }
+
+        function julianDate(date) {
+            return date.getTime() / 86400000 + 2440587.5;
+        }
+
+        // Greenwich Mean Sidereal Time, in degrees.
+        function gmstDeg(jd) {
+            const T = (jd - 2451545.0) / 36525.0;
+            return normDeg(280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T - T * T * T / 38710000.0);
+        }
+
+        // Standard low-precision Sun position (US Naval Observatory /
+        // Astronomical Almanac formula, ~0.01deg accuracy). Equatorial
+        // coordinates, degrees.
+        function sunEquatorial(jd) {
+            const d = jd - 2451545.0;
+            const g = normDeg(357.529 + 0.98560028 * d) * Math.PI / 180;
+            const q = normDeg(280.459 + 0.98564736 * d);
+            const L = normDeg(q + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * Math.PI / 180;
+            const e = (23.439 - 0.00000036 * d) * Math.PI / 180;
+            const ra = normDeg(Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)) * 180 / Math.PI);
+            const dec = Math.asin(Math.sin(e) * Math.sin(L)) * 180 / Math.PI;
+            return { ra, dec };
+        }
+
+        // Standard low-precision Moon position (main terms only,
+        // ~0.3-1deg accuracy).
+        function moonEquatorial(jd) {
+            const d = jd - 2451545.0;
+            const L = normDeg(218.316 + 13.176396 * d) * Math.PI / 180;
+            const M = normDeg(134.963 + 13.064993 * d) * Math.PI / 180;
+            const F = normDeg(93.272 + 13.229350 * d) * Math.PI / 180;
+            const lam = L + 6.289 * Math.PI / 180 * Math.sin(M);
+            const bet = 5.128 * Math.PI / 180 * Math.sin(F);
+            const e = (23.439 - 0.0000004 * d) * Math.PI / 180;
+            const ra = normDeg(Math.atan2(Math.sin(lam) * Math.cos(e) - Math.tan(bet) * Math.sin(e), Math.cos(lam)) * 180 / Math.PI);
+            const dec = Math.asin(Math.sin(bet) * Math.cos(e) + Math.cos(bet) * Math.sin(e) * Math.sin(lam)) * 180 / Math.PI;
+            return { ra, dec };
+        }
+
+        // Equatorial (hour angle, Dec) -> horizontal (Alt, Az), libnova
+        // convention (Az: 0=South, 90=West). Standard formula (Meeus
+        // 13.5/13.6).
+        function equToHrz(haDeg, decDeg, latDeg) {
+            const Hr = haDeg * Math.PI / 180, decr = decDeg * Math.PI / 180, latr = latDeg * Math.PI / 180;
+            const sinAlt = Math.sin(latr) * Math.sin(decr) + Math.cos(latr) * Math.cos(decr) * Math.cos(Hr);
+            const alt = Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180 / Math.PI;
+            const az = normDeg(Math.atan2(Math.sin(Hr), Math.cos(Hr) * Math.sin(latr) - Math.tan(decr) * Math.cos(latr)) * 180 / Math.PI);
+            return { alt, az };
+        }
+
+        // Overridable from the page's own URL (?starsmag=&starssize=&s=) -
+        // same convention as bart-monitor.html's chart.
+        const skyChartParams = (() => {
+            const p = new URLSearchParams(location.search);
+            const out = {};
+            const mag = parseFloat(p.get('starsmag'));
+            const size = parseFloat(p.get('starssize'));
+            if (!Number.isNaN(mag)) out.starsMag = mag;
+            if (!Number.isNaN(size)) out.starSize = size;
+            return out;
+        })();
+
+        // Enlarged view's target resolution (?s=) - clamped since this
+        // sizes an actual <canvas>, unlike a server-rendered image.
+        const bigSkySize = (() => {
+            const s = parseInt(new URLSearchParams(location.search).get('s'), 10);
+            return Number.isFinite(s) && s > 0 ? Math.min(s, 2000) : 800;
+        })();
+
+        function drawSkyChart() {
+            renderSkyChart(document.getElementById('sky-canvas'), skyChartParams);
+        }
+
+        // canvas: element to draw into - its own width/height attributes
+        // set the render resolution (#sky-canvas is a fixed 300x300; the
+        // enlarged lightbox view sizes itself to the available space).
+        // opts.starsMag: limiting magnitude. opts.starSize: dot radius
+        // multiplier.
+        function renderSkyChart(canvas, opts) {
+            if (!canvas || !horizonInfo)
+                return;
+            const { starsMag = 5.5, starSize = 1.0 } = opts || {};
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, Hh = canvas.height;
+            const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 2 - 14;
+
+            const dark = document.body.classList.contains('dark');
+            const skyBg = dark ? '#05070d' : '#4a7fc9';
+            const groundFill = dark ? 'rgba(80,50,20,0.55)' : 'rgba(45,110,55,0.85)';
+            const groundStroke = dark ? '#c08030' : '#2d5a26';
+            const gridColor = dark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.25)';
+            const labelColor = dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.7)';
+            const starColor = dark ? '#fff' : '#182449';
+            const haloColor = 'rgba(255,255,255,0.9)';
+
+            ctx.clearRect(0, 0, W, Hh);
+            ctx.fillStyle = skyBg;
+            ctx.beginPath();
+            ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // libnova az -> screen. North up, East on the LEFT, West on
+            // the RIGHT - a sky chart is a view from inside the celestial
+            // sphere looking up, not a ground map.
+            function project(altDeg, azLibnovaDeg) {
+                const r = Math.min(R, R * (90 - altDeg) / 90);
+                const compassAz = normDeg(azLibnovaDeg + 180);
+                const a = compassAz * Math.PI / 180;
+                return { x: cx - r * Math.sin(a), y: cy - r * Math.cos(a) };
+            }
+
+            const now = new Date();
+            const jd = julianDate(now);
+            const lst = normDeg(gmstDeg(jd) + horizonInfo.lon);
+            const lat = horizonInfo.lat;
+
+            if (horizonInfo.horizon && horizonInfo.horizon.length > 2) {
+                ctx.beginPath();
+                ctx.moveTo(cx + R, cy);
+                ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+                horizonInfo.horizon.forEach(([az, alt], i) => {
+                    const p = project(alt, az);
+                    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.fillStyle = groundFill;
+                ctx.fill('evenodd');
+
+                ctx.strokeStyle = groundStroke;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                horizonInfo.horizon.forEach(([az, alt], i) => {
+                    const p = project(alt, az);
+                    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.stroke();
+            }
+
+            ctx.strokeStyle = gridColor;
+            ctx.fillStyle = labelColor;
+            ctx.font = '10px sans-serif';
+            ctx.lineWidth = 1;
+            for (const alt of [0, 30, 60]) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, R * (90 - alt) / 90, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            for (const [label, azLibnova] of [['N', 180], ['E', 270], ['S', 0], ['W', 90]]) {
+                const edge = project(0, azLibnova);
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(edge.x, edge.y);
+                ctx.stroke();
+                const lp = project(-8, azLibnova);
+                ctx.fillText(label, lp.x - 4, lp.y + 4);
+            }
+
+            if (starCatalog) {
+                ctx.fillStyle = starColor;
+                for (const [ra, dec, mag] of starCatalog) {
+                    if (mag > starsMag)
+                        continue;
+                    const hz = equToHrz(lst - ra, dec, lat);
+                    if (hz.alt <= 0)
+                        continue;
+                    const p = project(hz.alt, hz.az);
+                    const size = Math.max(0.4, (starsMag - mag) * 0.5) * starSize;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            } else {
+                ctx.fillStyle = labelColor;
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('stars unavailable', cx, cy + R - 10);
+                ctx.textAlign = 'left';
+            }
+
+            function strokeWithHalo(color, width, pathFn) {
+                ctx.lineWidth = width + 2.5;
+                ctx.strokeStyle = haloColor;
+                ctx.beginPath();
+                pathFn();
+                ctx.stroke();
+                ctx.lineWidth = width;
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                pathFn();
+                ctx.stroke();
+            }
+
+            const sun = sunEquatorial(jd);
+            const sunHz = equToHrz(lst - sun.ra, sun.dec, lat);
+            if (sunHz.alt > -6) {
+                const p = project(Math.max(sunHz.alt, 0), sunHz.az);
+                ctx.fillStyle = '#ffb020';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+
+            const moon = moonEquatorial(jd);
+            const moonHz = equToHrz(lst - moon.ra, moon.dec, lat);
+            if (moonHz.alt > 0) {
+                const p = project(moonHz.alt, moonHz.az);
+                ctx.fillStyle = '#c8c8d0';
+                ctx.strokeStyle = haloColor;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+            }
+
+            // Telescope position - T0's TEL_ is already Alt/Az (libnova
+            // convention). Reuses parseRaDec() purely because it's the
+            // same "two space-separated floats" wire format, not because
+            // this is actually RA/Dec.
+            const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
+            if (!Number.isNaN(telAlt) && !Number.isNaN(telAz)) {
+                const p = project(telAlt, telAz);
+                strokeWithHalo('#ff4040', 2, () => {
+                    ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
+                    ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
+                });
+            }
+
+            // Target position - T0's TAR (RA/Dec with corrections applied).
+            const [tarRa, tarDec] = parseRaDec(safeValue(systemData.T0, 'TAR', ''));
+            if (!Number.isNaN(tarRa) && !Number.isNaN(tarDec)) {
+                const tarHz = equToHrz(lst - tarRa, tarDec, lat);
+                const p = project(tarHz.alt, tarHz.az);
+                strokeWithHalo('#4090ff', 2, () => {
+                    ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
+                });
+            }
+        }
+
+        // Lightbox
+        let lightboxInterval = null;
+
+        // Sizes the image to its actual fitted (scaled up or down) pixel
+        // size within .lightbox-img-wrap, rather than leaving it at
+        // width:100%/height:100%.
+        function fitLightboxImage() {
+            const wrap = document.querySelector('.lightbox-img-wrap');
+            const img = document.getElementById('lightbox-img');
+            if (!wrap || !img.naturalWidth || !img.naturalHeight)
+                return;
+            const rect = wrap.getBoundingClientRect();
+            const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight);
+            img.style.width = Math.round(img.naturalWidth * scale) + 'px';
+            img.style.height = Math.round(img.naturalHeight * scale) + 'px';
+        }
+        document.getElementById('lightbox-img').addEventListener('load', fitLightboxImage);
+
+        // noRefresh: for a live MJPEG stream URL, the periodic cache-
+        // busting below would force it to drop and reconnect every 15s -
+        // skip it for those, the stream already updates itself.
+        function openLightbox(imageSrc, title, noRefresh) {
+            const lightbox = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            document.getElementById('lightbox-sky-canvas').style.display = 'none';
+            img.style.display = '';
+            img.src = noRefresh ? imageSrc : `${imageSrc}${imageSrc.includes('?') ? '&' : '?'}t=${new Date().getTime()}`;
+            document.getElementById('lightbox-title').textContent = title;
+            document.getElementById('lightbox-info').textContent = noRefresh
+                ? 'Click anywhere to close'
+                : 'Click anywhere to close - auto-refreshing every 15s';
+            lightbox.style.display = 'block';
+
+            if (!noRefresh) {
+                lightboxInterval = setInterval(() => {
+                    const nt = new Date().getTime();
+                    const base = img.src.split(/[?&]t=/)[0];
+                    img.src = `${base}${base.includes('?') ? '&' : '?'}t=${nt}`;
+                }, 15000);
+            }
+        }
+
+        function closeLightbox() {
+            document.getElementById('lightbox').style.display = 'none';
+            if (lightboxInterval) {
+                clearInterval(lightboxInterval);
+                lightboxInterval = null;
+            }
+        }
+
+        // Enlarged sky chart - reuses the same lightbox, but shows
+        // #lightbox-sky-canvas instead of #lightbox-img. Re-rendered
+        // every 10s so the telescope/target markers keep moving.
+        function openSkyLightbox() {
+            const lightbox = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            const canvas = document.getElementById('lightbox-sky-canvas');
+            img.style.display = 'none';
+            canvas.style.display = 'block';
+            document.getElementById('lightbox-title').textContent = 'Sky chart';
+            document.getElementById('lightbox-info').textContent =
+                'Click anywhere to close - tweak with ?starsmag=&starssize=&s= in the page URL';
+            // Must be shown before measuring the wrap below - it's
+            // display:none up to this point.
+            lightbox.style.display = 'block';
+
+            const wrap = document.querySelector('.lightbox-img-wrap');
+            const rect = wrap.getBoundingClientRect();
+            const size = Math.round(Math.min(bigSkySize, rect.width, rect.height));
+            canvas.width = size;
+            canvas.height = size;
+            canvas.style.width = size + 'px';
+            canvas.style.height = size + 'px';
+
+            renderSkyChart(canvas, skyChartParams);
+            lightboxInterval = setInterval(() => renderSkyChart(canvas, skyChartParams), 10000);
+        }
+
+        document.getElementById('lightbox').addEventListener('click', function (e) {
+            if (e.target === this)
+                closeLightbox();
+        });
+        document.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape')
+                closeLightbox();
+        });
+
+        async function init() {
+            document.getElementById('equalize-btn').classList.toggle('active', equalizeWebcams);
+            document.getElementById('live-btn').classList.toggle('active', liveWebcams);
+            for (const cam of WEBCAMS) {
+                document.getElementById(`webcam-${cam.id}`).addEventListener('click', () => {
+                    openLightbox(webcamFullSrc(cam), `${cam.label} - Full View`, liveWebcams && !!cam.live);
+                });
+            }
+            document.getElementById('sky-canvas').addEventListener('click', openSkyLightbox);
+
+            await Promise.all([loadHorizonInfo(), loadStarCatalog()]);
+            await updateStatus();
+            reloadWebcams();
+            reloadCameraImages();
+            updateImageInfo();
+            reloadCloudGraph();
+        }
+
+        setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
+        setInterval(reloadWebcams, 15000);
+        setInterval(reloadCameraImages, 15000);
+        setInterval(updateImageInfo, 15000);
+        setInterval(reloadCloudGraph, 60000);
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
