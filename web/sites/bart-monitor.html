@@ -528,20 +528,15 @@
                 </span>
             </h3>
             <!--
-                Drawn from this site's own rts2-httpd
-                (/api/db/records) instead of the /images/graph/CLOUD/
-                TEMP_DIFF JPEG this panel used to pull off lascaux50:
-                that plotter lived inside classic httpd and went away
-                with it when D50 moved to rts2ng. CLOUD is on this bus
-                too, so the history is recorded and read locally rather
-                than fetched cross-site - which also avoids needing CORS
-                headers fetch() would require and an <img> never did. It
-                needs rts2-recordd running on this host, recording
-                CLOUD.TEMP_DIFF (db/STATUS.md); until then the panel says
-                so rather than showing an empty plot. Same sensor and
-                same 8 h default the old image used; the range buttons
-                are new, and the choice is remembered in a cookie like
-                the page's other preferences.
+                Drawn from JSON (/api/db/records) instead of the
+                /images/graph/CLOUD/TEMP_DIFF JPEG this panel used to
+                pull off lascaux50: that plotter lived inside classic
+                httpd and went away with it when D50 moved to rts2ng.
+
+                The series is read from *D50's* daemon, not this host's -
+                see CLOUD_API_BASE below. Same 8 h default the old image
+                used; the range buttons are new, and the choice is
+                remembered in a cookie like the page's other preferences.
             -->
             <canvas id="cloud-canvas"></canvas>
             <div id="cloud-status" class="cloud-status"></div>
@@ -896,6 +891,20 @@
         const CLOUD_DEVICE = 'CLOUD';
         const CLOUD_VALUE = 'TEMP_DIFF';
 
+        // The cloud history lives in D50's database, not this host's:
+        // CLOUD is D50's sensor (this page has always shown D50's plot
+        // of it), classic httpd recorded it there since 2023, and
+        // rts2-recordd continues that same recvals series now. Nothing
+        // records it on lascaux, so ${API_BASE} - this host's own
+        // rts2-httpd, used by every other panel here - has nothing to
+        // serve and answers "no recorded value CLOUD.TEMP_DIFF".
+        //
+        // /d50 is Apache's proxy to D50's rts2-httpd, so this stays
+        // same-origin: an <img> never needed CORS but fetch() does, and
+        // the daemon sends no CORS headers. Point this at ${API_BASE}
+        // instead if lascaux ever records the sensor itself.
+        const CLOUD_API_BASE = '/d50/api';
+
         let cloudHours = parseFloat(getCookie('cloudHours')) || 8;
         let cloudSeries = null;
 
@@ -925,7 +934,7 @@
             const points = Math.max(200, Math.round(canvas.clientWidth || 900));
 
             try {
-                const res = await fetch(`${API_BASE}/db/records?device=${CLOUD_DEVICE}&value=${CLOUD_VALUE}&from=${from}&to=${to}&points=${points}`);
+                const res = await fetch(`${CLOUD_API_BASE}/db/records?device=${CLOUD_DEVICE}&value=${CLOUD_VALUE}&from=${from}&to=${to}&points=${points}`);
                 const data = await res.json();
                 if (data.error)
                     throw new Error(data.error);
@@ -945,7 +954,8 @@
                 cloudSeries = null;
                 status.className = 'cloud-status warn';
                 status.textContent = `cannot load cloud history: ${e.message}`
-                    + ` - is rts2-recordd running and recording ${CLOUD_DEVICE}.${CLOUD_VALUE}?`;
+                    + ` - is D50's rts2-recordd running and recording ${CLOUD_DEVICE}.${CLOUD_VALUE},`
+                    + ` and is ${CLOUD_API_BASE} still proxied to its rts2-httpd?`;
             }
             drawCloudGraph();
         }
