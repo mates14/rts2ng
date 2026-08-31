@@ -25,6 +25,8 @@ rts2-web (0.1.0-1) UNRELEASED; urgency=medium
     static/records.html graphs it in a canvas. This is the replacement for
     classic rts2-xmlrpcd's server-rendered /graph/DEVICE/VALUE - the
     cloudmeter sky-transparency plot D50 lost when it moved to rts2-httpd.
+    Device-state series (recvals.value_type 0, records_state) are served
+    by the same endpoint and drawn as steps rather than sloped lines.
   * rts2-base/rts2-db moved from Depends to Recommends. Both binaries in
     this package link base_kernel and db statically, so neither package
     is needed to install or run rts2-httpd; what it needs is a running

@@ -9,6 +9,15 @@ rts2-db (0.1.0-9) UNRELEASED; urgency=medium
     name, cadence in seconds, value names), so an existing logd file can
     be reused as is; add a "recordd RECORD /etc/rts2/record" line to
     /etc/rts2/services to run it.
+  * rts2-recordd: an "@state" entry in the configuration records the
+    device's rts2_status_t bitmask into records_state, so "the dome was
+    open here, the system went to standby there" can be plotted behind a
+    telemetry curve. Change-driven rather than sampled (a state is a step
+    function - every transition matters, nothing between them does), with
+    the cadence timer as the backstop for the state a device already had
+    when the daemon started. An existing state series is matched on
+    device and type rather than on value_name, so a classic site's state
+    history is continued rather than duplicated.
   * sql/create/tables.sql: create the recvals/records_double/_integer/
     _boolean/_state tables and the recval_ids sequence. They are classic's
     schema, unchanged (a site upgrading from classic keeps its history),

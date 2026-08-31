@@ -2142,6 +2142,15 @@ bridged by a line nobody measured, and the chart palette lives in
 `style.css` as `--rec-*` variables that `records.js` reads off the
 computed style rather than keeping a second copy of the colours.
 
+A **state series** (`recvals.value_type` 0 - the `rts2_status_t` bitmask
+`rts2-recordd`'s `@state` entries write, see `db/STATUS.md`) is drawn as
+steps, with the last level running to the right edge: a state holds until
+something changes it, so sloping between two samples would draw a
+transition that never happened and imply intermediate bitmask values that
+mean something else entirely. Nothing else about the endpoint changes -
+the same `/api/db/records` call serves it, with `records_state`'s `state`
+column standing in for `value`.
+
 Verified against the live daemon and real recorded `CLOUD` telemetry:
 raw, bucketed and explicit-range responses, the boolean series, both
 error paths (unknown value, missing parameters), and the page itself

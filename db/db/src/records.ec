@@ -48,6 +48,11 @@ namespace
  */
 const char *recordTable (int valueType)
 {
+	// Not masked with RTS2_BASE_TYPE: the state marker is the whole
+	// value_type being zero, not a base type inside it.
+	if (valueType == RECVAL_TYPE_STATE)
+		return "records_state";
+
 	switch (valueType & RTS2_BASE_TYPE)
 	{
 		case RTS2_VALUE_DOUBLE:
@@ -67,6 +72,11 @@ const char *recordTable (int valueType)
 
 const char *recordValueExpr (int valueType)
 {
+	// records_state names its column `state`, every other records_* table
+	// names it `value` - and a boolean one needs a cast before avg()/
+	// min()/max() will touch it.
+	if (valueType == RECVAL_TYPE_STATE)
+		return "state";
 	return (valueType & RTS2_BASE_TYPE) == RTS2_VALUE_BOOL ? "value::int" : "value";
 }
 
@@ -183,6 +193,71 @@ int rts2db::getRecvalId (const char *device, const char *value, int valueType)
 	return db_recval_id;
 }
 
+int rts2db::findStateRecvalId (const char *device)
+{
+	if (checkDbConnection ())
+		throw SqlError ();
+
+	if (strlen (device) > RECVAL_NAME_LEN)
+		throw SqlError ("device name is too long to record (max 25 characters)");
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	int db_recval_id;
+	int db_state_type = RECVAL_TYPE_STATE;
+	VARCHAR db_device[RECVAL_NAME_LEN + 1];
+	EXEC SQL END DECLARE SECTION;
+
+	db_device.len = strlen (device);
+	memcpy (db_device.arr, device, db_device.len);
+
+	// ORDER BY recval_id: a database that somehow ended up with two state
+	// rows for one device (classic's row plus one made before this lookup
+	// existed) keeps writing to the older, longer series rather than
+	// flipping between them.
+	EXEC SQL SELECT
+		recval_id
+	INTO
+		:db_recval_id
+	FROM
+		recvals
+	WHERE
+		device_name = :db_device AND value_type = :db_state_type
+	ORDER BY
+		recval_id ASC
+	LIMIT 1;
+
+	if (sqlca.sqlcode)
+	{
+		if (sqlca.sqlcode == ECPG_NOT_FOUND)
+		{
+			EXEC SQL ROLLBACK;
+			return -1;
+		}
+		SqlError err;
+		EXEC SQL ROLLBACK;
+		throw err;
+	}
+
+	EXEC SQL COMMIT;
+	return db_recval_id;
+}
+
+int rts2db::getStateRecvalId (const char *device)
+{
+	int recvalId = findStateRecvalId (device);
+	if (recvalId >= 0)
+		return recvalId;
+	// "state" is this tree's name for the series; what matters for
+	// reading a classic site's history is the type marker, which
+	// findStateRecvalId() above matches on.
+	return getRecvalId (device, "state", RECVAL_TYPE_STATE);
+}
+
+void rts2db::recordState (int recvalId, double t, int state)
+{
+	recordValue (recvalId, RECVAL_TYPE_STATE, t, state);
+}
+
 void rts2db::recordValue (int recvalId, int valueType, double t, double value)
 {
 	if (checkDbConnection ())
@@ -200,7 +275,15 @@ void rts2db::recordValue (int recvalId, int valueType, double t, double value)
 	// (recval_id, rectime) index, and two samples landing on the same
 	// timestamp is a duplicate to drop, not a failure worth propagating
 	// up into the recorder's value-changed path.
-	switch (valueType & RTS2_BASE_TYPE)
+	if (valueType == RECVAL_TYPE_STATE)
+	{
+		EXEC SQL INSERT INTO records_state
+			(recval_id, rectime, state)
+		VALUES
+			(:db_recval_id, to_timestamp (:db_rectime), :db_int)
+		ON CONFLICT DO NOTHING;
+	}
+	else switch (valueType & RTS2_BASE_TYPE)
 	{
 		case RTS2_VALUE_DOUBLE:
 		case RTS2_VALUE_FLOAT:

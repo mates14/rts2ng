@@ -965,9 +965,48 @@ user's call: **`rts2-recordd` writes, `rts2-httpd` only reads.**
   had only ever appeared in `sql/update/rel_0_8_*.sql`, so a database
   built from the create scripts had nowhere to record into.
 
-`records_state` is created for schema compatibility but has no writer
-here yet - the daemon records values, not device state changes. Worth
-adding when someone wants "when was the dome open" overlaid on a plot.
+**Device state recording** (`@state`, added the same day at the user's
+suggestion): a config entry named `@state` records the device's raw
+`rts2_status_t` bitmask into `records_state`, which is what makes "the
+dome was open here, the system went to standby there" plottable behind a
+telemetry curve.
+
+```
+DOME    60    @state
+CLOUD   60    TEMP_DIFF TEMP_IN @state
+```
+
+- **Change-driven, not sampled** - the opposite of the value path above,
+  and for the same reason it is right there: a state is a step function.
+  Every transition carries information and nothing between them does, so
+  this hooks `DevClient::stateChanged()` (a small `RecordDevClient`, the
+  same mechanism `rts2-httpd` uses to push state to WebSocket clients)
+  and writes on the transition itself. An unchanged state is dropped.
+- The cadence timer stays the backstop: it records the state a device
+  *already had* when the daemon started or reconnected, which no
+  `stateChanged()` will ever fire for. On disconnect the remembered state
+  is forgotten, so a device that restarts into the same state still gets
+  a sample for the new session rather than silently none.
+- `recvals.value_type = 0` marks a state series. That is **classic's own
+  marker, verified rather than invented**: the `recvals_state_statistics`
+  view in every classic database reads `... FROM recvals WHERE
+  recvals.value_type = 0`. No RTS2 value type uses 0 (`RTS2_VALUE_STRING`
+  is 1).
+- `getStateRecvalId()` matches an existing state row on **device and
+  type, not name** - classic chose the `value_name` for its state rows
+  and this tree cannot see what it chose, so keying on the name would
+  start a second series next to a classic site's existing state history
+  instead of continuing it. New rows are created as `<device>.state`.
+- The graph draws a state series as steps and runs the last level to the
+  right edge (a state holds until something changes it); sloping between
+  two samples would draw a transition that never happened and imply
+  intermediate bitmask values that mean something else entirely.
+
+Verified live: `@state` entries for `C1`, `T0`, `DOME` and `CLOUD`
+against the real bus produced exactly one row per device per session
+(65536, 2, 16385, 0 - dedup holding across the cadence ticks), read back
+through `/api/db/records` as a state series and drawn as steps. Rows
+deleted afterwards.
 
 Tested live on this machine: ran against the real bus with a 5 s cadence
 on `CLOUD.TEMP_DIFF`/`TEMP_SKY`/`HEATER`, confirmed rows landing in

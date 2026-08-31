@@ -46,6 +46,19 @@ namespace rts2db
  */
 
 /**
+ * recvals.value_type marking a device *state* series rather than a value:
+ * the samples are the raw rts2_status_t bitmask, and they live in
+ * records_state (whose column is `state`, not `value`).
+ *
+ * Zero is classic's own marker, not one invented here - its
+ * `recvals_state_statistics` view, still present in every classic
+ * database, is literally `... FROM recvals WHERE recvals.value_type = 0`.
+ * No RTS2 value type uses 0 (RTS2_VALUE_STRING is 1), so there is no
+ * collision to worry about.
+ */
+#define RECVAL_TYPE_STATE   0
+
+/**
  * One row of `recvals` - a device/value pair that is being recorded.
  */
 class Recval
@@ -138,6 +151,36 @@ int findRecvalId (const char *device, const char *value, int *valueType = nullpt
  * @throw SqlError on any database problem.
  */
 int getRecvalId (const char *device, const char *value, int valueType);
+
+/**
+ * recvals row id for a device's *state* series - any row for this device
+ * with RECVAL_TYPE_STATE, whatever its value_name, or -1 when there is
+ * none.
+ *
+ * Deliberately matched on device and type rather than on a name: classic
+ * chose the value_name for its state rows and this tree cannot see what
+ * it chose, so keying on the name would start a second series alongside
+ * a classic site's existing state history instead of continuing it.
+ *
+ * @throw SqlError on any database problem.
+ */
+int findStateRecvalId (const char *device);
+
+/**
+ * As findStateRecvalId(), creating the row (value_name "state") when the
+ * device has no state series yet.
+ *
+ * @throw SqlError on any database problem.
+ */
+int getStateRecvalId (const char *device);
+
+/**
+ * Store one device-state sample - the raw rts2_status_t bitmask, into
+ * records_state.
+ *
+ * @throw SqlError on any database problem.
+ */
+void recordState (int recvalId, double t, int state);
 
 /**
  * Store one sample. valueType picks the table: double/float/time go to

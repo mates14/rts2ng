@@ -327,19 +327,39 @@ function draw () {
 
 	// the series itself; a gap in the data stays a gap, rather than
 	// being bridged by a straight line that was never measured
+	//
+	// A state series (type 0 - the rts2_status_t bitmask rts2-recordd
+	// writes on every transition) is drawn as steps: the state held its
+	// old value right up to the transition, so sloping between two
+	// samples would draw a change that never happened, and would suggest
+	// intermediate bitmask values that mean something else entirely.
+	const stepped = series.type === 0;
 	ctx.strokeStyle = line;
 	ctx.lineWidth = 1.5;
 	ctx.beginPath ();
 	let pen = false;
+	let lastY = 0;
 	for (const p of points) {
 		if (p[1] === null || !isFinite (p[1])) {
 			pen = false;
 			continue;
 		}
 		const x = sx (p[0]), y = sy (p[1]);
-		pen ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+		if (!pen) {
+			ctx.moveTo (x, y);
+		} else if (stepped) {
+			ctx.lineTo (x, lastY);
+			ctx.lineTo (x, y);
+		} else {
+			ctx.lineTo (x, y);
+		}
+		lastY = y;
 		pen = true;
 	}
+	// a state holds until something changes it, so the last sample's
+	// level runs to the right edge rather than stopping mid-plot
+	if (stepped && pen)
+		ctx.lineTo (x1, lastY);
 	ctx.stroke ();
 
 	plot = { x0, x1, y0, y1, tMin, tMax, sx, sy, withDate };

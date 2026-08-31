@@ -34,6 +34,12 @@
  *
  *   # device  cadence  values...
  *   CLOUD     60       TEMP_DIFF TEMP_IN TEMP_AMB HEATER
+ *   DOME      60       @state
+ *
+ * @state is the one name that is not a device value: it records the
+ * device's rts2_status_t bitmask into records_state, which is what makes
+ * "the dome was open here, the system went to standby there" plottable
+ * behind a telemetry curve.
  *
  * Sampling is periodic rather than change-driven, which is the one
  * deliberate difference from classic's <value cadency=""><record/>. A
@@ -74,7 +80,12 @@ class RecordedValue
 			recvalId = -1;
 			warnedMissing = false;
 			warnedType = false;
+			lastState = -1;
 		}
+
+		/** the "@state" pseudo-value: this entry records the device's
+		 * state bitmask, not one of its values */
+		bool isState () const { return value == "@state"; }
 
 		std::string device;
 		std::string value;
@@ -96,6 +107,32 @@ class RecordedValue
 		 * same line every cadence seconds. */
 		bool warnedMissing;
 		bool warnedType;
+
+		/** last state written, so an unchanged state is not stored twice;
+		 * -1 means "nothing written yet". A state is a step function -
+		 * every transition matters and nothing between them does. */
+		long lastState;
+};
+
+class RecordD;
+
+/**
+ * Exists only to catch state changes as they happen. Values are sampled
+ * on a timer (see the file comment), but a device state is a step
+ * function - polling it would smear transitions to the nearest cadence
+ * and store a row per tick in between, so this hooks DevClient's own
+ * stateChanged() instead. Same mechanism rts2-httpd uses to push state
+ * to its WebSocket clients.
+ */
+class RecordDevClient:public rts2core::DevClient
+{
+	public:
+		RecordDevClient (rts2core::Connection *_conn, RecordD *_master):rts2core::DevClient (_conn), master (_master) {}
+
+		virtual void stateChanged (rts2core::ServerState *state);
+
+	private:
+		RecordD *master;
 };
 
 class RecordD:public rts2db::DeviceDb
@@ -103,12 +140,20 @@ class RecordD:public rts2db::DeviceDb
 	public:
 		RecordD (int argc, char **argv);
 
+		/** called from RecordDevClient when a device's state changes */
+		void deviceStateChanged (rts2core::Connection *conn);
+
 	protected:
 		virtual int processArgs (const char *arg);
 		virtual int init ();
 		virtual int idle ();
 		virtual int willConnect (rts2core::NetworkAddress *_addr);
 		virtual void usage ();
+
+		virtual rts2core::DevClient *createOtherType (rts2core::Connection *conn, int other_device_type)
+		{
+			return new RecordDevClient (conn, this);
+		}
 
 	private:
 		std::vector <std::string> configFiles;
@@ -120,6 +165,9 @@ class RecordD:public rts2db::DeviceDb
 
 		int loadConfig (const char *filename);
 		void sample (RecordedValue &rec, double now);
+		void sampleState (RecordedValue &rec, rts2core::Connection *conn, double now);
+		void countRecord (double now);
+		void recordFailed (RecordedValue &rec, rts2core::Error &er);
 		bool isRecordedDevice (const char *device);
 };
 
@@ -281,6 +329,22 @@ void RecordD::sample (RecordedValue &rec, double now)
 			logStream (MESSAGE_WARNING) << "device " << rec.device << " is not connected - not recording " << rec.value << " until it appears" << sendLog;
 			rec.warnedMissing = true;
 		}
+		// The device is gone, so whatever state it last had says nothing
+		// about the state it will come back in - forget it, or a device
+		// that restarts into the same state would record no sample at all
+		// for the new session.
+		rec.lastState = -1;
+		return;
+	}
+
+	if (rec.isState ())
+	{
+		// The timer path is the backstop for state: it stores the state a
+		// device already had when this daemon started or reconnected,
+		// which no stateChanged() will ever fire for. Unchanged states
+		// are dropped inside sampleState().
+		rec.warnedMissing = false;
+		sampleState (rec, conn, now);
 		return;
 	}
 
@@ -326,23 +390,75 @@ void RecordD::sample (RecordedValue &rec, double now)
 			rec.recvalId = getRecvalId (rec.device.c_str (), rec.value.c_str (), value->getValueType ());
 
 		recordValue (rec.recvalId, value->getValueType (), now, v);
-
-		recordsWritten->inc ();
-		lastRecord->setValueDouble (now);
-		sendValueAll (recordsWritten);
-		sendValueAll (lastRecord);
+		countRecord (now);
 	}
 	catch (rts2core::Error &er)
 	{
-		// Never fatal: a database that is down, restarting, or refusing
-		// one statement must not take the daemon with it - the sample is
-		// lost, the next one is tried on the next cadence. recvalId is
-		// dropped so a failed lookup is retried rather than cached.
-		rec.recvalId = -1;
-		recordErrors->inc ();
-		sendValueAll (recordErrors);
-		logStream (MESSAGE_ERROR) << "cannot record " << rec.device << "." << rec.value << ": " << er << sendLog;
+		recordFailed (rec, er);
 	}
+}
+
+void RecordD::countRecord (double now)
+{
+	recordsWritten->inc ();
+	lastRecord->setValueDouble (now);
+	sendValueAll (recordsWritten);
+	sendValueAll (lastRecord);
+}
+
+void RecordD::recordFailed (RecordedValue &rec, rts2core::Error &er)
+{
+	// Never fatal: a database that is down, restarting, or refusing one
+	// statement must not take the daemon with it - the sample is lost and
+	// the next one is tried on the next cadence (or the next state
+	// change). recvalId is dropped so a failed lookup is retried rather
+	// than cached.
+	rec.recvalId = -1;
+	recordErrors->inc ();
+	sendValueAll (recordErrors);
+	logStream (MESSAGE_ERROR) << "cannot record " << rec.device << "." << rec.value << ": " << er << sendLog;
+}
+
+void RecordD::sampleState (RecordedValue &rec, rts2core::Connection *conn, double now)
+{
+	long deviceState = (long) conn->getState ();
+	// A state is a step function: storing the same bitmask again every
+	// cadence would bury the transitions - the only samples that carry
+	// information - under thousands of identical rows.
+	if (deviceState == rec.lastState)
+		return;
+
+	try
+	{
+		if (rec.recvalId < 0)
+			rec.recvalId = getStateRecvalId (rec.device.c_str ());
+
+		recordState (rec.recvalId, now, (int) deviceState);
+		rec.lastState = deviceState;
+		countRecord (now);
+	}
+	catch (rts2core::Error &er)
+	{
+		recordFailed (rec, er);
+	}
+}
+
+void RecordD::deviceStateChanged (rts2core::Connection *conn)
+{
+	if (conn == nullptr || conn->getName ()[0] == '\0')
+		return;
+	double now = getNow ();
+	for (std::vector <RecordedValue>::iterator iter = recorded.begin (); iter != recorded.end (); iter++)
+	{
+		if (iter->isState () && iter->device == conn->getName ())
+			sampleState (*iter, conn, now);
+	}
+}
+
+void RecordDevClient::stateChanged (rts2core::ServerState *state)
+{
+	master->deviceStateChanged (getConnection ());
+	rts2core::DevClient::stateChanged (state);
 }
 
 int RecordD::idle ()
