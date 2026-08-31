@@ -1848,11 +1848,25 @@ int rts2db::newTargetId ()
 	int db_new_id;
 	EXEC SQL END DECLARE SECTION;
 
-	// Same nextval('tar_id') draw Target::save() already does internally
-	// when no explicit ID is given - see that function's own comment.
-	EXEC SQL SELECT nextval ('tar_id') INTO :db_new_id;
+	// Mirrors rts2-addtarget's own algorithm (rtspy/cli/addtarget.py,
+	// _find_free_id): the smallest tar_id in [8000, 49999] not already
+	// present in this database, computed fresh on every call instead of
+	// drawn from a monotonic sequence. A sequence draw is never given
+	// back even if the caller abandons it without saving anything
+	// (nextval() is intentionally non-transactional) - that's what
+	// silently burned through IDs 8044..30007 during web UI testing
+	// before this was a live scan. Scanning live also means an id that
+	// was inserted and later deleted (e.g. purged because it was never
+	// observed) becomes available again right away. 50000+ is GRB's own
+	// reserved range (grb_tar_id sequence), left untouched.
+	EXEC SQL SELECT gs.id INTO :db_new_id
+		FROM generate_series (8000, 49999) AS gs (id)
+		WHERE NOT EXISTS (SELECT 1 FROM targets WHERE tar_id = gs.id)
+		ORDER BY gs.id LIMIT 1;
+	if (sqlca.sqlcode == ECPG_NOT_FOUND)
+		throw SqlError ("no free tar_id in the auto-assign range [8000,49999]");
 	if (sqlca.sqlcode)
-		throw SqlError ("cannot get new tar_id");
+		throw SqlError ("cannot find a free tar_id");
 	EXEC SQL COMMIT;
 	return db_new_id;
 }
