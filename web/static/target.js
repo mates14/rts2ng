@@ -215,6 +215,7 @@ async function loadTarget (id) {
 	setStatus (loadStatusEl, true, 'loading…');
 	targetBoxesEl.hidden = true;
 	tarIdLabelEl.hidden = true;
+	document.getElementById ('sky-panel').hidden = true;
 	document.getElementById ('create-type-row').hidden = true;
 
 	const [d50, sbt] = await Promise.all ([loadSiteData ('d50', id), loadSiteData ('sbt', id)]);
@@ -237,6 +238,7 @@ async function loadTarget (id) {
 	await reconcileWhatBox ();
 	renderWhenBox ();
 	await renderScriptsBox ();
+	await loadVisibility ();
 }
 
 document.getElementById ('load-form').addEventListener ('submit', (ev) => {
@@ -754,6 +756,347 @@ document.getElementById ('peer-config-form').addEventListener ('submit', (ev) =>
 
 document.getElementById ('peer-site').value = currentSite;
 document.getElementById ('peer-prefix').value = peerPrefix ();
+
+// --- Visibility plot ---------------------------------------------------------
+//
+// The staralt-style night plot classic produced with `rts2-targetinfo -g`
+// (which printed gnuplot code to pipe into gnuplot). Everything
+// astronomical is computed by the daemon - /api/db/target-altitude walks
+// centrald's own next_event() state machine for the night boundaries and
+// rts2db::Target::getAltAz() for the trace, so a moving target traces its
+// real path and nothing here re-derives an ephemeris the backend already
+// knows. This function only draws.
+//
+// The horizon curve is the horizon at the target's azimuth at each
+// moment, which is the whole reason the plot is worth drawing per target:
+// where the trace meets it is where this telescope loses the object.
+
+const skyPanelEl = document.getElementById ('sky-panel');
+const skyCanvas = document.getElementById ('sky-chart');
+const skyTooltipEl = document.getElementById ('sky-tooltip');
+const skyStatusEl = document.getElementById ('sky-status');
+const skySummaryEl = document.getElementById ('sky-summary');
+const skyLegendEl = document.getElementById ('sky-legend');
+const skyDateEl = document.getElementById ('sky-date');
+
+let skyData = null;
+let skyPlot = null;
+
+const SKY_PAD = { left: 44, right: 12, top: 12, bottom: 28 };
+
+/** YYYY-MM-DD in local time - what <input type="date"> speaks, and what
+ * the endpoint's date= parameter takes. */
+function skyDateString (t) {
+	const d = new Date (t * 1000);
+	return d.getFullYear () + '-' + String (d.getMonth () + 1).padStart (2, '0')
+		+ '-' + String (d.getDate ()).padStart (2, '0');
+}
+
+function skyTime (t) {
+	const d = new Date (t * 1000);
+	return String (d.getHours ()).padStart (2, '0') + ':' + String (d.getMinutes ()).padStart (2, '0');
+}
+
+/** libnova counts azimuth from south; a person reading a chart wants it
+ * from north, same conversion the site monitors' sky charts make. */
+function skyCompassAz (azLibnova) {
+	return (azLibnova + 180) % 360;
+}
+
+async function loadVisibility () {
+	if (currentId === null)
+		return;
+	skyPanelEl.hidden = false;
+	setStatus (skyStatusEl, true, 'loading…');
+
+	// One point per canvas pixel is all the plot can resolve, and each
+	// one costs the daemon a target/moon/sun position.
+	const points = Math.min (600, Math.max (120, Math.round (skyCanvas.clientWidth || 800)));
+	const date = skyDateEl.value;
+	const url = apiUrl (currentSite, `api/db/target-altitude?id=${encodeURIComponent (currentId)}`
+		+ (date ? `&date=${encodeURIComponent (date)}` : '') + `&points=${points}`);
+
+	try {
+		// fetchJson() here returns { ok, body } - an API-level error comes
+		// back as a normal JSON body with an HTTP status to match, same
+		// as everywhere else on this page
+		const r = await fetchJson (url);
+		if (!r.ok)
+			throw new Error (r.body.error || 'request failed');
+		const data = r.body;
+		skyData = data;
+		if (!date)
+			skyDateEl.value = skyDateString (data.sunset);
+		describeVisibility ();
+		setStatus (skyStatusEl, true, `sunset ${skyTime (data.sunset)}, sunrise ${skyTime (data.sunrise)}`
+			+ (data.nightStart ? `, RTS2 night ${skyTime (data.nightStart)}–${skyTime (data.nightEnd)} (sun below ${data.nightHorizon}°)` : ''));
+	} catch (er) {
+		skyData = null;
+		skySummaryEl.textContent = '';
+		skyLegendEl.innerHTML = '';
+		setStatus (skyStatusEl, false, `cannot compute visibility: ${er.message}`);
+	}
+	drawVisibility ();
+}
+
+/** Heading summary and legend: the two questions a plan actually asks -
+ * how high does it get, and for how long is it observable at all. */
+function describeVisibility () {
+	if (!skyData || !skyData.points.length) {
+		skySummaryEl.textContent = '';
+		skyLegendEl.innerHTML = '';
+		return;
+	}
+
+	const pts = skyData.points;
+	const nightFrom = skyData.nightStart || skyData.sunset;
+	const nightTo = skyData.nightEnd || skyData.sunrise;
+	const step = pts.length > 1 ? (pts[pts.length - 1][0] - pts[0][0]) / (pts.length - 1) : 0;
+
+	let best = null;
+	let visibleSeconds = 0;
+	let moonMin = Infinity;
+	for (const p of pts) {
+		const inNight = p[0] >= nightFrom && p[0] <= nightTo;
+		if (!inNight)
+			continue;
+		if (p[1] > p[3]) {
+			visibleSeconds += step;
+			if (!best || p[1] > best[1])
+				best = p;
+		}
+		if (p[5] < moonMin)
+			moonMin = p[5];
+	}
+
+	if (!best) {
+		skySummaryEl.textContent = 'never rises above the horizon during the night';
+	} else {
+		const hours = visibleSeconds / 3600;
+		// everything here is measured inside the RTS2 night, not between
+		// sunset and sunrise: that is the window the scheduler can
+		// actually use, and a peak altitude reached during twilight
+		// would be a number nobody can observe at
+		skySummaryEl.textContent = `up to ${best[1].toFixed (0)}° at ${skyTime (best[0])} (RTS2 night), `
+			+ `observable ${hours.toFixed (1)} h of it, `
+			+ `Moon ${(skyData.moonDisk * 100).toFixed (0)}% at ${moonMin.toFixed (0)}°`;
+	}
+
+	skyLegendEl.innerHTML = '<span class="k-target">target</span>'
+		+ '<span class="k-moon">Moon</span>'
+		+ '<span class="k-horizon">horizon at target azimuth</span>'
+		+ (skyData.nightStart ? '<span class="k-night">RTS2 night start/end</span>' : '');
+}
+
+function drawVisibility () {
+	if (!skyCanvas)
+		return;
+	const ctx = skyCanvas.getContext ('2d');
+	const ratio = window.devicePixelRatio || 1;
+	const width = skyCanvas.clientWidth;
+	const height = skyCanvas.clientHeight;
+	skyCanvas.width = Math.round (width * ratio);
+	skyCanvas.height = Math.round (height * ratio);
+	ctx.setTransform (ratio, 0, 0, ratio, 0, 0);
+	ctx.clearRect (0, 0, width, height);
+	skyPlot = null;
+
+	const style = getComputedStyle (document.body);
+	const fg = style.getPropertyValue ('--text-muted').trim () || '#6b7280';
+	const grid = style.getPropertyValue ('--border').trim () || '#dcdfe4';
+	const cTarget = style.getPropertyValue ('--sky-target').trim () || '#2563eb';
+	const cMoon = style.getPropertyValue ('--sky-moon').trim () || '#b45309';
+	const cHorizon = style.getPropertyValue ('--sky-horizon').trim () || '#6b7280';
+	const cHorizonFill = style.getPropertyValue ('--sky-horizon-fill').trim () || 'rgba(107,114,128,0.25)';
+	const cNight = style.getPropertyValue ('--sky-night-line').trim () || '#15803d';
+	const cTwilight = style.getPropertyValue ('--sky-twilight').trim () || 'rgba(37,99,235,0.07)';
+
+	if (!skyData || !skyData.points.length) {
+		ctx.fillStyle = fg;
+		ctx.font = '13px sans-serif';
+		ctx.textAlign = 'center';
+		ctx.fillText ('no visibility data', width / 2, height / 2);
+		return;
+	}
+
+	const pts = skyData.points;
+	const x0 = SKY_PAD.left, x1 = width - SKY_PAD.right;
+	const y0 = SKY_PAD.top, y1 = height - SKY_PAD.bottom;
+	if (x1 <= x0 || y1 <= y0)
+		return;
+
+	const tMin = skyData.sunset, tMax = skyData.sunrise;
+	// Fixed 0..90: an altitude plot that rescales itself per target
+	// invites comparing two nights that are not on the same scale.
+	const vMin = 0, vMax = 90;
+	const sx = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+	const sy = v => y1 - (Math.max (vMin, Math.min (vMax, v)) - vMin) / (vMax - vMin) * (y1 - y0);
+
+	// twilight: before RTS2 night starts and after it ends
+	if (skyData.nightStart && skyData.nightEnd) {
+		ctx.fillStyle = cTwilight;
+		ctx.fillRect (x0, y0, sx (skyData.nightStart) - x0, y1 - y0);
+		ctx.fillRect (sx (skyData.nightEnd), y0, x1 - sx (skyData.nightEnd), y1 - y0);
+	}
+
+	ctx.strokeStyle = grid;
+	ctx.fillStyle = fg;
+	ctx.lineWidth = 1;
+	ctx.font = '11px sans-serif';
+	ctx.textAlign = 'right';
+	ctx.textBaseline = 'middle';
+	for (let v = 0; v <= 90; v += 15) {
+		const y = Math.round (sy (v)) + 0.5;
+		ctx.beginPath ();
+		ctx.moveTo (x0, y);
+		ctx.lineTo (x1, y);
+		ctx.stroke ();
+		ctx.fillText (v + '°', x0 - 6, y);
+	}
+
+	// one tick per hour, on the hour
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'top';
+	const firstHour = Math.ceil (tMin / 3600) * 3600;
+	for (let t = firstHour; t <= tMax; t += 3600) {
+		const x = Math.round (sx (t)) + 0.5;
+		ctx.beginPath ();
+		ctx.moveTo (x, y0);
+		ctx.lineTo (x, y1);
+		ctx.stroke ();
+		const label = skyTime (t);
+		const half = ctx.measureText (label).width / 2;
+		ctx.textAlign = x + half > width ? 'right' : (x - half < 0 ? 'left' : 'center');
+		ctx.fillText (label, x, y1 + 4);
+	}
+	ctx.textAlign = 'center';
+
+	// horizon, filled from the bottom - the ground, effectively
+	ctx.fillStyle = cHorizonFill;
+	ctx.strokeStyle = cHorizon;
+	ctx.lineWidth = 1;
+	ctx.beginPath ();
+	ctx.moveTo (sx (pts[0][0]), y1);
+	for (const p of pts)
+		ctx.lineTo (sx (p[0]), sy (p[3]));
+	ctx.lineTo (sx (pts[pts.length - 1][0]), y1);
+	ctx.closePath ();
+	ctx.fill ();
+	ctx.beginPath ();
+	for (let i = 0; i < pts.length; i++) {
+		const x = sx (pts[i][0]), y = sy (pts[i][3]);
+		i ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+	}
+	ctx.stroke ();
+
+	// Moon, dashed - it is context for the target trace, not a second
+	// thing of equal weight
+	ctx.strokeStyle = cMoon;
+	ctx.setLineDash ([4, 3]);
+	ctx.lineWidth = 1.2;
+	ctx.beginPath ();
+	let pen = false;
+	for (const p of pts) {
+		if (p[4] < 0) { pen = false; continue; }	 // below the horizon: not drawn, not clamped to 0
+		const x = sx (p[0]), y = sy (p[4]);
+		pen ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+		pen = true;
+	}
+	ctx.stroke ();
+	ctx.setLineDash ([]);
+
+	// RTS2 night boundaries
+	if (skyData.nightStart && skyData.nightEnd) {
+		ctx.strokeStyle = cNight;
+		ctx.setLineDash ([5, 4]);
+		ctx.lineWidth = 1.2;
+		for (const t of [skyData.nightStart, skyData.nightEnd]) {
+			const x = Math.round (sx (t)) + 0.5;
+			ctx.beginPath ();
+			ctx.moveTo (x, y0);
+			ctx.lineTo (x, y1);
+			ctx.stroke ();
+		}
+		ctx.setLineDash ([]);
+	}
+
+	// the target itself, on top of everything
+	ctx.strokeStyle = cTarget;
+	ctx.lineWidth = 2;
+	ctx.beginPath ();
+	pen = false;
+	for (const p of pts) {
+		if (p[1] < 0) { pen = false; continue; }
+		const x = sx (p[0]), y = sy (p[1]);
+		pen ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+		pen = true;
+	}
+	ctx.stroke ();
+
+	skyPlot = { x0, x1, y0, y1, tMin, tMax, sx, sy };
+}
+
+function onSkyMove (event) {
+	if (!skyPlot || !skyData || !skyData.points.length) {
+		skyTooltipEl.style.display = 'none';
+		return;
+	}
+	const rect = skyCanvas.getBoundingClientRect ();
+	const x = event.clientX - rect.left;
+	if (x < skyPlot.x0 || x > skyPlot.x1) {
+		skyTooltipEl.style.display = 'none';
+		return;
+	}
+
+	const t = skyPlot.tMin + (x - skyPlot.x0) / (skyPlot.x1 - skyPlot.x0) * (skyPlot.tMax - skyPlot.tMin);
+	let best = null, bestDist = Infinity;
+	for (const p of skyData.points) {
+		const d = Math.abs (p[0] - t);
+		if (d < bestDist) { bestDist = d; best = p; }
+	}
+	if (!best) {
+		skyTooltipEl.style.display = 'none';
+		return;
+	}
+
+	skyTooltipEl.textContent = `${skyTime (best[0])}  alt ${best[1].toFixed (1)}°  az ${skyCompassAz (best[2]).toFixed (0)}°`
+		+ `  horizon ${best[3].toFixed (1)}°  Moon ${best[5].toFixed (0)}° away`;
+	skyTooltipEl.style.display = 'block';
+	const tipWidth = skyTooltipEl.offsetWidth;
+	let left = skyPlot.sx (best[0]) + 12;
+	if (left + tipWidth > rect.width)
+		left = skyPlot.sx (best[0]) - tipWidth - 12;
+	skyTooltipEl.style.left = left + 'px';
+	skyTooltipEl.style.top = (skyPlot.sy (Math.max (best[1], best[3])) - 30) + 'px';
+}
+
+function shiftSkyDate (days) {
+	const base = skyDateEl.value ? new Date (skyDateEl.value + 'T12:00:00') : new Date ();
+	base.setDate (base.getDate () + days);
+	skyDateEl.value = skyDateString (base.getTime () / 1000);
+	loadVisibility ();
+}
+
+document.getElementById ('sky-prev').addEventListener ('click', () => shiftSkyDate (-1));
+document.getElementById ('sky-next').addEventListener ('click', () => shiftSkyDate (1));
+document.getElementById ('sky-today').addEventListener ('click', () => {
+	skyDateEl.value = '';
+	loadVisibility ();
+});
+skyDateEl.addEventListener ('change', loadVisibility);
+document.getElementById ('sky-form').addEventListener ('submit', (ev) => ev.preventDefault ());
+
+skyCanvas.addEventListener ('mousemove', onSkyMove);
+skyCanvas.addEventListener ('mouseleave', () => { skyTooltipEl.style.display = 'none'; });
+
+let skyResizeTimer = null;
+window.addEventListener ('resize', () => {
+	// redraw only: the sample count follows the width, but refetching on
+	// every resize event would make the daemon recompute a few hundred
+	// ephemeris positions for nothing
+	clearTimeout (skyResizeTimer);
+	skyResizeTimer = setTimeout (drawVisibility, 200);
+});
 
 // Support ?id=N in the URL so a link (e.g. from a future target-list
 // view) can jump straight to a target instead of requiring the id to be

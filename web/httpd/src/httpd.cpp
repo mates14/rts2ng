@@ -1446,6 +1446,81 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/target-altitude"))
+	{
+		const char *idStr = getParam (connection, "id", "");
+		const char *raStr = getParam (connection, "ra", "");
+		const char *decStr = getParam (connection, "dec", "");
+		if (idStr[0] == '\0' && (raStr[0] == '\0' || decStr[0] == '\0'))
+		{
+			static const char *msg = "{\"error\":\"pass id=<target> or ra=&dec= (degrees)\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+
+		int targetId = idStr[0] != '\0' ? atoi (idStr) : -1;
+		double fixedRa = atof (raStr);
+		double fixedDec = atof (decStr);
+
+		// date=YYYY-MM-DD names the night that *starts* on that date;
+		// anything else means tonight (or, before noon, the night still
+		// in progress - dbTargetAltitude() anchors both to local noon).
+		double refTime = getNow ();
+		const char *dateStr = getParam (connection, "date", "");
+		if (dateStr[0] != '\0')
+		{
+			struct tm tmDate;
+			memset (&tmDate, 0, sizeof (tmDate));
+			if (strptime (dateStr, "%Y-%m-%d", &tmDate) == nullptr)
+			{
+				static const char *msg = "{\"error\":\"date must be YYYY-MM-DD\"}";
+				struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+				MHD_add_response_header (response, "Content-Type", "application/json");
+				MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+				MHD_destroy_response (response);
+				return ret;
+			}
+			tmDate.tm_hour = 12;
+			tmDate.tm_isdst = -1;
+			refTime = mktime (&tmDate);
+		}
+
+		int points = atoi (getParam (connection, "points", "200"));
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, fixedRa, fixedDec, refTime, points] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbTargetAltitude (targetId, fixedRa, fixedDec, refTime, points, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 	else if (!strcmp (url, "/api/db/target-save"))
 	{
 		const char *idStr = getParam (connection, "id", "");

@@ -258,6 +258,36 @@ void dbListRecvals (std::ostringstream &os);
  */
 void dbRecords (const std::string &device, const std::string &value, double from, double to, int maxPoints, std::ostringstream &os);
 
+/**
+ * GET /api/db/target-altitude?id=N[&date=YYYY-MM-DD][&points=N] - one
+ * night's visibility curve for a target: the staralt-style plot classic
+ * produced through `rts2-targetinfo -g` piping gnuplot code.
+ *
+ * The night runs sunset to sunrise (sun crossing the configured
+ * day_horizon), with the RTS2 night boundaries (night_horizon) reported
+ * alongside so the plot can mark them - the same [observatory] keys and
+ * the same next_event() state machine centrald itself runs, rather than
+ * a second, independently-drifting notion of when night is.
+ *
+ * Each point is [time, alt, az, horizonAlt, moonAlt, moonDist, sunAlt]:
+ * an array again, for the same size reason /api/db/records gives, and
+ * `horizonAlt` is the horizon *at that moment's azimuth*, which is what
+ * makes the bottom curve mean "can this target actually be seen from
+ * here" rather than "how high is it".
+ *
+ * Position comes from rts2db::Target::getAltAz() per sample, so a moving
+ * target (elliptical, GRB, planet) traces its real path rather than a
+ * fixed RA/Dec - that is why this lives under /api/db/ and takes a
+ * target id. Passing ra=&dec= instead computes a fixed position without
+ * touching the database, for previewing a target that has not been
+ * saved yet.
+ *
+ * @param targetId  target to plot, or -1 to use fixedRa/fixedDec.
+ * @param refTime   any time inside the wanted night (a night belongs to
+ *   the day it starts on, so this is anchored to local noon).
+ */
+void dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double refTime, int points, std::ostringstream &os);
+
 }
 
 #endif // WEB_HAVE_DB

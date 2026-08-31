@@ -116,6 +116,31 @@
 		</section>
 	</div>
 
+	<section id="sky-panel" class="panel" hidden>
+		<h2>Visibility <span id="sky-summary" class="sky-summary"></span></h2>
+		<p class="hint">
+			The night this target gets, sunset to sunrise, with RTS2's own
+			night boundaries marked - the same picture classic's
+			<code>rts2-targetinfo -g</code> drew through gnuplot. The
+			bottom curve is the horizon <em>at the target's azimuth at
+			that moment</em>, so where the trace dips into it is where
+			this telescope actually loses the target, not merely where it
+			gets low.
+		</p>
+		<form id="sky-form" class="inline-form">
+			<label>Night of <input id="sky-date" type="date"></label>
+			<button type="button" id="sky-prev">&larr; previous</button>
+			<button type="button" id="sky-today">tonight</button>
+			<button type="button" id="sky-next">next &rarr;</button>
+		</form>
+		<div id="sky-chart-wrap">
+			<canvas id="sky-chart"></canvas>
+			<div id="sky-tooltip" class="rec-tooltip"></div>
+		</div>
+		<div id="sky-legend" class="sky-legend"></div>
+		<div id="sky-status" class="status-line"></div>
+	</section>
+
 	<details id="peer-settings">
 		<summary>Advanced: telescope identity / proxy path (auto-detected, override only if wrong)</summary>
 		<form id="peer-config-form" class="inline-form">

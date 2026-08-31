@@ -27,6 +27,12 @@ rts2-web (0.1.0-1) UNRELEASED; urgency=medium
     cloudmeter sky-transparency plot D50 lost when it moved to rts2-httpd.
     Device-state series (recvals.value_type 0, records_state) are served
     by the same endpoint and drawn as steps rather than sloped lines.
+  * rts2-httpd: /api/db/target-altitude computes one night's visibility
+    curve for a target - sunset to sunrise, RTS2's night boundaries from
+    centrald's own next_event() state machine, the target's and the
+    Moon's altitude, and the horizon at the target's azimuth at each
+    moment. The target editor plots it in a canvas, replacing what
+    classic offered only through "rts2-targetinfo -g" and gnuplot.
   * rts2-base/rts2-db moved from Depends to Recommends. Both binaries in
     this package link base_kernel and db statically, so neither package
     is needed to install or run rts2-httpd; what it needs is a running

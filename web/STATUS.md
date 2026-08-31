@@ -2157,6 +2157,62 @@ error paths (unknown value, missing parameters), and the page itself
 rendered in headless Firefox - which also caught the last x-axis label
 being clipped mid-digit at the canvas edge (now aligned inwards).
 
+## Target visibility plot: `/api/db/target-altitude` + the editor's canvas (2026-08-31)
+
+The staralt-style night plot classic produced with `rts2-targetinfo -g`,
+which printed gnuplot code to pipe into gnuplot. Same content, drawn in
+the target editor instead of a separate command: the night from sunset to
+sunrise, RTS2's own night boundaries marked, the target's trace, the
+Moon's, and the horizon along the bottom.
+
+- **The horizon is the horizon at the target's azimuth at that moment**,
+  not one flat limit line. That is the whole reason the plot is worth
+  drawing per target: where the trace meets that curve is where *this*
+  telescope loses the object behind a hill, which is a different time
+  from "when it gets low". `ObjectCheck::getHorizonHeight()` answers it
+  per sample, from the same horizon file the dome-safety checks use.
+- **Night boundaries come from centrald's own state machine**, not a
+  second opinion: `next_event()` (riseset.h) walked forward from local
+  noon, with the same `[observatory]` `night_horizon`/`day_horizon`/
+  `evening_time`/`morning_time` keys and defaults centrald's
+  `initValues()` reads. DUSK begins at sunset, NIGHT at the
+  night_horizon crossing, DAWN at the end of night, MORNING at sunrise -
+  so all four times fall out of one loop.
+- **Position is per sample**, `rts2db::Target::getAltAz()`, so an
+  elliptical/GRB/planet target traces its real path across the night
+  rather than a frozen RA/Dec. That is why the endpoint lives under
+  `/api/db/` and takes a target id; `ra=&dec=` computes a fixed position
+  with no database involved, for previewing a target that has not been
+  saved yet.
+- A night belongs to the day it starts on, so everything is anchored to
+  **local noon** - asking at 23:00 and at 03:00 describes the same night,
+  and `date=YYYY-MM-DD` needs no special case.
+- Points are arrays again - `[t, alt, az, horizonAlt, moonAlt, moonDist,
+  sunAlt]` - for the same size reason `/api/db/records` gives.
+
+The editor's panel draws it in a canvas (vanilla JS, no charting
+library, palette from `style.css`'s new `--sky-*` variables): twilight
+shaded either side of the RTS2 night, dashed night boundaries, the
+horizon filled from the bottom, the Moon dashed because it is context
+rather than a second subject, and a hover readout of altitude, compass
+azimuth and Moon distance. Azimuth is converted to compass degrees for
+display (libnova counts from south) - the same `+ 180` the site monitors'
+sky charts already do. The heading summarises what a plan actually asks:
+peak altitude and time, hours observable, and the Moon's illumination and
+closest approach - all measured **inside the RTS2 night**, since a peak
+reached during twilight is a number nobody can observe at.
+
+Verified against the live daemon with a real target (TT Boo, id 1152):
+sunset 17:34, sunrise 04:25, RTS2 night 18:47-03:12 with the sun at -10
+at that boundary and at day_horizon (+1 at this site) at sunset, the
+horizon curve reproducing the loaded horizon file's ~3 deg at azimuth 82
+rising to ~30 deg where the target sets into the hills. Also checked the
+fixed-position path, a target that never rises (all altitudes negative),
+a malformed date, missing parameters and a nonexistent id. Rendered in
+headless Firefox, which is what caught this page's `fetchJson()`
+returning `{ ok, body }` rather than the body - the plot had been
+silently reading `undefined.points`.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

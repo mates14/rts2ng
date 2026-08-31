@@ -11,6 +11,10 @@
 #include "rts2db/scheduling.h"
 #include "rts2db/targetscripts.h"
 #include "rts2db/records.h"
+#include "objectcheck.h"
+#include "riseset.h"
+#include "status.h"
+#include "timestamp.h"
 #include "configuration.h"
 
 #include <libnova/libnova.h>
@@ -762,6 +766,185 @@ void rts2web::dbRecords (const std::string &device, const std::string &value, do
 		os << "," << iter->n << "]";
 	}
 	os << "]}";
+}
+
+void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double refTime, int points, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2core::Configuration *config = rts2core::Configuration::instance ();
+	struct ln_lnlat_posn *observer = config->getObserver ();
+
+	// The same [observatory] keys, with the same defaults, that
+	// centrald's initValues() reads - not a second opinion on when night
+	// is. (An operator can raise centrald's night_horizon value at
+	// runtime, since it is writable there; this reads the configured
+	// one, which is what a plan for a future night should be based on
+	// anyway.)
+	double nightHorizon = config->getDoubleDefault ("observatory", "night_horizon", -10);
+	double dayHorizon = config->getDoubleDefault ("observatory", "day_horizon", 0);
+	int eveningTime = config->getIntegerDefault ("observatory", "evening_time", 7200);
+	int morningTime = config->getIntegerDefault ("observatory", "morning_time", 1800);
+
+	// A night belongs to the day it starts on, so everything is anchored
+	// to local noon: asking at 23:00 and at 03:00 has to describe the
+	// same night, and an explicit date=YYYY-MM-DD (passed in as that
+	// day's local noon) then needs no special case here.
+	time_t ref = (time_t) refTime;
+	struct tm tmRef;
+	localtime_r (&ref, &tmRef);
+	if (tmRef.tm_hour < 12)
+		ref -= 86400;
+	localtime_r (&ref, &tmRef);
+	tmRef.tm_hour = 12;
+	tmRef.tm_min = 0;
+	tmRef.tm_sec = 0;
+	tmRef.tm_isdst = -1;
+	time_t noon = mktime (&tmRef);
+
+	// Walk centrald's own state machine (riseset.h's next_event) forward
+	// from noon, recording where each state begins: DUSK starts at
+	// sunset, NIGHT at the night_horizon crossing, DAWN at the end of
+	// night, MORNING at sunrise.
+	time_t sunset = 0, nightStart = 0, nightEnd = 0, sunrise = 0;
+	rts2_status_t currType = -1, nextType = -1;
+	time_t cursor = noon;
+	for (int i = 0; i < 24 && !(sunset && sunrise); i++)
+	{
+		time_t probe = cursor + 1;
+		time_t evTime = cursor;
+		next_event (observer, &probe, &currType, &nextType, &evTime, nightHorizon, dayHorizon, eveningTime, morningTime);
+		if (evTime <= cursor)
+			break;					 // no progress - refuse to spin
+		switch (currType)
+		{
+			case SERVERD_DUSK:
+				if (!sunset)
+					sunset = cursor;
+				break;
+			case SERVERD_NIGHT:
+				if (!nightStart)
+				{
+					nightStart = cursor;
+					nightEnd = evTime;
+				}
+				break;
+			case SERVERD_MORNING:
+				if (!sunrise)
+					sunrise = cursor;
+				break;
+		}
+		cursor = evTime;
+	}
+
+	if (!sunset || !sunrise || sunrise <= sunset)
+		throw rts2core::Error ("cannot find a sunset/sunrise pair for this date at this observatory - a polar day or night, or a horizon configuration that never crosses");
+
+	if (points < 10)
+		points = 10;
+	if (points > 2000)
+		points = 2000;
+
+	rts2db::Target *tar = nullptr;
+	if (targetId >= 0)
+	{
+		// throws rts2db::SqlError for a nonexistent id, same as every
+		// other target endpoint here
+		tar = createTarget (targetId, observer, config->getObservatoryAltitude ());
+	}
+
+	ObjectCheck *checker = config->getObjectChecker ();
+
+	std::ostringstream pts;
+	bool first = true;
+	try
+	{
+		for (int i = 0; i < points; i++)
+		{
+			double t = sunset + (double) (sunrise - sunset) * i / (points - 1);
+			double JD = Timestamp (t).getJD ();
+
+			struct ln_equ_posn equ;
+			struct ln_hrz_posn hrz;
+			if (tar)
+			{
+				// per-sample position, so an elliptical/GRB/planet target
+				// traces its real path across the night
+				tar->getPosition (&equ, JD);
+				tar->getAltAz (&hrz, JD, observer);
+			}
+			else
+			{
+				equ.ra = fixedRa;
+				equ.dec = fixedDec;
+				ln_get_hrz_from_equ (&equ, observer, JD, &hrz);
+			}
+
+			struct ln_equ_posn moonEqu, sunEqu;
+			struct ln_hrz_posn moonHrz, sunHrz;
+			ln_get_lunar_equ_coords (JD, &moonEqu);
+			ln_get_hrz_from_equ (&moonEqu, observer, JD, &moonHrz);
+			ln_get_solar_equ_coords (JD, &sunEqu);
+			ln_get_hrz_from_equ (&sunEqu, observer, JD, &sunHrz);
+
+			// The horizon at *this moment's* azimuth - the whole point of
+			// plotting it against time rather than drawing one fixed
+			// limit line: a target setting into a hill is only visible
+			// until it reaches that hill's altitude at that azimuth.
+			double horizonAlt = checker->getHorizonHeight (&hrz, 0);
+
+			if (!first)
+				pts << ",";
+			first = false;
+			pts << "[";
+			jsonTime (t, pts);
+			pts << ",";
+			jsonNumber (hrz.alt, pts);
+			pts << ",";
+			jsonNumber (hrz.az, pts);
+			pts << ",";
+			jsonNumber (horizonAlt, pts);
+			pts << ",";
+			jsonNumber (moonHrz.alt, pts);
+			pts << ",";
+			jsonNumber (ln_get_angular_separation (&equ, &moonEqu), pts);
+			pts << ",";
+			jsonNumber (sunHrz.alt, pts);
+			pts << "]";
+		}
+
+		os << "{\"id\":" << (tar ? tar->getTargetID () : -1) << ",\"name\":";
+		jsonString (tar ? tar->getTargetName () : "", os);
+		os << ",\"sunset\":";
+		jsonTime (sunset, os);
+		os << ",\"sunrise\":";
+		jsonTime (sunrise, os);
+		os << ",\"nightStart\":";
+		if (nightStart)
+			jsonTime (nightStart, os);
+		else
+			os << "null";
+		os << ",\"nightEnd\":";
+		if (nightEnd)
+			jsonTime (nightEnd, os);
+		else
+			os << "null";
+		os << ",\"nightHorizon\":";
+		jsonNumber (nightHorizon, os);
+		os << ",\"dayHorizon\":";
+		jsonNumber (dayHorizon, os);
+		// illumination halfway through the night, which is what "how
+		// bright is the Moon tonight" means for planning
+		os << ",\"moonDisk\":";
+		jsonNumber (ln_get_lunar_disk (Timestamp ((sunset + sunrise) / 2.0).getJD ()), os);
+		os << ",\"points\":[" << pts.str () << "]}";
+	}
+	catch (...)
+	{
+		delete tar;
+		throw;
+	}
+	delete tar;
 }
 
 #endif // WEB_HAVE_DB

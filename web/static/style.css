@@ -15,6 +15,14 @@
 	--rec-grid: #e3e6ea;
 	--rec-line: #2563eb;
 	--rec-band: rgba(37, 99, 235, 0.18);
+	/* target visibility plot (target.html); target.js reads these the
+	 * same way records.js reads the --rec-* ones */
+	--sky-target: #2563eb;
+	--sky-moon: #b45309;
+	--sky-horizon: #6b7280;
+	--sky-horizon-fill: rgba(107, 114, 128, 0.25);
+	--sky-night-line: #15803d;
+	--sky-twilight: rgba(37, 99, 235, 0.07);
 }
 
 * {
@@ -750,3 +758,51 @@ header h1 {
 	font-size: 12px;
 	color: var(--text-muted);
 }
+
+/* --- target visibility plot (target.html) --------------------------- */
+
+#sky-chart-wrap {
+	position: relative;
+	width: 100%;
+	/* fixed height with the canvas filling it, same reason as the
+	 * telemetry chart: a canvas has no intrinsic size of its own */
+	height: 320px;
+}
+
+#sky-chart {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.sky-summary {
+	font-size: 13px;
+	font-weight: normal;
+	color: var(--text-muted);
+	margin-left: 8px;
+}
+
+.sky-legend {
+	margin-top: 6px;
+	font-size: 12px;
+	color: var(--text-muted);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px;
+}
+
+.sky-legend span::before {
+	content: "";
+	display: inline-block;
+	width: 14px;
+	height: 0;
+	margin-right: 5px;
+	vertical-align: middle;
+	border-top-width: 2px;
+	border-top-style: solid;
+}
+
+.sky-legend .k-target::before { border-top-color: var(--sky-target); }
+.sky-legend .k-moon::before { border-top-color: var(--sky-moon); border-top-style: dashed; }
+.sky-legend .k-horizon::before { border-top-color: var(--sky-horizon); }
+.sky-legend .k-night::before { border-top-color: var(--sky-night-line); border-top-style: dashed; }
