@@ -74,3 +74,4 @@ pkg_check_modules(OPENSSL_CRYPTO REQUIRED libcrypto)
 pkg_check_modules(LIBCRYPT REQUIRED libcrypt)
 
 add_subdirectory(httpd)
+add_subdirectory(jsonclient)

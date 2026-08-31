@@ -5,6 +5,7 @@
 #include <QGraphicsPixmapItem>
 #include <QImage>
 #include <QRect>
+#include <QWheelEvent>
 
 #include "gui/sightitem.h"
 
@@ -48,8 +49,38 @@ class ImageCanvas : public QGraphicsView
 
 		QImage currentImage () const { return m_currentImage; }
 
+		double zoom () const { return m_zoom; }
+		static constexpr double minZoom = 0.1;
+		static constexpr double maxZoom = 8.0;
+
 	public slots:
 		void setImage (const QImage &image);
+
+		/**
+		 * Sets the view's display scale (1.0 = native pixel-for-pixel), on
+		 * top of whatever image is currently shown - unlike the deliberately
+		 * absent fitInView() call in setImage() (see its comment), this is
+		 * a user-driven scale that persists across new images, not
+		 * recomputed per frame. Clamped to [minZoom, maxZoom] and a no-op
+		 * if the clamped value doesn't actually change anything, both to
+		 * keep MainWindow's spinbox<->wheelEvent() feedback loop
+		 * (zoomChanged() -> QDoubleSpinBox::setValue() -> valueChanged() ->
+		 * setZoom() again) from re-entering endlessly.
+		 */
+		void setZoom (double zoom);
+
+	signals:
+		/**
+		 * Fired whenever the zoom actually changes, whether from
+		 * setZoom() (MainWindow's spinbox) or wheelEvent() (mouse wheel
+		 * over the image) - MainWindow connects this back to its spinbox's
+		 * setValue() so the two stay in sync regardless of which one drove
+		 * the change.
+		 */
+		void zoomChanged (double zoom);
+
+	protected:
+		void wheelEvent (QWheelEvent *event) override;
 
 	private:
 		QRect itemRect (SightItem *item) const;
@@ -59,6 +90,10 @@ class ImageCanvas : public QGraphicsView
 		SightItem *m_crosshair;
 		SightItem *m_windowItem;
 		QImage m_currentImage;
+
+		// 1.0 = native pixel-for-pixel, same convention as MainWindow's zoom
+		// spinbox - see setZoom()/wheelEvent().
+		double m_zoom = 1.0;
 };
 
 }

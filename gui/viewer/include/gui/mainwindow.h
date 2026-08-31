@@ -131,6 +131,8 @@ class MainWindow : public QMainWindow
 		void onFocusGraphEnableToggled (bool checked);
 		void onFocusGraphResetClicked ();
 		void onFocusGraphAxisChanged (int index);
+		void onZoomSpinChanged (double zoom);
+		void onCanvasZoomChanged (double zoom);
 		void onProgressTick ();
 
 	private:
@@ -204,6 +206,7 @@ class MainWindow : public QMainWindow
 		// ViewerCamera::runFit(), updateFocusPanel()). Guiding is not
 		// implemented - this is the "room reserved" panel from round 5.
 		QSpinBox *measureSizeSpin;
+		QDoubleSpinBox *zoomSpin;
 		QLabel *zoomedView;
 		QLabel *fwhmXLabel;
 		QLabel *fwhmYLabel;

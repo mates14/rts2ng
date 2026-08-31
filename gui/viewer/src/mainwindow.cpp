@@ -63,6 +63,19 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 
 	QFormLayout *focusForm = new QFormLayout ();
 
+	// View zoom (1.0 = native pixel-for-pixel) - independent of the measure
+	// box below, applies to the whole canvas. Also driven by the mouse
+	// wheel directly over the image (ImageCanvas::wheelEvent()); the two
+	// are kept in sync via zoomChanged()/onCanvasZoomChanged() below rather
+	// than this spinbox being the sole source of truth.
+	zoomSpin = new QDoubleSpinBox (focusPanel);
+	zoomSpin->setRange (ImageCanvas::minZoom, ImageCanvas::maxZoom);
+	zoomSpin->setSingleStep (0.1);
+	zoomSpin->setDecimals (2);
+	zoomSpin->setValue (1.0);
+	zoomSpin->setSuffix ("x");
+	focusForm->addRow ("Zoom:", zoomSpin);
+
 	measureSizeSpin = new QSpinBox (focusPanel);
 	measureSizeSpin->setRange (8, 512);
 	measureSizeSpin->setValue (32);
@@ -127,12 +140,14 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	focusLayout->addWidget (graphBox);
 
 	focusLayout->addStretch ();
+	connect (zoomSpin, QOverload<double>::of (&QDoubleSpinBox::valueChanged), this, &MainWindow::onZoomSpinChanged);
 	connect (measureSizeSpin, QOverload<int>::of (&QSpinBox::valueChanged), this, &MainWindow::onMeasureSizeChanged);
 	connect (focusGraphEnableCheck, &QCheckBox::toggled, this, &MainWindow::onFocusGraphEnableToggled);
 	connect (focusGraphResetButton, &QPushButton::clicked, this, &MainWindow::onFocusGraphResetClicked);
 	connect (focusGraphAxisCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onFocusGraphAxisChanged);
 
 	canvas = new ImageCanvas (topSplitter);
+	connect (canvas, &ImageCanvas::zoomChanged, this, &MainWindow::onCanvasZoomChanged);
 
 	// --- Right-hand control column (camera selector, expose, filter/
 	// binning, cooling) - modeled on fiber_pointing_client.py's own right
@@ -836,6 +851,21 @@ void MainWindow::onWindowSizeChanged (int size)
 void MainWindow::onMeasureSizeChanged (int size)
 {
 	canvas->setMeasureSize (size);
+}
+
+void MainWindow::onZoomSpinChanged (double zoom)
+{
+	canvas->setZoom (zoom);
+}
+
+void MainWindow::onCanvasZoomChanged (double zoom)
+{
+	// Mirrors a wheel-driven zoom back onto the spinbox without re-entering
+	// onZoomSpinChanged()/canvas->setZoom() - setValue() only emits
+	// valueChanged() when the value actually differs, and it already
+	// matches (canvas->setZoom() already applied it) whenever this fires
+	// from onZoomSpinChanged()'s own call into the canvas.
+	zoomSpin->setValue (zoom);
 }
 
 void MainWindow::updateWindowBoxSize ()

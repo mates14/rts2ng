@@ -2,6 +2,10 @@
 
 #include <QPixmap>
 #include <QBrush>
+#include <QTransform>
+
+#include <algorithm>
+#include <cmath>
 
 using namespace gui;
 
@@ -39,6 +43,13 @@ ImageCanvas::ImageCanvas (QWidget *parent):
 
 	setScene (m_scene);
 	setBackgroundBrush (QBrush (Qt::black));
+
+	// Keep whatever scene point is under the mouse fixed on screen while
+	// wheelEvent() rescales the view - the usual "zoom towards the
+	// cursor" feel, rather than always zooming around the viewport's
+	// center.
+	setTransformationAnchor (QGraphicsView::AnchorUnderMouse);
+	setResizeAnchor (QGraphicsView::AnchorUnderMouse);
 }
 
 QRect ImageCanvas::itemRect (SightItem *item) const
@@ -105,7 +116,39 @@ void ImageCanvas::setImage (const QImage &image)
 		// looking "zoomed in" and making the red cursor hard to grab where
 		// the user expected it. Always show at native 1:1 scale for now;
 		// zooming in/out (useful for large chips vs small windowed
-		// sections) is worth adding later, deliberately deferred rather
-		// than getting the coordinate math wrong under time pressure.
+		// sections) is now available separately via setZoom()/wheelEvent() -
+		// a user-driven scale applied on top of this always-native pixmap,
+		// not recomputed from the image size here.
 	}
+}
+
+void ImageCanvas::setZoom (double zoom)
+{
+	zoom = std::max (minZoom, std::min (maxZoom, zoom));
+	if (qFuzzyCompare (zoom, m_zoom))
+		return;
+	m_zoom = zoom;
+
+	QTransform t;
+	t.scale (m_zoom, m_zoom);
+	setTransform (t);
+
+	emit zoomChanged (m_zoom);
+}
+
+void ImageCanvas::wheelEvent (QWheelEvent *event)
+{
+	// One "notch" (the standard 15-degree detent most mice report) is
+	// 120 in Qt's angleDelta units - scale zoom by a fixed ~10% per notch
+	// rather than a fixed additive step, so it feels equally responsive
+	// whether currently zoomed way in or way out.
+	int steps = event->angleDelta ().y () / 120;
+	if (steps == 0)
+	{
+		event->ignore ();
+		return;
+	}
+
+	setZoom (m_zoom * std::pow (1.1, steps));
+	event->accept ();
 }
