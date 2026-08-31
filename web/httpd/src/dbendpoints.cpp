@@ -511,7 +511,14 @@ void rts2web::dbListObservations (int targetId, std::ostringstream &os)
 		if (!first)
 			os << ",";
 		first = false;
-		os << "{\"id\":" << iter->getObsId () << ",\"start\":" << iter->getObsStart () << ",\"end\":" << iter->getObsEnd () << "}";
+		// Not `os << getObsStart ()`: these are ctime doubles, and the
+		// stream operator's six significant digits round them to the
+		// nearest ~1000 s - see jsonNumber()'s comment.
+		os << "{\"id\":" << iter->getObsId () << ",\"start\":";
+		jsonTime (iter->getObsStart (), os);
+		os << ",\"end\":";
+		jsonTime (iter->getObsEnd (), os);
+		os << "}";
 	}
 	os << "]";
 }
@@ -579,11 +586,11 @@ void rts2web::dbNightDetail (int year, int month, int day, std::ostringstream &o
 		os << "{\"id\":" << iter->getObsId () << ",\"targetId\":" << iter->getTargetId () << ",\"targetName\":";
 		jsonString (iter->getTargetName ().c_str (), os);
 		os << ",\"slew\":";
-		jsonNumber (iter->getObsSlew (), os);
+		jsonTime (iter->getObsSlew (), os);
 		os << ",\"start\":";
-		jsonNumber (iter->getObsStart (), os);
+		jsonTime (iter->getObsStart (), os);
 		os << ",\"end\":";
-		jsonNumber (iter->getObsEnd (), os);
+		jsonTime (iter->getObsEnd (), os);
 		os << ",\"images\":" << iter->getNumberOfImages () << ",\"goodImages\":" << iter->getNumberOfGoodImages () << ",\"timeOnSky\":";
 		jsonNumber (iter->getTimeOnSky (), os);
 		os << "}";
@@ -655,7 +662,7 @@ static void writeImageSetJson (rts2db::ImageSet &is, const std::string &imagesDi
 		os << ",\"cameraName\":";
 		jsonString (img->getCameraName (), os);
 		os << ",\"exposureStart\":";
-		jsonNumber (img->getExposureStart (), os);
+		jsonTime (img->getExposureStart (), os);
 		os << "}";
 	}
 	os << "]";

@@ -1746,6 +1746,13 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 			bool first = true;
 			for (connections_t::iterator iter = conns->begin (); iter != conns->end (); iter++)
 			{
+				// A connection that hasn't announced its name yet has an
+				// empty one, and reporting it as "" put a nameless entry
+				// in every device list a client built from this endpoint.
+				// /api/getall has always skipped those; this now agrees
+				// with it.
+				if ((*iter)->getName ()[0] == '\0')
+					continue;
 				if (!first)
 					os << ",";
 				first = false;
@@ -1909,7 +1916,9 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 				if (!first)
 					os << ",";
 				first = false;
-				os << "{\"time\":" << iter->getMessageTime () << ",\"device\":";
+				os << "{\"time\":";
+				jsonTime (iter->getMessageTime (), os);
+				os << ",\"device\":";
 				jsonString (iter->getMessageOName (), os);
 				os << ",\"type\":" << iter->getType () << ",\"text\":";
 				jsonString (iter->getMessageString ().c_str (), os);

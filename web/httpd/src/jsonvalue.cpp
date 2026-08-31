@@ -1,6 +1,7 @@
 #include "jsonvalue.h"
 #include "valuearray.h"
 
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 
@@ -66,10 +67,46 @@ void rts2web::jsonString (const char *s, std::ostringstream &os)
 
 void rts2web::jsonNumber (double d, std::ostringstream &os)
 {
-	if (std::isnan (d))
+	// Infinity joins NaN in becoming null: `inf` is no more a valid JSON
+	// token than `nan` is, and null is what a strict parser (JS's
+	// JSON.parse(), or rts2-jsonclient's own reader) can actually take.
+	if (!std::isfinite (d))
+	{
 		os << "null";
-	else
-		os << d;
+		return;
+	}
+
+	// std::to_chars, not `os << d`. The stream operator writes six
+	// *significant* digits by default, which silently destroys any large
+	// number: a ctime of 1788180123.456 came out as 1.78818e+09 - rounded
+	// to the nearest ~1000 seconds - so every message in /api/messages
+	// carried the same timestamp, and every RTS2_VALUE_TIME in
+	// /api/getall was useless. This is the shortest representation that
+	// parses back to exactly the same double, so nothing is lost and
+	// 0.1 still prints as 0.1 (setprecision(17) would print
+	// 0.10000000000000001).
+	char buf[64];
+	std::to_chars_result res = std::to_chars (buf, buf + sizeof (buf), d);
+	if (res.ec != std::errc ())
+	{
+		os << "null";
+		return;
+	}
+	os.write (buf, res.ptr - buf);
+}
+
+void rts2web::jsonTime (double t, std::ostringstream &os)
+{
+	// Times go on the wire as ctime seconds, always - never as JD, and
+	// never following the process-wide display mode base's --jd/--ctime
+	// set (rts2format.h's timeDisplay_t). That mode is for human-facing
+	// output; this is a protocol, and its consumers (app.js's
+	// `new Date (t * 1000)`, rts2-jsonclient) have to know what they are
+	// reading without asking how the daemon was started. It exists as its
+	// own function anyway so that a time is a deliberate thing in the
+	// serializer rather than an anonymous double, which is precisely how
+	// the precision bug above went unnoticed.
+	jsonNumber (t, os);
 }
 
 // Renders IntegerArray/BoolArray/DoubleArray/TimeArray/StringArray as a
@@ -151,8 +188,10 @@ void rts2web::jsonValue (Value *value, std::ostringstream &os)
 			break;
 		case RTS2_VALUE_DOUBLE:
 		case RTS2_VALUE_FLOAT:
-		case RTS2_VALUE_TIME:
 			jsonNumber (value->getValueDouble (), os);
+			break;
+		case RTS2_VALUE_TIME:
+			jsonTime (value->getValueDouble (), os);
 			break;
 		case RTS2_VALUE_INTEGER:
 			os << value->getValueInteger ();

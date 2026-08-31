@@ -1,0 +1,46 @@
+Source: rts2-web
+Section: science
+Priority: optional
+Maintainer: RTS2 Project <petr@rts2.org>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               pkg-config,
+               g++,
+               libcfitsio-dev,
+               libncurses-dev,
+               libnova-dev,
+               libusb-1.0-0-dev,
+               libpq-dev,
+               libecpg-dev,
+               libxml2-dev,
+               libmicrohttpd-dev,
+               libjpeg-dev,
+               libssl-dev,
+               libcrypt-dev,
+               libcurl4-gnutls-dev | libcurl4-openssl-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/RTS2/rts2
+
+Package: rts2-web
+Architecture: any
+Depends: rts2-base,
+         rts2-db,
+         ${shlibs:Depends},
+         ${misc:Depends}
+Description: Remote Telescope System 2 - HTTP/JSON API daemon and dashboard
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains rts2-httpd, the daemon exposing the RTS2 device bus
+ and observation database to the outside world over HTTP: a JSON/REST API,
+ live value and state push over WebSocket, FITS image previews, and
+ target/observation history. It also ships the static dashboard served
+ from /usr/share/rts2-web/static, and rts2-jsonclient, the command line
+ client for that API (the scriptable replacement for classic's
+ rts2-xmlrpcclient).
+ .
+ This is a from-scratch redesign of classic src/httpd rather than a
+ mechanical port - see web/STATUS.md in the source tree for the rationale.
+ Built with WEB_WITH_DB=ON, so the target/observation history endpoints
+ are compiled in and rts2-db is required; the daemon still starts and
+ serves its non-DB endpoints when the database is unreachable at runtime.

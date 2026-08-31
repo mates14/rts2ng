@@ -50,6 +50,13 @@ void jsonString (const char *s, std::ostringstream &os);
  * surfaced this. */
 void jsonNumber (double d, std::ostringstream &os);
 
+/** Write a time (UNIX ctime seconds, as RTS2 carries times in a double)
+ * as a JSON number. Same output as jsonNumber() - it is a separate call
+ * so that times are explicit in the serializer, and so there is one place
+ * to change if the wire representation ever moves. See the .cpp for why
+ * it deliberately ignores base's --jd/--ctime display mode. */
+void jsonTime (double t, std::ostringstream &os);
+
 /** Write "name":value for a single Value to os. */
 void jsonValue (rts2core::Value *value, std::ostringstream &os);
 

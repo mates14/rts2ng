@@ -1,0 +1,28 @@
+rts2-web (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial packaging of the web tree as rts2-web, shipping rts2-httpd and
+    the static dashboard. Until now web/ had no debian/ directory at all
+    and was absent from buildme.sh's module list, so rts2-httpd built
+    under cmake but could never reach an installed system - the HTTPDNG
+    line in /etc/rts2/services had no binary behind it.
+  * rts2-jsonclient: command line client for the JSON API, shipped in the
+    same package as the daemon it talks to (it is the tool for driving and
+    scripting rts2-httpd from a shell, and is tiny next to it). Adds a
+    libcurl build dependency, used by the client only.
+  * rts2-httpd: JSON numbers are no longer written at ostream's default
+    six significant digits, which rounded every time on the wire to the
+    nearest ~1000 s - /api/messages stamped a whole listing at one
+    instant, and RTS2_VALUE_TIME values, observation start/end/slew and
+    image exposureStart were all equally unusable. Numbers now use the
+    shortest round-tripping representation (std::to_chars), non-finite
+    doubles serialize as null instead of an invalid `inf` token, and
+    time-valued fields go through an explicit jsonTime().
+  * rts2-httpd: /api/devices no longer reports a connection that has not
+    announced its name yet as "", which put a nameless entry in every
+    device list built from it. /api/getall has always skipped those.
+  * Static dashboard installed to /usr/share/rts2-web/static rather than
+    being read out of a source checkout. Existing services lines pointing
+    --static-dir at a working copy keep working; new deployments should
+    use the packaged path.
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 24 Aug 2026 17:38:00 +0200

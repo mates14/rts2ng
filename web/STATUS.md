@@ -310,8 +310,8 @@ narrower than originally scoped here:
 - **Compiled-in JS/CSS** (`libjavascript.cpp`/`libcss.cpp`) - real files
   on disk instead, per the deployment-model decision above.
 - **`rts2-xmlrpcclient`** - no reason to port a CLI client for a protocol
-  being dropped. `rts2-jsonclient`/the Python `rts2.rtsapi` client remain
-  the real client-side story.
+  being dropped. `rts2-jsonclient` (written for this tree, see below) and
+  the Python `rts2.rtsapi` client are the real client-side story.
 - **Big Brother federation** (`bbserver.cpp`/`bbapi.cpp`, pushing status
   to a multi-site aggregator) - not evaluated yet. Same tier-model
   judgment `base` already applies to vendor SDKs and `db`/`gui` apply to
@@ -328,6 +328,9 @@ web/
   CMakeLists.txt       # nests base (and, if WEB_WITH_DB, db) - see below
   STATUS.md            # this file
   httpd/                # the rts2-httpd daemon itself
+    include/
+    src/
+  jsonclient/           # rts2-jsonclient, the CLI client for its API
     include/
     src/
   static/               # real JS/CSS/HTML, installed alongside the binary
@@ -2012,6 +2015,94 @@ nothing to exercise them against meaningfully. Both now exist:
     navigation, not the current on-disk file - same class of issue as
     phase 2's `const`-redeclaration finding. All test targets/data
     cleaned up and verified removed afterward.
+
+## `rts2-jsonclient` - the CLI client (2026-08-31)
+
+`web/jsonclient/`, one binary (`rts2-jsonclient`), shipped in the same
+`rts2-web` package as the daemon. It is the scriptable half of the API
+surface and the replacement for classic's dropped `rts2-xmlrpcclient`:
+`devices`, `getall`, `get`, `set`/`inc`/`dec`, `selval`, `switchstate`,
+`messages`, `horizon`, plus `db <endpoint>` / `api <path>` escape hatches
+that take `key=value` arguments and pretty-print whatever JSON comes back
+(so an endpoint added to the daemon later is reachable without touching
+this client).
+
+Decisions worth recording:
+
+- **HTTP, not the bus.** It duplicates nothing from `rts2-sendcmd`: that
+  one speaks the RTS2 protocol and has to run where the bus is reachable,
+  this one needs only the HTTP port, so it works from a laptop, a cron
+  job on another host, or through the optional reverse proxy.
+- **libcurl, client-side only.** The daemon still depends on
+  `libmicrohttpd` alone and makes no outgoing requests; the `pkg_check_
+  modules(CURL ...)` lives in `jsonclient/CMakeLists.txt`, not the web
+  top level, so that stays visible. libcurl (rather than a hand-rolled
+  socket client) because the write endpoints are gated by HTTP basic auth
+  and real deployments sit behind proxies that redirect and speak TLS.
+- **Own JSON reader** (`json.h`/`json.cpp`), the reading counterpart of
+  `httpd`'s write-only `jsonvalue.cpp`. Same reasoning as the serializer:
+  no JSON library is otherwise anywhere in this tree, and ~200 lines of
+  recursive-descent parser is a better trade than a new Build-Depends for
+  turning `{"name":value}` back into printable text. It is a real parser
+  all the same (`\u` escapes with surrogate pairs, nesting depth capped,
+  trailing garbage rejected) - pointed at the wrong port it must say so,
+  not misparse. Object members keep document order, since a device's
+  value list is meaningful as the device ordered it.
+- **`base_kernel` only, never `db`** - even when `WEB_WITH_DB` is ON. The
+  client has no database connection of its own; what it uses from the
+  kernel is the `CliApp` option/help/`askForPassword` scaffolding every
+  other RTS2 command line tool uses, plus `Timestamp` and `message.h`'s
+  severity bits.
+- **Writes print nothing on success.** `/api/set` is fire-and-forget on
+  the daemon side (it queues the change and answers before the device
+  acknowledges), so the only value it could echo is the pre-change one.
+  Silence plus the exit code is both the honest and the script-friendly
+  answer; `--debug` shows the URL actually fetched.
+- **`-u user` without a password prompts for it** via
+  `App::askForPassword()` rather than requiring `-u user:pass` on the
+  command line, where it would land in shell history and in every `ps`
+  listing on the machine.
+
+Tested against the live daemon on this machine (`devices`, `getall`,
+`get` both forms, `selval` against a real filter/binning selection,
+`messages`, `horizon`, `db current-night`, `api`, `--json`, and the
+error paths: unknown device, unknown command, connection refused, bad
+`key=value`). The write path (`set`/`inc`/`dec`/`switchstate`, URL
+encoding of a script string full of spaces and braces, preemptive basic
+auth, 401 handling, non-JSON response) was exercised against a stub HTTP
+server rather than the production observatory.
+
+Two daemon-side defects surfaced while testing it. Both are now fixed
+in `httpd`:
+
+- **Times were serialized at default `ostream` precision** (6 significant
+  digits): `/api/messages` sent `"time":1.78818e+09`, and every
+  `RTS2_VALUE_TIME` in `/api/get`/`/api/getall`, every observation
+  `start`/`end`/`slew` and every image `exposureStart` in the `/api/db/`
+  endpoints was rounded to the nearest ~1000 s - a whole message listing
+  came out stamped at the same instant. `jsonNumber()` now writes the
+  shortest representation that round-trips exactly, via `std::to_chars`
+  (C++17): nothing is lost, and `0.1` still prints as `0.1` rather than
+  `setprecision(17)`'s `0.10000000000000001`. Non-finite doubles became
+  `null` as well - `inf` was being written raw, and is no more valid JSON
+  than `nan` is.
+
+  A `jsonTime()` call now marks the time-valued fields explicitly (same
+  output as `jsonNumber()`, one place to change if the wire format ever
+  moves). It deliberately ignores base's new `--jd`/`--ctime` display
+  mode: a protocol must mean the same thing regardless of how the daemon
+  was started, so the wire is always ctime seconds, which is what
+  `app.js`'s `new Date (t * 1000)` and `rts2-jsonclient` read.
+
+  The general half of this - times are not just large doubles, they have
+  a display mode, and it belongs in the C++ formatting layer - is fixed
+  in `base`: see "Time display mode: `timeDisplay_t`" in `base/STATUS.md`.
+  Every RTS2 tool gained `--jd`/`--ctime` from it.
+- **`/api/devices` reported an unnamed connection as `""`**, while
+  `/api/getall` skipped those (`getName()[0] == '\0'`). The endpoint now
+  agrees with `/api/getall` and skips them. `rts2-jsonclient` keeps its
+  own filter for the same case: it is the client that talks to whatever
+  daemon a site is actually running, including one older than this fix.
 
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 

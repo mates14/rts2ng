@@ -1,0 +1,48 @@
+#!/usr/bin/make -f
+
+# web note: same "no CMakeLists.txt in this tree has install() rules yet"
+# situation as rts2-base and rts2-db - dh_auto_install is overridden to
+# copy build output directly. See base/debian/rules for the full
+# explanation and base/STATUS.md's Debian-packaging section.
+#
+# No BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR here. web nests the db tree
+# (which nests base) purely to link rts2db/base_kernel into rts2-httpd -
+# the vendor camera drivers are irrelevant to this package and are left
+# unconfigured, so they simply don't build. Same reasoning as
+# db/debian/rules.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+BUILDDIR = obj-$(DEB_HOST_MULTIARCH)
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=$(BUILDDIR)
+
+# WEB_WITH_DB=ON is web/CMakeLists.txt's own default, stated explicitly
+# here because debian/control's Depends on rts2-db is only correct while
+# it stays on - the two have to be changed together.
+override_dh_auto_configure:
+	dh_auto_configure --buildsystem=cmake --builddirectory=$(BUILDDIR) -- \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DWEB_WITH_DB=ON
+
+# rts2-httpd and rts2-jsonclient only. The nested db/base builds also produce
+# rts2-executor, the drivers, centrald and so on in $(BUILDDIR), but
+# those are rts2-db's and rts2-base's to ship - installing them from here
+# too would make three packages fight over the same paths.
+override_dh_auto_install:
+	install -d debian/rts2-web/usr/bin
+	install -m 0755 $(BUILDDIR)/httpd/rts2-httpd debian/rts2-web/usr/bin/
+	install -m 0755 $(BUILDDIR)/jsonclient/rts2-jsonclient debian/rts2-web/usr/bin/
+	install -d debian/rts2-web/usr/share/rts2-web/static
+	install -m 0644 static/* debian/rts2-web/usr/share/rts2-web/static/
+
+# No systemd unit of its own - rts2-httpd runs via rts2-base's existing
+# rts2-start/rts2@.service mechanism, driven by an 'httpd' line in
+# /etc/rts2/services. Same reasoning as rts2-db's rts2-executor; see
+# db/debian/rules.
+
+# Same reasoning as rts2-base/rts2-db: no CMake test target here is
+# meaningful at package-build time, and dh_auto_test would rebuild the
+# whole nested db+base tree under ctest for no benefit.
+override_dh_auto_test:
