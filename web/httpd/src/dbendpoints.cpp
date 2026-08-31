@@ -10,6 +10,7 @@
 #include "rts2db/imageset.h"
 #include "rts2db/scheduling.h"
 #include "rts2db/targetscripts.h"
+#include "rts2db/records.h"
 #include "configuration.h"
 
 #include <libnova/libnova.h>
@@ -694,6 +695,73 @@ void rts2web::dbSearchImagesByNight (const std::string &imagesDir, int year, int
 	rts2db::ImageSetDate is (from, end);
 	is.load ();
 	writeImageSetJson (is, imagesDir, os);
+}
+
+void rts2web::dbListRecvals (std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::RecvalsSet recvals;
+	recvals.load (true);
+
+	os << "[";
+	bool first = true;
+	for (rts2db::RecvalsSet::iterator iter = recvals.begin (); iter != recvals.end (); iter++)
+	{
+		if (!first)
+			os << ",";
+		first = false;
+		os << "{\"id\":" << iter->recvalId << ",\"device\":";
+		jsonString (iter->device.c_str (), os);
+		os << ",\"value\":";
+		jsonString (iter->value.c_str (), os);
+		os << ",\"type\":" << iter->valueType << ",\"from\":";
+		jsonTime (iter->timeFrom, os);
+		os << ",\"to\":";
+		jsonTime (iter->timeTo, os);
+		os << ",\"samples\":" << iter->samples << "}";
+	}
+	os << "]";
+}
+
+void rts2web::dbRecords (const std::string &device, const std::string &value, double from, double to, int maxPoints, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	int valueType = 0;
+	int recvalId = rts2db::findRecvalId (device.c_str (), value.c_str (), &valueType);
+	if (recvalId < 0)
+		throw rts2core::Error ("no recorded value " + device + "." + value + " - see /api/db/recvals for what is recorded");
+
+	std::vector <rts2db::RecordEntry> records;
+	rts2db::loadRecords (recvalId, valueType, from, to, maxPoints, records);
+
+	os << "{\"id\":" << recvalId << ",\"device\":";
+	jsonString (device.c_str (), os);
+	os << ",\"value\":";
+	jsonString (value.c_str (), os);
+	os << ",\"type\":" << valueType << ",\"from\":";
+	jsonTime (from, os);
+	os << ",\"to\":";
+	jsonTime (to, os);
+	os << ",\"points\":[";
+	bool first = true;
+	for (std::vector <rts2db::RecordEntry>::iterator iter = records.begin (); iter != records.end (); iter++)
+	{
+		if (!first)
+			os << ",";
+		first = false;
+		os << "[";
+		jsonTime (iter->t, os);
+		os << ",";
+		jsonNumber (iter->avg, os);
+		os << ",";
+		jsonNumber (iter->min, os);
+		os << ",";
+		jsonNumber (iter->max, os);
+		os << "," << iter->n << "]";
+	}
+	os << "]}";
 }
 
 #endif // WEB_HAVE_DB

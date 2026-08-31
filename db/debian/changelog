@@ -1,3 +1,22 @@
+rts2-db (0.1.0-9) UNRELEASED; urgency=medium
+
+  * rts2-recordd: new daemon recording selected device values into the
+    recvals/records_* tables, so rts2-httpd can graph them. Classic did
+    this inside rts2-xmlrpcd (the web daemon), which is why replacing that
+    daemon with rts2-httpd silently lost the cloudmeter sky-transparency
+    graphs at D50 - recording is not the web server's job, and is its own
+    daemon here. Configuration is rts2-logd's format (one line per device:
+    name, cadence in seconds, value names), so an existing logd file can
+    be reused as is; add a "recordd RECORD /etc/rts2/record" line to
+    /etc/rts2/services to run it.
+  * sql/create/tables.sql: create the recvals/records_double/_integer/
+    _boolean/_state tables and the recval_ids sequence. They are classic's
+    schema, unchanged (a site upgrading from classic keeps its history),
+    but only the sql/update scripts had ever mentioned them - a database
+    built from the create scripts had nowhere to record into.
+
+ -- RTS2 Project <petr@rts2.org>  Sun, 31 Aug 2026 18:30:00 +0200
+
 rts2-db (0.1.0-8) UNRELEASED; urgency=medium
 
   * debian/rules: add imgproc/rts2-imgproc to RTS2DB_BINARIES. Same

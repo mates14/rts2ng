@@ -915,3 +915,71 @@ that doesn't hardcode `user=rts2` for the connection. Worth remembering:
 write to `stars`, not just read it - the same care about not polluting
 real target/observation data that already applied to `rts2`-run tests
 now applies here too.
+
+## `rts2-recordd` + `rts2db/records.h` - telemetry recording (2026-08-31)
+
+Restores a feature that deploying `rts2-httpd` to D50 silently removed:
+the cloudmeter sky-transparency graph. Classic recorded telemetry *inside*
+`rts2-xmlrpcd`, driven by the `<value name="TEMP_DIFF" cadency="60">
+<record/>` entries of its `--event-file` XML (see the real
+`/etc/rts2/events` still sitting on the BART machine), and served the plot
+as a GraphicsMagick-rendered PNG from `/graph/DEVICE/VALUE`. Replacing
+that daemon took the recorder with it.
+
+Recording has nothing to do with serving HTTP, so it is split, at the
+user's call: **`rts2-recordd` writes, `rts2-httpd` only reads.**
+
+- `db/db/{include/rts2db,src}/records.{h,ec}` - the DB layer:
+  `findRecvalId()`/`getRecvalId()` (lookup vs. lookup-or-create - the
+  reader must never catalogue a value just because someone asked for it),
+  `recordValue()`, `loadRecords()` and `RecvalsSet`. The **schema is
+  classic's, unchanged**: `recvals` plus `records_double`/`_integer`/
+  `_boolean`, `recval_id` from the `recval_ids` sequence, `rectime` as a
+  `timestamp` written with `to_timestamp()` and read with
+  `EXTRACT (EPOCH FROM ...)` like every other time in this tree. A site
+  upgrading from classic has years of history in these tables and must
+  keep reading it.
+- `loadRecords()` buckets **in the database** when asked for fewer points
+  than the range holds (`GROUP BY floor(epoch / bucket)`), returning
+  avg/min/max/count per bucket. A month of 60 s telemetry is ~43000 rows;
+  a graph a thousand pixels wide cannot show them, and min/max keep a
+  downsampled plot honest about a spike instead of averaging it away.
+- `db/recordd/` - the daemon (`DEVICE_TYPE_LOGD`, default name `RECORD`).
+  Config is **rts2-logd's plain format**, not classic's event XML, chosen
+  with the user: `CLOUD 60 TEMP_DIFF TEMP_IN TEMP_AMB` - one line per
+  device, sites already have such files, and it keeps libxml2 out of a
+  daemon with no other use for it.
+- **Sampling is periodic, not change-driven** - the one deliberate
+  difference from classic's `cadency`. A change-driven recorder writes
+  nothing for a value that is not changing, so a plot has no line exactly
+  where the reading was steady, which is when a telemetry graph most
+  wants to show that it was steady. First samples are spread across one
+  cadence at startup rather than all firing in the same second.
+- Failure handling: a DB error is logged, counted (`errors` value on the
+  bus, next to `records` and `last_record`) and retried on the next
+  cadence - never fatal. A value that is missing, or of a type with no
+  records table, is warned about **once** and then skipped; a daemon that
+  runs for months must not repeat itself every 60 s. NaN samples are not
+  stored: a gap in the graph is the honest rendering of "no reading".
+- `sql/create/tables.sql` gained all five tables and the sequence. They
+  had only ever appeared in `sql/update/rel_0_8_*.sql`, so a database
+  built from the create scripts had nowhere to record into.
+
+`records_state` is created for schema compatibility but has no writer
+here yet - the daemon records values, not device state changes. Worth
+adding when someone wants "when was the dome open" overlaid on a plot.
+
+Tested live on this machine: ran against the real bus with a 5 s cadence
+on `CLOUD.TEMP_DIFF`/`TEMP_SKY`/`HEATER`, confirmed rows landing in
+`records_double` and `records_boolean` (the boolean going to its own
+table, `value_type` 6 vs 20, is the case that proves the type dispatch),
+read them back through `/api/db/records` in all three modes (raw,
+bucketed, explicit range) and through the graph page, then deleted the
+test rows - `recvals` and the `records_*` tables are back to empty, as
+they were before.
+
+To run it: add a line to `/etc/rts2/services` and a config file.
+
+```
+recordd    RECORD    --database stars --run-as rts2 /etc/rts2/record
+```

@@ -271,3 +271,62 @@ CREATE VIEW images_nights AS
 
 
 
+
+-- Recorded telemetry: which device values are being recorded (recvals)
+-- and the samples themselves, split by type. db note: these tables are
+-- classic's, reproduced here unchanged - a site upgrading from classic
+-- keeps years of history in them, and rts2-httpd's graphs read them
+-- through rts2db/records.h. They were missing from this file (only the
+-- sql/update/rel_0_8_*.sql scripts ever mentioned them), so a database
+-- freshly built from these scripts had nowhere for rts2-recordd to write.
+
+CREATE SEQUENCE recval_ids;
+
+CREATE TABLE recvals (
+	recval_id	integer PRIMARY KEY,
+	device_name	varchar(25),
+	value_name	varchar(25) NOT NULL,
+	value_type	integer NOT NULL
+);
+
+CREATE TABLE records_double (
+	recval_id	integer REFERENCES recvals(recval_id) NOT NULL,
+	rectime		timestamp NOT NULL,
+	value		double precision
+);
+
+CREATE UNIQUE INDEX records_double_id_time ON records_double (recval_id, rectime);
+CREATE INDEX records_double_recval_id ON records_double (recval_id);
+CREATE INDEX records_double_time ON records_double (rectime);
+
+CREATE TABLE records_integer (
+	recval_id	integer REFERENCES recvals(recval_id) NOT NULL,
+	rectime		timestamp NOT NULL,
+	value		integer
+);
+
+CREATE UNIQUE INDEX records_integer_id_time ON records_integer (recval_id, rectime);
+CREATE INDEX records_integer_recval_id ON records_integer (recval_id);
+CREATE INDEX records_integer_time ON records_integer (rectime);
+
+CREATE TABLE records_boolean (
+	recval_id	integer REFERENCES recvals(recval_id) NOT NULL,
+	rectime		timestamp NOT NULL,
+	value		boolean
+);
+
+CREATE UNIQUE INDEX records_boolean_id_time ON records_boolean (recval_id, rectime);
+CREATE INDEX records_boolean_recval_id ON records_boolean (recval_id);
+CREATE INDEX records_boolean_time ON records_boolean (rectime);
+
+-- Device state history. No writer in this tree yet (rts2-recordd records
+-- values, not states - see db/STATUS.md); the table is here so the schema
+-- matches classic's, since a classic site's data lives in it.
+CREATE TABLE records_state (
+	recval_id	integer REFERENCES recvals(recval_id) NOT NULL,
+	rectime		timestamp NOT NULL,
+	state		integer
+);
+
+CREATE INDEX records_state_recval_id ON records_state (recval_id);
+CREATE INDEX records_state_time ON records_state (rectime);

@@ -16,6 +16,7 @@ db_ecpg_sources(RTS2DB_ECPG_SOURCES
 	src/target.ec
 	src/sub_targets.ec
 	src/queues.ec
+	src/records.ec
 	src/scheduling.ec
 	src/targetscripts.ec
 )

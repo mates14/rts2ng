@@ -2104,6 +2104,50 @@ in `httpd`:
   own filter for the same case: it is the client that talks to whatever
   daemon a site is actually running, including one older than this fix.
 
+## Telemetry graphs: `/api/db/records` + `records.html` (2026-08-31)
+
+The read half of the feature D50 lost when classic `rts2-xmlrpcd` was
+replaced - the cloudmeter sky-transparency plot. The write half (who
+fills the tables) is `rts2-recordd`, a separate daemon in `db`, on the
+user's call that recording is not the web server's job; see
+`db/STATUS.md` for it.
+
+- `GET /api/db/recvals` - the catalogue of recorded device/value pairs,
+  each with the extent of its stored samples (`from`/`to`/`samples`). The
+  graph page's picker is built from it, and the extent is included
+  because a value whose last sample is two years old should look that
+  way rather than as an empty plot the user has to hunt a date range for.
+- `GET /api/db/records?device=&value=&from=&to=&points=` - one series.
+  Defaults to the last 24 hours and 1000 points, `points` capped at
+  20000 so a hand-written URL cannot ask for a million-row response. A
+  device/value pair that is not recorded is a 400 - this endpoint never
+  creates a `recvals` row the way the recorder does.
+- Points are arrays, not objects: `[[t, avg, min, max, n], ...]`. A
+  thousand `{"t":...,"avg":...}` objects is three times the bytes for the
+  same numbers, and this is the one endpoint here whose response size is
+  bounded only by the caller's own `points`. `min`/`max` are the spread
+  within a bucket when the range was downsampled (`n > 1`).
+- Both run on the worker pool like every other `/api/db/` endpoint (see
+  the 2026-08-17 finding), not inline on the poll loop.
+
+`static/records.html` + `records.js` draw it in a plain 2d canvas -
+vanilla JS, no charting library, consistent with the rest of this
+frontend and with the "no server-side image rendering" decision that
+dropped Magick++ (classic rendered these graphs as PNGs). Being
+client-side makes the plot interactive for nothing: hover reads out a
+sample and, on a downsampled range, the bucket's sample count and
+min/max. The min/max band is drawn only where a bucket actually holds
+more than one sample, gaps in the data stay gaps rather than being
+bridged by a line nobody measured, and the chart palette lives in
+`style.css` as `--rec-*` variables that `records.js` reads off the
+computed style rather than keeping a second copy of the colours.
+
+Verified against the live daemon and real recorded `CLOUD` telemetry:
+raw, bucketed and explicit-range responses, the boolean series, both
+error paths (unknown value, missing parameters), and the page itself
+rendered in headless Firefox - which also caught the last x-axis label
+being clipped mid-digit at the canvas edge (now aligned inwards).
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

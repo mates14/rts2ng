@@ -20,6 +20,11 @@ rts2-web (0.1.0-1) UNRELEASED; urgency=medium
   * rts2-httpd: /api/devices no longer reports a connection that has not
     announced its name yet as "", which put a nameless entry in every
     device list built from it. /api/getall has always skipped those.
+  * rts2-httpd: /api/db/recvals and /api/db/records serve recorded
+    telemetry (what rts2-recordd, new in rts2-db, writes), and
+    static/records.html graphs it in a canvas. This is the replacement for
+    classic rts2-xmlrpcd's server-rendered /graph/DEVICE/VALUE - the
+    cloudmeter sky-transparency plot D50 lost when it moved to rts2-httpd.
   * rts2-base/rts2-db moved from Depends to Recommends. Both binaries in
     this package link base_kernel and db statically, so neither package
     is needed to install or run rts2-httpd; what it needs is a running

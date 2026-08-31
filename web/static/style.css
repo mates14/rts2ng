@@ -9,6 +9,12 @@
 	--bad: #b91c1c;
 	--warn: #b45309;
 	--mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+	/* telemetry graph (records.html); records.js reads these off the
+	 * computed style rather than keeping its own copy of the palette */
+	--rec-fg: #6b7280;
+	--rec-grid: #e3e6ea;
+	--rec-line: #2563eb;
+	--rec-band: rgba(37, 99, 235, 0.18);
 }
 
 * {
@@ -89,14 +95,14 @@ header h1 {
 	letter-spacing: 0.04em;
 }
 
-#command-form {
+#command-form, #rec-form {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 12px;
 	align-items: flex-end;
 }
 
-#command-form label {
+#command-form label, #rec-form label {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
@@ -104,7 +110,7 @@ header h1 {
 	color: var(--text-muted);
 }
 
-#command-form input, #command-form select {
+#command-form input, #command-form select, #rec-form input, #rec-form select {
 	font-size: 13px;
 	padding: 6px 8px;
 	border: 1px solid var(--border);
@@ -131,7 +137,7 @@ header h1 {
 	filter: brightness(1.1);
 }
 
-#command-result {
+#command-result, #rec-result {
 	margin-top: 10px;
 	font-family: var(--mono);
 	font-size: 12px;
@@ -139,11 +145,11 @@ header h1 {
 	word-break: break-all;
 }
 
-#command-result.ok {
+#command-result.ok, #rec-result.ok {
 	color: var(--good);
 }
 
-#command-result.err {
+#command-result.err, #rec-result.err {
 	color: var(--bad);
 }
 
@@ -706,4 +712,41 @@ header h1 {
 #peer-settings {
 	margin-top: 16px;
 	font-size: 12px;
+}
+
+/* --- telemetry graph (records.html) -------------------------------- */
+
+#rec-chart-wrap {
+	position: relative;
+	width: 100%;
+	/* fixed height, and the canvas fills it: the canvas element has no
+	 * intrinsic aspect ratio to size itself from, and records.js sets its
+	 * backing store from the laid-out box */
+	height: 360px;
+}
+
+#rec-chart {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.rec-tooltip {
+	position: absolute;
+	display: none;
+	pointer-events: none;
+	background: var(--panel-bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 4px 8px;
+	font-family: var(--mono);
+	font-size: 12px;
+	white-space: nowrap;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.rec-extent {
+	margin-top: 8px;
+	font-size: 12px;
+	color: var(--text-muted);
 }

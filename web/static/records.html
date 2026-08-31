@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Telemetry</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<header>
+		<h1>RTS2 Telemetry</h1>
+		<a href="index.html" class="back-link">device monitor</a>
+		<div id="rec-status" class="conn-status conn-unknown">loading&hellip;</div>
+	</header>
+
+	<section class="panel">
+		<h2>Recorded values</h2>
+		<form id="rec-form">
+			<label>Value <select id="rec-value"></select></label>
+			<label>From <input id="rec-from" type="datetime-local" step="1"></label>
+			<label>To <input id="rec-to" type="datetime-local" step="1"></label>
+			<div class="cmd-buttons">
+				<button type="button" data-hours="6">6 h</button>
+				<button type="button" data-hours="24">24 h</button>
+				<button type="button" data-hours="168">7 d</button>
+				<button type="button" data-hours="720">30 d</button>
+				<button type="submit">Show</button>
+			</div>
+		</form>
+		<div id="rec-result"></div>
+	</section>
+
+	<section class="panel">
+		<h2 id="rec-title">Graph</h2>
+		<div id="rec-chart-wrap">
+			<canvas id="rec-chart"></canvas>
+			<div id="rec-tooltip" class="rec-tooltip"></div>
+		</div>
+		<div id="rec-extent" class="rec-extent"></div>
+	</section>
+
+	<script src="records.js"></script>
+</body>
+</html>

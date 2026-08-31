@@ -1353,6 +1353,99 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/recvals"))
+	{
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbListRecvals (os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
+	else if (!strcmp (url, "/api/db/records"))
+	{
+		std::string device = getParam (connection, "device", "");
+		std::string value = getParam (connection, "value", "");
+		if (device.empty () || value.empty ())
+		{
+			static const char *msg = "{\"error\":\"pass device=&value= naming a recorded value (see /api/db/recvals)\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+
+		// Defaults chosen so a bare device=&value= call is useful on its
+		// own: the last 24 hours, downsampled to about what a graph can
+		// actually show. The cap on points is what keeps a hand-written
+		// URL from asking for a million-row response.
+		double now = getNow ();
+		double to = atof (getParam (connection, "to", "0"));
+		if (to <= 0)
+			to = now;
+		double from = atof (getParam (connection, "from", "0"));
+		if (from <= 0)
+			from = to - 86400;
+		int maxPoints = atoi (getParam (connection, "points", "1000"));
+		if (maxPoints > 20000)
+			maxPoints = 20000;
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, device, value, from, to, maxPoints] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbRecords (device, value, from, to, maxPoints, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 	else if (!strcmp (url, "/api/db/target-save"))
 	{
 		const char *idStr = getParam (connection, "id", "");

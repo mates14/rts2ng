@@ -226,6 +226,38 @@ void dbSearchImagesByTarget (const std::string &imagesDir, int targetId, std::os
  */
 void dbSearchImagesByNight (const std::string &imagesDir, int year, int month, int day, std::ostringstream &os);
 
+/**
+ * GET /api/db/recvals - the catalogue of recorded device/value pairs,
+ * with the extent of the samples stored for each:
+ * `[{"id":3,"device":"CLOUD","value":"TEMP_DIFF","type":20,
+ *    "from":...,"to":...,"samples":43200}]`
+ *
+ * This is what a graph page offers the user to choose from, so it
+ * includes the extent (one aggregate query per row) - a value whose last
+ * sample is from two years ago should be visibly that, not an empty plot
+ * the user has to go hunting for a date range for.
+ */
+void dbListRecvals (std::ostringstream &os);
+
+/**
+ * GET /api/db/records?device=&value=&from=&to=&points= - one telemetry
+ * series, the data behind a graph.
+ *
+ * Points come back as arrays rather than objects -
+ * `{"id":3,...,"points":[[t,avg,min,max,n],...]}` - because a thousand
+ * `{"t":...,"avg":...}` objects is three times the bytes for the same
+ * numbers, and this is the one endpoint here whose response size is
+ * unbounded by anything but the caller's own `points` limit. min/max are
+ * the spread inside a bucket when the range was downsampled (n > 1), so
+ * a plot can show a spike the average would hide; with n == 1 all three
+ * are the same sample.
+ *
+ * Throws rts2core::Error when the device/value pair is not recorded at
+ * all - a nonexistent series is a bad request, and this endpoint must
+ * never create a recvals row the way the recorder does.
+ */
+void dbRecords (const std::string &device, const std::string &value, double from, double to, int maxPoints, std::ostringstream &os);
+
 }
 
 #endif // WEB_HAVE_DB
