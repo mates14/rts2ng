@@ -16,6 +16,8 @@
             --good: #008b00;
             --warn: #8B0000;
             --error: #ff0000;
+            --graph-line: #2563eb;
+            --graph-band: rgba(37, 99, 235, 0.18);
         }
 
         body.dark {
@@ -29,6 +31,8 @@
             --good: #4fd14f;
             --warn: #ff8a8a;
             --error: #ff5c5c;
+            --graph-line: #6fb3ff;
+            --graph-band: rgba(111, 179, 255, 0.22);
         }
 
         body {
@@ -60,7 +64,7 @@
             align-self: start;
         }
 
-        .status-panel, .image-panel, .webcam-panel, .cam-panel, .legacy-panel {
+        .status-panel, .image-panel, .webcam-panel, .cam-panel, .cloud-panel {
             background: var(--panel-bg);
             border: 1px solid var(--border);
             padding: 10px;
@@ -92,7 +96,7 @@
 
         .temp-table th { background-color: var(--th-bg); font-weight: bold; }
 
-        .webcam-panel, .legacy-panel {
+        .webcam-panel, .cloud-panel {
             /* Placed as a direct grid child of .container (not nested
                inside .left-panel, which is fixed at 320px) so it can
                span the full page width, below the title/status +
@@ -100,7 +104,29 @@
             grid-column: 1 / -1;
         }
 
-        .legacy-panel img { max-width: 100%; border: 1px solid var(--border); }
+        #cloud-canvas {
+            display: block;
+            width: 100%;
+            /* the canvas has no intrinsic size to lay itself out from,
+               and drawCloudGraph() takes its backing store from this box */
+            height: 220px;
+        }
+
+        .cloud-ranges { float: right; }
+        .cloud-ranges button {
+            font-size: 11px;
+            padding: 2px 7px;
+            margin-left: 4px;
+            cursor: pointer;
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+        }
+        .cloud-ranges button.active { background: var(--good); color: white; border-color: var(--good); }
+
+        .cloud-status { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+        .cloud-status.warn { color: var(--warn); }
 
         /* cam-panel stays beside .left-panel (title/status), occupying
            .container's second (flexible) column - not full width. One
@@ -279,7 +305,7 @@
            the page enough to fit on one screen for a quick glance. */
         body.compact .container { max-width: none; gap: 6px; }
         body.compact .status-panel, body.compact .image-panel,
-        body.compact .webcam-panel, body.compact .cam-panel, body.compact .legacy-panel { padding: 5px; }
+        body.compact .webcam-panel, body.compact .cam-panel, body.compact .cloud-panel { padding: 5px; }
         body.compact .logo { padding: 4px; }
         body.compact .logo h1 { font-size: 16px; margin: 2px 0; }
         body.compact .logo h2 { font-size: 11px; margin: 2px 0; }
@@ -481,18 +507,31 @@
             -->
         </div>
 
-        <div class="legacy-panel">
-            <h3 style="margin-top: 0;">Cloud graph (legacy)</h3>
+        <div class="cloud-panel">
+            <h3 style="margin-top: 0;">
+                Cloud sensor - sky temperature difference
+                <span id="cloud-ranges" class="cloud-ranges">
+                    <button data-hours="8" onclick="setCloudRange(8)">8 h</button>
+                    <button data-hours="24" onclick="setCloudRange(24)">24 h</button>
+                    <button data-hours="72" onclick="setCloudRange(72)">3 d</button>
+                </span>
+            </h3>
             <!--
-                Classic httpd's own /images/graph/DEVICE/VALUE/... plotter,
-                still running on lascaux50 itself - embedded as-is, exactly
-                the same URL bart-monitor.html already uses for the same
-                CLOUD sensor (shared by both telescopes). See that page's
-                own TODO comment for the plan to eventually replace this
-                with a real client-side plot fed by a JSON time-series
-                endpoint - applies equally here, not duplicated.
+                Drawn here from this site's own rts2-httpd
+                (/api/db/records) instead of the embedded
+                /images/graph/CLOUD/TEMP_DIFF JPEG this panel used to
+                carry: that plotter lived inside classic httpd and went
+                away with it when D50 moved to rts2ng, which is exactly
+                what made this panel go blank. The history now comes from
+                the recvals/records_* tables rts2-recordd fills, so that
+                daemon has to be running on this host for anything to
+                appear (db/STATUS.md). Same sensor and same 8 h default
+                the old image used; the range buttons are new, and the
+                choice is remembered in a cookie like the page's other
+                preferences.
             -->
-            <img id="cloud-graph-img" src="https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=900&h=220&t=l&lw=2&sh=1" alt="Cloud sensor temperature difference, last 8h">
+            <canvas id="cloud-canvas"></canvas>
+            <div id="cloud-status" class="cloud-status"></div>
         </div>
     </div>
 
@@ -833,24 +872,209 @@
             return `${cam.host}${equalizeWebcams ? cam.fullEq : cam.full}`;
         }
 
-        // D50's graph server renders a fixed-pixel JPEG, not a vector
-        // image - CSS max-width alone can shrink it but never widen it
-        // past whatever w= it was requested at. Request it at the
-        // panel's actual width instead, so it genuinely fills the
-        // viewport rather than sitting at a fixed 900px. Same logic as
-        // bart-monitor.html's identical function.
-        function reloadCloudGraph() {
-            const panel = document.querySelector('.legacy-panel');
-            const img = document.getElementById('cloud-graph-img');
-            if (!panel || !img)
+        // Cloud sensor history, plotted client-side from rts2-httpd's
+        // /api/db/records (the series rts2-recordd stores) - the
+        // replacement for classic httpd's server-rendered
+        // /images/graph/DEVICE/VALUE JPEG this page used to embed, and
+        // the "client-side canvas plot fed by a JSON time-series
+        // endpoint" the old TODO here asked for. web/static/records.js
+        // is the general-purpose version of the same idea; this is the
+        // one-sensor cut of it, kept inside the page because these site
+        // pages are deliberately standalone single files.
+        const CLOUD_DEVICE = 'CLOUD';
+        const CLOUD_VALUE = 'TEMP_DIFF';
+
+        let cloudHours = parseFloat(getCookie('cloudHours')) || 8;
+        let cloudSeries = null;
+
+        function setCloudRange(hours) {
+            cloudHours = hours;
+            setCookie('cloudHours', String(hours));
+            reloadCloudGraph();
+        }
+
+        function updateCloudButtons() {
+            for (const b of document.querySelectorAll('#cloud-ranges button'))
+                b.classList.toggle('active', parseFloat(b.dataset.hours) === cloudHours);
+        }
+
+        async function reloadCloudGraph() {
+            const canvas = document.getElementById('cloud-canvas');
+            const status = document.getElementById('cloud-status');
+            if (!canvas || !status)
                 return;
-            const w = Math.max(400, Math.round(panel.clientWidth - 24));
-            const t = new Date().getTime();
-            img.src = `https://lascaux50.asu.cas.cz/images/graph/CLOUD/TEMP_DIFF/-28800?w=${w}&h=220&t=l&lw=2&sh=1&_=${t}`;
+            updateCloudButtons();
+
+            const to = Math.round(new Date().getTime() / 1000);
+            const from = Math.round(to - cloudHours * 3600);
+            // One point per canvas pixel is all the plot can show; more
+            // just makes the response bigger. The daemon buckets the
+            // rest away server-side (avg/min/max per bucket).
+            const points = Math.max(200, Math.round(canvas.clientWidth || 900));
+
+            try {
+                const res = await fetch(`${API_BASE}/db/records?device=${CLOUD_DEVICE}&value=${CLOUD_VALUE}&from=${from}&to=${to}&points=${points}`);
+                const data = await res.json();
+                if (data.error)
+                    throw new Error(data.error);
+                cloudSeries = data;
+                const last = data.points.length ? data.points[data.points.length - 1] : null;
+                if (last) {
+                    const age = Math.round(to - last[0]);
+                    status.className = 'cloud-status';
+                    status.textContent = `${CLOUD_DEVICE}.${CLOUD_VALUE} = ${last[1].toFixed(2)} `
+                        + `(${age < 120 ? age + ' s' : Math.round(age / 60) + ' min'} ago), `
+                        + `${data.points.length} points over ${cloudHours} h`;
+                } else {
+                    status.className = 'cloud-status warn';
+                    status.textContent = `nothing recorded in the last ${cloudHours} h`;
+                }
+            } catch (e) {
+                cloudSeries = null;
+                status.className = 'cloud-status warn';
+                status.textContent = `cannot load cloud history: ${e.message}`
+                    + ` - is rts2-recordd running and recording ${CLOUD_DEVICE}.${CLOUD_VALUE}?`;
+            }
+            drawCloudGraph();
+        }
+
+        function cloudNiceStep(raw) {
+            const exp = Math.pow(10, Math.floor(Math.log10(raw)));
+            const norm = raw / exp;
+            if (norm <= 1) return exp;
+            if (norm <= 2) return 2 * exp;
+            if (norm <= 5) return 5 * exp;
+            return 10 * exp;
+        }
+
+        function drawCloudGraph() {
+            const canvas = document.getElementById('cloud-canvas');
+            if (!canvas)
+                return;
+            const ctx = canvas.getContext('2d');
+            // backing store in device pixels, box in layout pixels -
+            // otherwise the plot is blurry on any HiDPI screen
+            const ratio = window.devicePixelRatio || 1;
+            const width = canvas.clientWidth;
+            const height = canvas.clientHeight;
+            canvas.width = Math.round(width * ratio);
+            canvas.height = Math.round(height * ratio);
+            ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+            ctx.clearRect(0, 0, width, height);
+
+            // colours off the page's own CSS variables, so the plot
+            // follows dark mode with everything else
+            const style = getComputedStyle(document.body);
+            const fg = style.getPropertyValue('--text-muted').trim() || '#555';
+            const grid = style.getPropertyValue('--border').trim() || '#ccc';
+            const line = style.getPropertyValue('--graph-line').trim() || '#2563eb';
+            const band = style.getPropertyValue('--graph-band').trim() || 'rgba(37,99,235,0.18)';
+
+            if (!cloudSeries || !cloudSeries.points.length) {
+                ctx.fillStyle = fg;
+                ctx.font = '12px Arial, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('no data', width / 2, height / 2);
+                return;
+            }
+
+            const pts = cloudSeries.points;
+            const x0 = 44, x1 = width - 8, y0 = 10, y1 = height - 20;
+            if (x1 <= x0 || y1 <= y0)
+                return;
+
+            const tMin = cloudSeries.from, tMax = cloudSeries.to;
+            let vMin = Infinity, vMax = -Infinity;
+            for (const p of pts) {
+                for (const v of [p[1], p[2], p[3]]) {
+                    if (v === null || !isFinite(v)) continue;
+                    if (v < vMin) vMin = v;
+                    if (v > vMax) vMax = v;
+                }
+            }
+            if (!isFinite(vMin) || !isFinite(vMax)) { vMin = 0; vMax = 1; }
+            if (vMin === vMax) { vMin -= 0.5; vMax += 0.5; }
+            else { const m = (vMax - vMin) * 0.05; vMin -= m; vMax += m; }
+
+            const sx = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+            const sy = v => y1 - (v - vMin) / (vMax - vMin) * (y1 - y0);
+
+            ctx.strokeStyle = grid;
+            ctx.fillStyle = fg;
+            ctx.lineWidth = 1;
+            ctx.font = '10px Arial, sans-serif';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            const yStep = cloudNiceStep((vMax - vMin) / 4);
+            for (let v = Math.ceil(vMin / yStep) * yStep; v <= vMax; v += yStep) {
+                const y = Math.round(sy(v)) + 0.5;
+                ctx.beginPath();
+                ctx.moveTo(x0, y);
+                ctx.lineTo(x1, y);
+                ctx.stroke();
+                // decimals from the step, not a fixed guess: a clear
+                // night's TEMP_DIFF can move by 0.05 between gridlines,
+                // and one decimal prints every one of them as "9.2"
+                const dec = Math.max(0, Math.min(4, Math.ceil(-Math.log10(yStep))));
+                ctx.fillText(v.toFixed(dec), x0 - 6, y);
+            }
+
+            ctx.textBaseline = 'top';
+            const xStep = cloudNiceStep((tMax - tMin) / 6);
+            for (let t = Math.ceil(tMin / xStep) * xStep; t <= tMax; t += xStep) {
+                const x = Math.round(sx(t)) + 0.5;
+                ctx.beginPath();
+                ctx.moveTo(x, y0);
+                ctx.lineTo(x, y1);
+                ctx.stroke();
+                const d = new Date(t * 1000);
+                const label = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+                // the outermost labels are aligned inwards, or they hang
+                // off the canvas and get clipped mid-digit
+                const half = ctx.measureText(label).width / 2;
+                ctx.textAlign = x + half > width ? 'right' : (x - half < 0 ? 'left' : 'center');
+                ctx.fillText(label, x, y1 + 4);
+            }
+
+            // spread inside each bucket, where the range was downsampled
+            if (pts.some(p => p[4] > 1)) {
+                ctx.fillStyle = band;
+                ctx.beginPath();
+                let started = false;
+                for (const p of pts) {
+                    if (p[3] === null || !isFinite(p[3])) continue;
+                    const x = sx(p[0]), y = sy(p[3]);
+                    started ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+                    started = true;
+                }
+                for (let i = pts.length - 1; i >= 0; i--) {
+                    const p = pts[i];
+                    if (p[2] === null || !isFinite(p[2])) continue;
+                    ctx.lineTo(sx(p[0]), sy(p[2]));
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // a gap in the data stays a gap rather than being bridged by
+            // a line nobody measured
+            ctx.strokeStyle = line;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            let pen = false;
+            for (const p of pts) {
+                if (p[1] === null || !isFinite(p[1])) { pen = false; continue; }
+                const x = sx(p[0]), y = sy(p[1]);
+                pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+                pen = true;
+            }
+            ctx.stroke();
         }
 
         let cloudGraphResizeTimer = null;
         window.addEventListener('resize', () => {
+            // refetch, not just redraw: how many points are worth asking
+            // for depends on the panel's width
             clearTimeout(cloudGraphResizeTimer);
             cloudGraphResizeTimer = setTimeout(reloadCloudGraph, 300);
         });
