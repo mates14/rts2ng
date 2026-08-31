@@ -23,9 +23,18 @@ Homepage: https://github.com/RTS2/rts2
 
 Package: rts2-web
 Architecture: any
-Depends: rts2-base,
-         rts2-db,
-         ${shlibs:Depends},
+# Recommends, not Depends, on the two RTS2 packages: rts2-httpd and
+# rts2-jsonclient link base_kernel and db statically (`ldd` shows no
+# rts2 shared object at all), so nothing here needs those packages
+# present to install or to run. What the daemon needs is a *running*
+# RTS2 system to talk to and, with WEB_WITH_DB, a database - and a site
+# may well have those from a source build rather than from these
+# packages. That is exactly the D50 case as of 2026-08-31: rts2-httpd is
+# wanted there before the rest of the port has been deployed, and a hard
+# Depends would have made that impossible without --force-depends.
+Recommends: rts2-base,
+            rts2-db
+Depends: ${shlibs:Depends},
          ${misc:Depends}
 Description: Remote Telescope System 2 - HTTP/JSON API daemon and dashboard
  RTS2 (Remote Telescope System, 2nd version) is a distributed control

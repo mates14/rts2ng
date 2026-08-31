@@ -20,6 +20,12 @@ rts2-web (0.1.0-1) UNRELEASED; urgency=medium
   * rts2-httpd: /api/devices no longer reports a connection that has not
     announced its name yet as "", which put a nameless entry in every
     device list built from it. /api/getall has always skipped those.
+  * rts2-base/rts2-db moved from Depends to Recommends. Both binaries in
+    this package link base_kernel and db statically, so neither package
+    is needed to install or run rts2-httpd; what it needs is a running
+    RTS2 system and a database, which a site may have from a source
+    build. A hard Depends blocked installing rts2-httpd on a machine
+    where the rest of the port has not been deployed yet.
   * Static dashboard installed to /usr/share/rts2-web/static rather than
     being read out of a source checkout. Existing services lines pointing
     --static-dir at a working copy keep working; new deployments should
