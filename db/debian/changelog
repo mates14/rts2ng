@@ -1,3 +1,12 @@
+rts2-db (0.1.0-8) UNRELEASED; urgency=medium
+
+  * debian/rules: add imgproc/rts2-imgproc to RTS2DB_BINARIES. Same
+    omission as rts2-base's gemini-udp: built by cmake, never installed,
+    leaving the 'imgproc IMGP' line in /etc/rts2/services with no binary
+    behind it.
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 24 Aug 2026 17:38:00 +0200
+
 rts2-db (0.1.0-7) UNRELEASED; urgency=medium
 
   * postinst: stop re-appending the 'executor' line to /etc/rts2/services

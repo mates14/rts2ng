@@ -25,6 +25,7 @@
 
 #include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <pwd.h>
 #include <syslog.h>
 #include <sys/fcntl.h>
@@ -38,6 +39,101 @@
 #include "base-config.h"
 
 #define OPT_AUTORESTART         OPT_LOCAL + 623
+#define OPT_DAEMONIZE_TIMEOUT   OPT_LOCAL + 624
+
+// base note (2026-08-27): daemonize handshake.
+//
+// Until now doDaemonize() forked and the parent exited 0 immediately -
+// before lockFile(), before bind()/listen(), before initValues() and before
+// the driver's initHardware(). Every failure from there on was invisible:
+// rts2-start printed "started", the console got nothing (the child had
+// already redirected stdout/stderr to /dev/null) and the only trace was a
+// syslog line. A camd with no camera attached, or an executor pointed at a
+// --defaults file naming a value that no longer exists, both "started"
+// successfully and were simply gone a second later.
+//
+// The fix is a self-pipe handshake rather than moving the fork after
+// initialisation: several drivers (gxccd, fli, anything on libusb) create
+// threads and driver-global state inside initHardware(), and fork()ing after
+// that would hand the daemon a single-threaded child with mutexes stuck in
+// whatever state the vanished threads left them in. So the fork stays where
+// it is and the parent simply waits:
+//
+//   - child inherits the write end and keeps stdin/stdout/stderr open, so
+//     anything logged while initialising still reaches the starting terminal
+//   - on success daemonizeReady() writes one byte, closes the pipe and only
+//     then detaches from the console
+//   - if the child exits first, the fd is closed by exit() and the parent
+//     reads EOF - it then reaps the child and exits with its real status
+//
+// which makes rts2-start's "started"/"failed" mean what it says.
+static int daemonize_notify_fd = -1;
+
+/**
+ * Block until the just-forked daemon child reports the outcome of its
+ * initialisation, and translate that into an exit status for the parent.
+ *
+ * @param child     pid of the forked child
+ * @param notify_fd read end of the handshake pipe
+ * @param timeout   seconds to wait before giving up and leaving the child
+ *                  running in the background; <= 0 waits forever
+ */
+static int waitForDaemonizedChild (pid_t child, int notify_fd, int timeout)
+{
+	struct pollfd pfd;
+	pfd.fd = notify_fd;
+	pfd.events = POLLIN;
+
+	while (true)
+	{
+		int pret = poll (&pfd, 1, timeout > 0 ? timeout * 1000 : -1);
+		if (pret < 0)
+		{
+			if (errno == EINTR)
+				continue;
+			std::cerr << "cannot wait for daemon initialisation: " << strerror (errno) << std::endl;
+			return 1;
+		}
+		if (pret == 0)
+		{
+			std::cerr << "daemon is still initialising after " << timeout
+				<< "s, leaving it running in background" << std::endl;
+			return 0;
+		}
+		break;
+	}
+
+	char st = 1;
+	if (read (notify_fd, &st, 1) == 1)
+		return 0;
+
+	// EOF without a byte - initialisation failed. The daemon has already
+	// logged why (to syslog, and to the stderr we share with it).
+	//
+	// Reap it only if it is actually dead: with --autorestart the process we
+	// forked is the restart watchdog, which outlives the failed attempt and
+	// keeps retrying forever, so a blocking waitpid() here would hang the
+	// caller for good. Poll briefly instead - long enough to pick up the
+	// real exit status in the common (no watchdog) case.
+	int status = 0;
+	for (int i = 0; i < 50; i++)
+	{
+		pid_t w = waitpid (child, &status, WNOHANG);
+		if (w == child)
+		{
+			if (WIFEXITED (status))
+				return WEXITSTATUS (status) ? WEXITSTATUS (status) : 1;
+			if (WIFSIGNALED (status))
+				return 128 + WTERMSIG (status);
+			return 1;
+		}
+		if (w < 0)
+			break;
+		usleep (20000);
+	}
+	std::cerr << "daemon failed to complete initialisation" << std::endl;
+	return 1;
+}
 
 using namespace rts2core;
 
@@ -64,6 +160,7 @@ Daemon::Daemon (int _argc, char **_argv, int _init_state):rts2core::Block (_argc
 	runAs = nullptr;
 
 	daemonize = DO_DAEMONIZE;
+	daemonizeTimeout = 120;
 	autorestart = -1;
 	watched_child = -1;
 
@@ -92,6 +189,7 @@ Daemon::Daemon (int _argc, char **_argv, int _init_state):rts2core::Block (_argc
 
 	addOption ('i', nullptr, 0, "run in interactive mode, don't loose console");
 	addOption (OPT_AUTORESTART, "autorestart", 1, "seconds to wait for restart of crashed daemon");
+	addOption (OPT_DAEMONIZE_TIMEOUT, "daemonize-timeout", 1, "seconds to wait for the daemon to finish initialising before backgrounding it anyway (0 = wait forever, default 120)");
 	addOption (OPT_LOCALPORT, "local-port", 1, "define local port on which we will listen to incoming requests");
 	addOption (OPT_LOCKPREFIX, "lock-prefix", 1, "prefix for lock file");
 	addOption (OPT_RUNAS, "run-as", 1, "run under specified user (and group, if it's provided after .)");
@@ -122,6 +220,9 @@ int Daemon::processOption (int in_opt)
 			break;
 		case OPT_AUTORESTART:
 			autorestart = atoi (optarg);
+			break;
+		case OPT_DAEMONIZE_TIMEOUT:
+			daemonizeTimeout = atoi (optarg);
 			break;
 		case OPT_LOCALPORT:
 			setPort (atoi (optarg));
@@ -175,28 +276,58 @@ int Daemon::checkLockFile ()
 		return lock_file;
 	if (lock_file == -2)
 		return 0;
+
+	if (lock_fname.empty ())
+	{
+		logStream (MESSAGE_ERROR) << "lock file name was never initialized - initLockFile() not implemented?" << sendLog;
+		lock_file = 0;
+		return -2;
+	}
+
 	int ret;
 	mode_t old_mask = umask (022);
 	lock_file = open (lock_fname.c_str (), O_RDWR | O_CREAT, 0666);
+	if (lock_file == -1 && errno == ENOENT)
+	{
+		// base note (2026-08-27): a --lock-prefix pointing into a
+		// directory below /run or /tmp is normal (that is how a
+		// second, out-of-tree daemon is run beside a packaged one),
+		// but those directories are tmpfs and are gone after every
+		// reboot. Previously that turned into "cannot create lock
+		// file", which init() reported with the very same exit status
+		// as "already running" - so rts2-start cheerfully announced
+		// "already running" while nothing was running at all. Just
+		// create the directory instead.
+		size_t sl = lock_fname.rfind ('/');
+		if (sl != std::string::npos && sl > 0)
+		{
+			std::string dir = lock_fname.substr (0, sl);
+			if (mkdir (dir.c_str (), 0755) == 0 || errno == EEXIST)
+				lock_file = open (lock_fname.c_str (), O_RDWR | O_CREAT, 0666);
+		}
+	}
 	umask (old_mask);
 	if (lock_file == -1)
 	{
 		logStream (MESSAGE_ERROR) << "cannot create lock file " << lock_fname << ": "
 			<< strerror (errno) << " - do you have correct permission? Try to run daemon as root (sudo,..)"
 			<< sendLog;
-		return -1;
+		lock_file = 0;
+		return -2;
 	}
 	ret = flock (lock_file, LOCK_EX | LOCK_NB);
 	if (ret)
 	{
-		if (errno == EWOULDBLOCK)
+		int fl_errno = errno;
+		close (lock_file);
+		lock_file = 0;
+		if (fl_errno == EWOULDBLOCK)
 		{
 			logStream (MESSAGE_ERROR) << "lock file " << lock_fname << " owned by another process" << sendLog;
-			lock_file = 0;
 			return -1;
 		}
-		logStream (MESSAGE_DEBUG) << "cannot flock " << lock_fname << ": " << strerror (errno) << sendLog;
-		return -1;
+		logStream (MESSAGE_ERROR) << "cannot flock " << lock_fname << ": " << strerror (fl_errno) << sendLog;
+		return -2;
 	}
 	return 0;
 }
@@ -222,8 +353,20 @@ int Daemon::doDaemonize ()
 {
 	if (daemonize != DO_DAEMONIZE)
 		return 0;
-	int ret;
-	ret = fork ();
+
+	int notify_fds[2];
+	if (pipe (notify_fds) < 0)
+	{
+		logStream (MESSAGE_ERROR) << "cannot create daemonize handshake pipe: " << strerror (errno) << sendLog;
+		exit (6);
+	}
+	// keep the handshake out of anything the daemon later exec()s - imgproc
+	// and the executor both spawn external scripts, and a leaked write end
+	// would keep the parent waiting long after we are up
+	fcntl (notify_fds[0], F_SETFD, FD_CLOEXEC);
+	fcntl (notify_fds[1], F_SETFD, FD_CLOEXEC);
+
+	int ret = fork ();
 	if (ret < 0)
 	{
 		logStream (MESSAGE_ERROR) << "Daemon::int daemonize fork " << strerror (errno) << sendLog;
@@ -231,36 +374,25 @@ int Daemon::doDaemonize ()
 	}
 	if (ret)
 	{
+		// parent - do not exit until the child has actually finished
+		// initialising, so that our exit status says whether the daemon
+		// is running rather than merely whether fork() worked
+		close (notify_fds[1]);
 		lock_file = 0;
-		exit (0);
+		exit (waitForDaemonizedChild (ret, notify_fds[0], daemonizeTimeout));
 	}
+
+	close (notify_fds[0]);
+	daemonize_notify_fd = notify_fds[1];
+
 	if (runAs)
 		switchUser (runAs);
 
-	close (0);
-	close (1);
-	close (2);
-	int f = open ("/dev/null", O_RDWR);
-	ret = dup (f);
-	if (ret < 0)
-	{
-		logStream (MESSAGE_ERROR) << "cannot duplicate stdin " << strerror (errno) << sendLog;
-		exit (2);
-	}
-	ret = dup (f);
-	if (ret < 0)
-	{
-		logStream (MESSAGE_ERROR) << "cannot duplicate stdout " << strerror (errno) << sendLog;
-		exit (2);
-	}
-	ret = dup (f);
-	if (ret < 0)
-	{
-		logStream (MESSAGE_ERROR) << "cannot duplicate stderr " << strerror (errno) << sendLog;
-		exit (2);
-	}
-
-	daemonize = IS_DAEMONIZED;
+	// stdin/stdout/stderr are deliberately left alone here - see
+	// daemonizeReady(), which detaches from the console only once
+	// initialisation has actually succeeded. Until then errors logged by
+	// init()/initHardware()/initValues() reach the terminal that started us.
+	//
 	// base note (2026-07-16): classic code re-opened syslog here with a
 	// null ident (falling back to the program's own default name) after
 	// forking into the background - that silently undid the constructor's
@@ -270,6 +402,41 @@ int Daemon::doDaemonize ()
 	// syslog ident. glibc's syslog state (including the ident string
 	// pointer) survives fork() correctly, so no re-open is needed at all.
 	return 0;
+}
+
+void Daemon::daemonizeReady ()
+{
+	if (daemonize_notify_fd < 0)
+	{
+		// -i/interactive, a multidev sub-device, or already reported
+		if (daemonize == DO_DAEMONIZE)
+			daemonize = IS_DAEMONIZED;
+		return;
+	}
+
+	// SIGPIPE is ignored process-wide (see the Block constructor), so if the
+	// parent gave up waiting this just fails harmlessly
+	char st = 0;
+	if (write (daemonize_notify_fd, &st, 1) < 0 && errno != EPIPE)
+		logStream (MESSAGE_WARNING) << "cannot report successful startup to parent: " << strerror (errno) << sendLog;
+	close (daemonize_notify_fd);
+	daemonize_notify_fd = -1;
+
+	// only now let go of the console
+	detachFromConsole ();
+	daemonize = IS_DAEMONIZED;
+}
+
+void Daemon::detachFromConsole ()
+{
+	if (daemonize == DONT_DAEMONIZE)
+		return;
+	close (0);
+	close (1);
+	close (2);
+	int f = open ("/dev/null", O_RDWR);
+	if (f < 0 || dup (f) < 0 || dup (f) < 0)
+		logStream (MESSAGE_ERROR) << "cannot redirect standard descriptors to /dev/null: " << strerror (errno) << sendLog;
 }
 
 const char * Daemon::getLockPrefix ()
@@ -318,8 +485,10 @@ int Daemon::init ()
 	initLockFile ();
 	ret = checkLockFile ();
 
+	if (ret == -1)
+		exit (RTS2_EXIT_ALREADY_RUNNING);
 	if (ret < 0)
-		exit (ret);
+		exit (RTS2_EXIT_LOCK_ERROR);
 
 	// We should daemonize before initializing autorestart
 	ret = doDaemonize ();
@@ -463,6 +632,22 @@ int Daemon::setupAutoRestart ()
 		}
 		if (watched_child > 0)
 		{
+			// the forked child is the actual daemon and owns the
+			// daemonize handshake from here on. Drop our copy of the
+			// write end, otherwise whoever is waiting on it would never
+			// see EOF when that child dies during initialisation - it
+			// would hang instead of reporting the failure.
+			if (daemonize_notify_fd >= 0)
+			{
+				close (daemonize_notify_fd);
+				daemonize_notify_fd = -1;
+				// the watchdog itself outlives whoever started us, so
+				// it must not sit on their terminal either. The child
+				// forked just above still has it and can still report
+				// this first attempt's failure there; every later retry
+				// is a background event and goes to syslog only.
+				detachFromConsole ();
+			}
 			int status;
 			pid_t ret = waitpid (watched_child, &status, 0);
 			if (ret < 0)
@@ -492,6 +677,9 @@ int Daemon::run ()
 {
 	initDaemon ();
 	beforeRun ();
+	// everything that can fail has now run - tell whoever forked us that the
+	// daemon is genuinely up, and only then detach from the console
+	daemonizeReady ();
 	while (!getEndLoop ())
 		oneRunLoop ();
 	return 0;

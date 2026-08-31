@@ -1,3 +1,41 @@
+rts2-base (0.1.0-5) UNRELEASED; urgency=medium
+
+  * debian/rules: add teld/gemini-udp/rts2-teld-gemini-udp to
+    RTS2_BASE_BINARIES. The driver has built since it was added but was
+    never listed here, so it never reached an installed system - and
+    because /etc/rts2/devices addresses drivers as rts2-$device-$type,
+    the only symptom was a telescope that silently failed to start.
+  * kernel/daemon: daemonize handshake. doDaemonize() forked and the
+    parent exited 0 before lockFile(), bind(), initValues() and the
+    driver's initHardware() had run, with the child's stdout/stderr
+    already on /dev/null - so a daemon that died during initialisation
+    still reported a successful start, and left no trace outside syslog.
+    The forking parent now waits on a pipe until the child says
+    initialisation finished, and the child keeps the starting terminal
+    until then. Fork placement is unchanged deliberately: drivers on
+    libusb (gxccd, fli) create threads inside initHardware(), so forking
+    after it would leave the daemon single-threaded with mutexes held by
+    threads that no longer exist.
+  * kernel/daemon: exit 255 used to mean both "lock file is held by
+    another process" and "lock file could not be opened at all", which
+    rts2-start reported alike as "already running" - so a non-root
+    invocation, or a --lock-prefix under a directory a reboot had wiped,
+    claimed a running system where there was none. The two are now 255
+    and 254 (RTS2_EXIT_ALREADY_RUNNING / RTS2_EXIT_LOCK_ERROR), and a
+    missing lock directory is created rather than being an error.
+  * packaging: rts2-start rewritten; rts2-stop is now a front end for it
+    rather than a second, drifting copy of the same logic. It reports
+    what actually happened rather than what fork() returned, shows a
+    failed daemon's output instead of discarding it, finds daemons on
+    the PATH (the rtspy services install to /usr/local/bin and so could
+    never be started), honours a per-daemon --lock-prefix when locating
+    lock files, decides "is it running" from the lock's flock rather
+    than from a pid that can go stale and be recycled, refuses to kill a
+    pid that is not the expected program, waits for a daemon to actually
+    stop before restarting it, and grows --status.
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 24 Aug 2026 17:38:00 +0200
+
 rts2-base (0.1.0-4) UNRELEASED; urgency=medium
 
   * debian/control, debian/rules: split rts2-camd-gxccd out of rts2-base

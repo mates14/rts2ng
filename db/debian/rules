@@ -26,6 +26,7 @@ override_dh_auto_configure:
 # dev-only test tooling - deliberately not installed, see db/STATUS.md.
 RTS2DB_BINARIES = \
 	executor/rts2-executor \
+	imgproc/rts2-imgproc \
 	db/tools/rts2-newtarget \
 	db/tools/rts2-target \
 	db/tools/rts2-targetinfo \

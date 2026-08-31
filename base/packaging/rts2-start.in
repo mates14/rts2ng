@@ -1,233 +1,380 @@
 #!/bin/bash
-
-# script to start a device/service by name, as listed in
+#
+# rts2-start - start, stop, restart and inspect the daemons listed in
 # @BASE_CONFDIR@/rts2/{centrald,devices,services}
 #
-# base note: adapted from the classic tree's scripts/rts2-start.in. The
-# classic version redirected each daemon's stdout/stderr into one shared
-# debug log file when starting non-interactively - that file no longer
-# exists: every base daemon now logs to syslog directly (ident "rts2",
-# see Daemon::sendMessage), regardless of whether it's daemonized.
-# Redirecting to /dev/null here just discards whatever a daemon might
-# still print straight to stdout/stderr outside that path (e.g. very
-# early startup errors before logging is set up).
+# rts2-stop is the same script invoked in stop mode.
+#
+# base note (2026-08-27): rewritten. The classic script decided what had
+# happened purely from the exit status of a daemon that forked into the
+# background before doing any real work, and threw its output away
+# (>/dev/null 2>&1). That produced two lies routinely:
+#
+#   - "started" for a daemon that got as far as fork() and then died in
+#     initHardware()/initValues() a moment later
+#   - "already running" for anything exiting 255, which used to cover both
+#     "the lock is held" and "the lock file could not be opened at all" -
+#     so a non-root invocation, or a --lock-prefix under a directory that a
+#     reboot had wiped, reported a running system where there was none
+#
+# Both ends are fixed now. Daemons complete their initialisation before the
+# forking parent exits (Daemon::daemonizeReady), and report a distinct
+# status for a lock that is held (255) versus unusable (254), so the words
+# printed here mean what they say. Daemon output is no longer discarded: it
+# is captured and shown whenever a daemon fails to come up.
+#
+# Other things the classic script got wrong, fixed here:
+#   - daemons were looked for in @CMAKE_INSTALL_FULL_BINDIR@ only, so
+#     services installed elsewhere (the rtspy ones under /usr/local/bin)
+#     could never be started; the PATH is searched now
+#   - a per-daemon --lock-prefix in the config was ignored when locating
+#     the lock file, so such a daemon could never be stopped or restarted
+#   - stop kill'ed whatever pid the lock file happened to contain, without
+#     checking that the process still existed, let alone that it was the
+#     right one - a stale lock file naming a recycled pid killed a bystander
+#   - "rts2-start -r" with no daemon named restarted $x, an unset variable
+
+set -u
 
 CENTRALD_FILE=@BASE_CONFDIR@/rts2/centrald
 DEVICE_CONFIG=@BASE_CONFDIR@/rts2/devices
 SERVICE_CONFIG=@BASE_CONFDIR@/rts2/services
-RTS2_BIN_PREFIX=@CMAKE_INSTALL_FULL_BINDIR@
-RTS2_PID_PREFIX=@RTS2_LOCK_PREFIX@
+RTS2_BINDIR=@CMAKE_INSTALL_FULL_BINDIR@
+RTS2_LOCK_PREFIX=@RTS2_LOCK_PREFIX@
+RTS2_CENTRALD_PORT=@RTS2_CENTRALD_PORT@
 
-localstart=0
-restart=0
+# Daemons are looked up on the PATH, with the packaged location first. Not
+# everything lives in @CMAKE_INSTALL_FULL_BINDIR@ - the rtspy services
+# (rts2-queuer, rts2-gcnkafka) install under /usr/local/bin - and a cron or
+# systemd invocation may not have that on its PATH, so make sure it is.
+PATH="$RTS2_BINDIR:$PATH"
+case ":$PATH:" in
+	*:/usr/local/bin:*) ;;
+	*) PATH="$PATH:/usr/local/bin" ;;
+esac
+export PATH
 
-function start
-{
+# see RTS2_EXIT_* in kernel/include/daemon.h
+EXIT_ALREADY_RUNNING=255
+EXIT_LOCK_ERROR=254
 
-if [ "x$1" == "x" ]; then
-	echo "starting everything"
-	name="all"
-else
-	name=$1
-fi
-
-if [ $localstart == 1 ]; then
-	extraargs="-i --debug"
-fi
-
-if [ "x$name" == "xcentrald" -o "x$name" == "xall" ]; then
-	started=1
-	while read centrald centrald_port centrald_options; do
-		if [ "x${centrald_port}" == "x" ]; then
-			centrald_port=@RTS2_CENTRALD_PORT@
-		else
-			centrald_options="--local-port $centrald_port $centrald_options"
-		fi
-		echo -n "starting centrald on port $centrald_port .. "
-		if [ $localstart == 0 ]; then
-			eval $RTS2_BIN_PREFIX/rts2-centrald $centrald_options >/dev/null 2>&1
-			started=$?
-		else
-			echo "rts2-centrald $extraargs $centrald_options"
-			eval $RTS2_BIN_PREFIX/rts2-centrald $extraargs $centrald_options
-			started=$?
-		fi
-		if [ $started == 255 ]; then
-			echo "already running"
-		else
-			[ $started == 0 ] && echo "started" || echo "failed"
-		fi
-		if [ $started != 0 -a "x$name" != "xall" ]; then
-			return 1
-		fi
-	done < <(grep '^centrald' $CENTRALD_FILE)
-	if [ "x$name" != "xall" ]; then
-		return $started
-	fi
-fi
-
-CENTRALD_OPTIONS=`grep '^-' $CENTRALD_FILE 2>/dev/null`
-
-while read device type device_name options; do
-	if [ "x$device_name" == "x$name" -o "x$name" == "xall" ]; then
-		echo -n "starting device $device_name .. "
-		if [ $localstart == 0 ]; then
-			eval $RTS2_BIN_PREFIX/rts2-$device-$type -d $device_name $options $CENTRALD_OPTIONS >/dev/null 2>&1
-			res=$?
-		else
-			echo "rts2-$device-$type $extraargs -d $device_name $options $CENTRALD_OPTIONS"
-			eval $RTS2_BIN_PREFIX/rts2-$device-$type $extraargs -d $device_name $options $CENTRALD_OPTIONS
-			res=$?
-		fi
-		if [ $res == 255 ]; then
-			echo "already running"
-		else
-			[ $res == 0 ] && echo "started" || echo "failed"
-		fi
-		if [ "x$name" != "xall" ]; then
-			return $res
-		fi
-	fi
-done < <(cat $DEVICE_CONFIG | sed -e 's/#.*$//' | egrep -v '^\s*$')
-
-while read service service_name options; do
-	if [ "x$service_name" == "x$name" -o "x$name" == "xall" ]; then
-		echo -n "starting service $service_name .. "
-		if [ $localstart == 0 ]; then
-			eval $RTS2_BIN_PREFIX/rts2-$service -d $service_name $options $CENTRALD_OPTIONS >/dev/null 2>&1
-			res=$?
-		else
-			echo "rts2-$service $extraargs -d $service_name $options $CENTRALD_OPTIONS"
-			eval $RTS2_BIN_PREFIX/rts2-$service $extraargs -d $service_name $options $CENTRALD_OPTIONS
-			res=$?
-		fi
-		if [ $res == 255 ]; then
-			echo "already running"
-		else
-			[ $res == 0 ] && echo "started" || echo "failed"
-		fi
-		if [ "x$name" != "xall" ]; then
-			return $res
-		fi
-	fi
-done < <(cat $SERVICE_CONFIG | sed -e 's/#.*$//' | egrep -v '^\s*$')
-
-if [ "x$name" != "xall" ]; then
-	return 1
-fi
-
-return 0
-
-}
-
-function stop
-{
-
-if [ "x$1" == "x" ]; then
-	echo "stopping everything"
-	name="all"
-else
-	name=$1
-fi
-
-if [ "x$name" == "xcentrald" -o "x$name" == "xall" ]; then
-	stopped=1
-	while read centrald centrald_port centrald_options; do
-		if [ "x${centrald_port}" == "x" ]; then
-			centrald_port=@RTS2_CENTRALD_PORT@
-		fi
-		echo -n "stopping centrald on port $centrald_port .. "
-		kill `cat ${RTS2_PID_PREFIX}centrald_$centrald_port` 2>>/dev/null
-		stopped=$?
-		[ $stopped == 0 ] && echo "killed" || echo "failed"
-		if [ $stopped != 0 -a "x$name" != "xall" ]; then
-			return 1
-		fi
-	done < <(grep '^centrald' $CENTRALD_FILE)
-	if [ "x$name" != "xall" ]; then
-		return $stopped
-	fi
-fi
-
-if [ "x$name" == "xall" ]; then
-	while read device type device_name options; do
-		echo -n "stopping device $device_name .. "
-		kill `cat ${RTS2_PID_PREFIX}$device_name` 2>>/dev/null
-		stopped=$?
-		[ $stopped == 0 ] && echo "killed" || echo "failed"
-	done < <(cat $DEVICE_CONFIG | sed -e 's/#.*$//' | egrep -v '^\s*$')
-
-	while read service service_name options; do
-		echo -n "stopping service $service_name .. "
-		kill `cat ${RTS2_PID_PREFIX}$service_name` 2>>/dev/null
-		stopped=$?
-		[ $stopped == 0 ] && echo "killed" || echo "failed"
-	done < <(cat $SERVICE_CONFIG | sed -e 's/#.*$//' | egrep -v '^\s*$')
-else
-	echo -n "stopping $name .. "
-	kill `cat ${RTS2_PID_PREFIX}$name` 2>/dev/null
-	stopped=$?
-	[ $stopped == 0 ] && echo "killed" || echo "failed"
-fi
-
-[ "x$name" != "xall" ] && return $stopped || return 0
-
-}
-
-count=0
+progname=$(basename "$0")
+mode=start
+interactive=0
+stop_timeout=10
 ret=0
 
-for x in $*; do
-	if [ "$x" == "-l" ]; then
-		localstart=1
-	elif [ "$x" == "-r" ]; then
-		restart=1
-	elif [ "$x" == "--list" ]; then
-		echo "Available devices:"
-		echo "------------------"
-		while read device type device_name options; do
-			echo "* $device_name (rts2-$device-$type $options)"
-		done < <(cat $DEVICE_CONFIG | sed -e 's/#.*$//' | egrep -v '^\s*$')
+usage ()
+{
+	cat <<EOF
+Usage: $progname [options] [name ...]
 
-		echo
-		echo "Available services:"
-		echo "-------------------"
-		while read service service_name options; do
-			echo "* $service_name (rts2-$service $options)"
-		done < <(cat $SERVICE_CONFIG | sed -e 's/#.*$//' | egrep -v '^\s*$')
-		exit 0
-	elif [ "$x" == "-h" -o "$x" == "--help" ]; then
-		echo "Use rts2-start to start RTS2 devices and services. Available options:"
-		echo "	-l     .. run locally (don't daemonise, run in foreground, with debugging on)"
-		echo "	-r     .. restart (kill already running instance first)"
-		echo "	--list .. list available devices and services"
-		exit 0
-	else
-		count=1
+Starts the RTS2 daemons named on the command line, or every daemon in
+$CENTRALD_FILE, $DEVICE_CONFIG and $SERVICE_CONFIG when none is named.
+A name is a device_name or service_name from those files, or "centrald".
 
-		if [ $restart == 1 ]; then
-			stop $x
-			sleep 1
-		fi
+Options:
+  -k, --stop       stop the named daemons instead of starting them
+  -r, --restart    stop the named daemons, then start them again
+  -s, --status     report whether the named daemons are running
+  -i, --local      run in the foreground with debugging on (also -l; one name)
+      --timeout N  seconds to wait for a daemon to stop before SIGKILL ($stop_timeout)
+      --list       list the configured daemons
+  -h, --help       this text
 
-		start $x
-		r=$?
-		if [ $r -ne 0 ]; then
-			ret=$r
-		fi
+Exit status is 0 when every requested daemon reached the wanted state.
+EOF
+}
+
+# --- reading the configuration -------------------------------------------
+
+strip_comments ()
+{
+	sed -e 's/#.*$//' "$1" 2>/dev/null | grep -v '^[[:space:]]*$'
+}
+
+# Options on their own line in the centrald config are passed to every
+# device and service (that is how --server ends up on all of them).
+centrald_opts=$(grep '^-' "$CENTRALD_FILE" 2>/dev/null | tr '\n' ' ')
+
+# Emit one TAB separated record per configured daemon:
+#	kind	name	lockname	binary	arguments
+list_entries ()
+{
+	if [ -r "$CENTRALD_FILE" ]; then
+		while read -r kw port rest; do
+			local opts=$rest
+			if [ -z "${port:-}" ]; then
+				port=$RTS2_CENTRALD_PORT
+			else
+				opts="--local-port $port $rest"
+			fi
+			printf 'centrald\tcentrald\tcentrald_%s\trts2-centrald\t%s\n' "$port" "$opts"
+		done < <(grep '^centrald' "$CENTRALD_FILE" 2>/dev/null)
 	fi
+
+	while read -r device type name opts; do
+		[ -n "${name:-}" ] || continue
+		printf 'device\t%s\t%s\trts2-%s-%s\t%s %s\n' \
+			"$name" "$name" "$device" "$type" "$opts" "$centrald_opts"
+	done < <(strip_comments "$DEVICE_CONFIG")
+
+	while read -r service name opts; do
+		[ -n "${name:-}" ] || continue
+		printf 'service\t%s\t%s\trts2-%s\t%s %s\n' \
+			"$name" "$name" "$service" "$opts" "$centrald_opts"
+	done < <(strip_comments "$SERVICE_CONFIG")
+}
+
+# A daemon may carry its own --lock-prefix; the lock file is not where the
+# compiled-in default says it is then.
+lock_file_for ()
+{
+	local args=$1 lockname=$2 prefix=$RTS2_LOCK_PREFIX p
+	p=$(printf '%s' "$args" | sed -n 's/.*--lock-prefix[ =]\+\([^ ]*\).*/\1/p')
+	p=${p%\"}; p=${p#\"}; p=${p%\'}; p=${p#\'}
+	[ -n "$p" ] && prefix=$p
+	printf '%s%s' "$prefix" "$lockname"
+}
+
+# --- is it running? ------------------------------------------------------
+#
+# The lock file's flock is the daemon's own definition of "already
+# running", and unlike its pid it cannot go stale: the kernel drops the
+# lock when the process dies. So ask that, not the recorded pid.
+
+# 0 - running, 1 - not running, 2 - cannot tell (lock file unreadable)
+is_running ()
+{
+	local lock=$1
+	[ -e "$lock" ] || return 1
+	[ -r "$lock" ] || return 2
+	( exec 9<"$lock" 2>/dev/null || exit 1
+	  flock -n -x 9 2>/dev/null && exit 1 || exit 0 )
+}
+
+lock_pid ()
+{
+	local lock=$1 pid
+	pid=$(head -n 1 "$lock" 2>/dev/null | tr -cd '0-9')
+	[ -n "$pid" ] && printf '%s' "$pid"
+}
+
+# Is $1 a live process that looks like $2? /proc/pid/comm is world readable
+# but truncated to 15 characters, so compare only that much.
+pid_looks_like ()
+{
+	local pid=$1 bin=$2 comm
+	kill -0 "$pid" 2>/dev/null || return 1
+	comm=$(cat "/proc/$pid/comm" 2>/dev/null) || return 0
+	[ -z "$comm" ] && return 0
+	[ "$comm" = "${bin:0:15}" ]
+}
+
+# --- output --------------------------------------------------------------
+
+report ()
+{
+	printf '%-8s %-14s %s\n' "$1" "$2" "$3"
+}
+
+# --- actions -------------------------------------------------------------
+
+start_one ()
+{
+	local kind=$1 name=$2 lockname=$3 bin=$4 args=$5
+	local lock dev_opt errfile rc
+
+	if ! command -v "$bin" >/dev/null 2>&1; then
+		report "$kind" "$name" "FAILED - no such program: $bin"
+		return 1
+	fi
+
+	dev_opt=""
+	[ "$kind" != centrald ] && dev_opt="-d $name"
+
+	if [ $interactive -eq 1 ]; then
+		echo "$bin -i --debug $dev_opt $args"
+		eval "$bin" -i --debug $dev_opt $args
+		return $?
+	fi
+
+	lock=$(lock_file_for "$args" "$lockname")
+	is_running "$lock"
+	case $? in
+	0)	report "$kind" "$name" "already running"; return 0 ;;
+	esac
+
+	# Daemon output is kept rather than discarded: with the initialisation
+	# handshake in place, anything a daemon prints before it goes into the
+	# background is the reason it is about to fail.
+	errfile=$(mktemp) || return 1
+	eval "$bin" $dev_opt $args 2>"$errfile"
+	rc=$?
+
+	case $rc in
+	0)
+		report "$kind" "$name" "started" ;;
+	$EXIT_ALREADY_RUNNING)
+		report "$kind" "$name" "already running" ;;
+	$EXIT_LOCK_ERROR)
+		report "$kind" "$name" "FAILED - cannot use lock file $lock (permissions? run as root)" ;;
+	*)
+		report "$kind" "$name" "FAILED (exit $rc)" ;;
+	esac
+	if [ $rc -ne 0 ] && [ $rc -ne $EXIT_ALREADY_RUNNING ] && [ -s "$errfile" ]; then
+		sed -e 's/^/         /' "$errfile"
+	fi
+	rm -f "$errfile"
+
+	[ $rc -eq 0 ] || [ $rc -eq $EXIT_ALREADY_RUNNING ]
+}
+
+stop_one ()
+{
+	local kind=$1 name=$2 lockname=$3 bin=$4 args=$5
+	local lock pid i
+
+	lock=$(lock_file_for "$args" "$lockname")
+
+	is_running "$lock"
+	case $? in
+	2)
+		report "$kind" "$name" "FAILED - cannot read lock file $lock (run as root?)"
+		return 1 ;;
+	1)
+		if [ -e "$lock" ] && [ -n "$(lock_pid "$lock")" ]; then
+			report "$kind" "$name" "not running (stale lock file $lock)"
+		else
+			report "$kind" "$name" "not running"
+		fi
+		return 0 ;;
+	esac
+
+	pid=$(lock_pid "$lock")
+	if [ -z "$pid" ]; then
+		report "$kind" "$name" "FAILED - running but $lock holds no pid"
+		return 1
+	fi
+	# never kill on the strength of a recorded pid alone
+	if ! pid_looks_like "$pid" "$bin"; then
+		report "$kind" "$name" "FAILED - pid $pid in $lock is not $bin, refusing to kill"
+		return 1
+	fi
+
+	kill "$pid" 2>/dev/null
+	for ((i = 0; i < stop_timeout * 10; i++)); do
+		is_running "$lock" || { report "$kind" "$name" "stopped"; return 0; }
+		sleep 0.1
+	done
+
+	kill -9 "$pid" 2>/dev/null
+	for ((i = 0; i < 20; i++)); do
+		is_running "$lock" || { report "$kind" "$name" "killed"; return 0; }
+		sleep 0.1
+	done
+	report "$kind" "$name" "FAILED - pid $pid survived SIGKILL"
+	return 1
+}
+
+status_one ()
+{
+	local kind=$1 name=$2 lockname=$3 bin=$4 args=$5
+	local lock pid
+
+	lock=$(lock_file_for "$args" "$lockname")
+	is_running "$lock"
+	case $? in
+	0)
+		pid=$(lock_pid "$lock")
+		report "$kind" "$name" "running${pid:+ (pid $pid)}"
+		return 0 ;;
+	2)
+		report "$kind" "$name" "unknown - cannot read lock file $lock (run as root?)"
+		return 1 ;;
+	esac
+	if ! command -v "$bin" >/dev/null 2>&1; then
+		report "$kind" "$name" "not running - no such program: $bin"
+	elif [ -e "$lock" ] && [ -n "$(lock_pid "$lock")" ]; then
+		report "$kind" "$name" "not running (stale lock file $lock)"
+	else
+		report "$kind" "$name" "not running"
+	fi
+	return 1
+}
+
+# Run $1 over every entry matching the names in $2.. ("all" matches all).
+for_each ()
+{
+	local action=$1; shift
+	local wanted=("$@")
+	local kind name lockname bin args w matched rc
+
+	while IFS=$'\t' read -r kind name lockname bin args; do
+		matched=0
+		for w in "${wanted[@]}"; do
+			if [ "$w" = all ] || [ "$w" = "$name" ]; then
+				matched=1
+				break
+			fi
+		done
+		[ $matched -eq 1 ] || continue
+		"$action" "$kind" "$name" "$lockname" "$bin" "$args" || ret=1
+		seen=1
+	done < <(list_entries)
+}
+
+# --- command line --------------------------------------------------------
+
+case $progname in
+	rts2-stop) mode=stop ;;
+esac
+
+names=()
+while [ $# -gt 0 ]; do
+	case $1 in
+	-k|--stop)	mode=stop ;;
+	-r|--restart)	mode=restart ;;
+	-s|--status)	mode=status ;;
+	-i|-l|--local|--interactive)	interactive=1 ;;
+	--timeout)	[ $# -ge 2 ] || { echo "$progname: --timeout needs a value" >&2; exit 2; }
+			stop_timeout=$2; shift ;;
+	--list)		mode=list ;;
+	-h|--help)	usage; exit 0 ;;
+	-*)		echo "$progname: unknown option $1" >&2; usage >&2; exit 2 ;;
+	*)		names+=("$1") ;;
+	esac
+	shift
 done
 
-if [ $count -eq 0 ]; then
-	if [ $restart == 1 ]; then
-		stop $x
-		sleep 1
+if [ ${#names[@]} -eq 0 ]; then
+	names=(all)
+	if [ $interactive -eq 1 ]; then
+		echo "$progname: -i needs the name of a single daemon" >&2
+		exit 2
 	fi
-	start ""
-	r=$?
-	if [ $r -ne 0 ]; then
-		ret=$r
-	fi
+fi
+
+if [ "$mode" = list ]; then
+	printf '%-8s %-14s %-24s %s\n' KIND NAME PROGRAM LOCK
+	while IFS=$'\t' read -r kind name lockname bin args; do
+		printf '%-8s %-14s %-24s %s\n' \
+			"$kind" "$name" "$bin" "$(lock_file_for "$args" "$lockname")"
+	done < <(list_entries)
+	exit 0
+fi
+
+seen=0
+case $mode in
+start)		for_each start_one "${names[@]}" ;;
+stop)		for_each stop_one "${names[@]}" ;;
+status)		for_each status_one "${names[@]}" ;;
+restart)	for_each stop_one "${names[@]}"; for_each start_one "${names[@]}" ;;
+esac
+
+if [ $seen -eq 0 ]; then
+	echo "$progname: nothing matched ${names[*]} - try --list" >&2
+	exit 1
 fi
 
 exit $ret

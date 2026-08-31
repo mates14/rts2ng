@@ -41,6 +41,12 @@ void MultiDev::initMultidev (int debug)
 int MultiDev::run (int debug)
 {
 	initMultidev (debug);
+	// all sub-devices are up; MultiBase::init() did the daemonize fork, so
+	// this is the point where its parent may stop waiting (see
+	// Daemon::daemonizeReady)
+	rts2core::Daemon *master = dynamic_cast <rts2core::Daemon *> (getMasterApp ());
+	if (master != nullptr)
+		master->daemonizeReady ();
 	multiLoop ();
 	return -1;
 }

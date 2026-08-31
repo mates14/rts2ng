@@ -16,16 +16,24 @@ done
 shift $(($OPTIND - 1))
 
 # build everything by default, but limit to a particular module if listed on the command line
-modules="base db gui python"
+modules="base db web gui python"
 test $* && modules="$*"
 
 # sudo apt install libgsl-dev qtbase5-dev
 # sudo apt install build-essential debhelper devscripts dpkg-dev
 
-# Single source of truth for this machine's FLI SDK path - exported so
-# base/debian/rules' `BASE_FLI_SDK_DIR ?= ...` picks it up too, without
-# needing to edit that file per-site.
-export BASE_FLI_SDK_DIR=/home/mates/fliusb/libfli
+# Single source of truth for this machine's vendor SDK paths - exported so
+# base/debian/rules' `BASE_FLI_SDK_DIR ?= ...` / `BASE_GXCCD_SDK_DIR ?= ...`
+# pick them up too, without needing to edit that file per-site.
+#
+# These are two *different* trees with two different layouts: libfli wants
+# the built source dir itself (libfli.h + libfli.a at the top level),
+# libgxccd wants an SDK root with include/ and lib/ subdirectories. They
+# were both pointed at the FLI path once, which silently produced empty
+# rts2-drivers-fli/rts2-drivers-gxccd packages - CMake just skips the
+# driver when detection fails, and debian/rules skips the missing binary.
+export BASE_FLI_SDK_DIR=/home/torman/fliusb/libfli
+export BASE_GXCCD_SDK_DIR=/home/torman/libgxccd-0.9.0
 
 
 if [ $build_deb == 0 ] && [ $build_src == 0 ]; then
@@ -40,7 +48,7 @@ if [ $build_deb == 0 ] && [ $build_src == 0 ]; then
             continue
         fi
         rm -rf $tree/build
-        cmake -S $tree -B $tree/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBASE_FLI_SDK_DIR=$BASE_FLI_SDK_DIR
+        cmake -S $tree -B $tree/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBASE_FLI_SDK_DIR=$BASE_FLI_SDK_DIR -DBASE_GXCCD_SDK_DIR=$BASE_GXCCD_SDK_DIR
         cmake --build $tree/build -j4
     done
 fi

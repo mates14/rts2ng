@@ -52,6 +52,7 @@ RTS2_BASE_BINARIES = \
 	teld/dummy/rts2-teld-dummy \
 	teld/d50/rts2-teld-d50 \
 	teld/gemini/rts2-teld-gemini \
+	teld/gemini-udp/rts2-teld-gemini-udp \
 	teld/lx200/rts2-teld-lx200 \
 	focusd/dummy/rts2-focusd-dummy \
 	focusd/tefo/rts2-focusd-tefo \

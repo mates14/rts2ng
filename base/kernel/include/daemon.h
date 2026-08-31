@@ -35,6 +35,18 @@ namespace rts2core
 {
 
 /**
+ * Exit status a daemon uses when it refuses to start.
+ *
+ * These are what rts2-start reads back. 255 keeps its historical meaning
+ * ("already running") so anything else keying on it still works; before
+ * 2026-08-27 it also covered "the lock file could not be opened at all",
+ * which made rts2-start report a missing lock directory or a non-root
+ * invocation as "already running".
+ */
+#define RTS2_EXIT_ALREADY_RUNNING	255
+#define RTS2_EXIT_LOCK_ERROR		254
+
+/**
  * Abstract class for centrald and all devices.
  *
  * This class contains functions which are common to components with one listening socket.
@@ -61,6 +73,25 @@ class Daemon:public Block
 		int setupAutoRestart ();
 
 		virtual int run ();
+
+		/**
+		 * Report that initialisation finished successfully and detach from
+		 * the controlling terminal.
+		 *
+		 * Until this is called, a daemonized process still has the starting
+		 * terminal's stdout/stderr and the parent of the doDaemonize() fork
+		 * is still blocked waiting for the outcome. Called from
+		 * Daemon::run() once init(), initHardware(), initValues() and
+		 * beforeRun() have all succeeded; calling it more than once, or in a
+		 * process that never daemonized, is a no-op.
+		 */
+		void daemonizeReady ();
+
+		/**
+		 * Redirect stdin/stdout/stderr to /dev/null. No-op for a daemon
+		 * running interactively (-i).
+		 */
+		void detachFromConsole ();
 
 		virtual void endRunLoop ();
 
@@ -654,6 +685,9 @@ class Daemon:public Block
 
 		// 0 - don't daemonize, 1 - do daemonize, 2 - is already daemonized, 3 - daemonized & centrald is running, don't print to stdout
 		enum { DONT_DAEMONIZE, DO_DAEMONIZE, IS_DAEMONIZED, CENTRALD_OK } daemonize;
+		// seconds the forking parent waits for the child to finish
+		// initialising before backgrounding it anyway; <= 0 waits forever
+		int daemonizeTimeout;
 		// <= 0 - don't autorestart, > 0 - wait autorestart seconds, then restart daemon
 		int autorestart;
 		pid_t watched_child;
