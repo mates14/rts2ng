@@ -46,6 +46,8 @@ static App *masterApp = nullptr;
 #define OPT_VERSION      999
 #define OPT_DEBUG        998
 #define OPT_UTTIME       997
+#define OPT_JDTIME       996
+#define OPT_CTIMETIME    995
 
 App *getMasterApp ()
 {
@@ -76,6 +78,13 @@ App::App (int argc, char **argv):Object ()
 	addOption (OPT_VERSION, "version", 0, "show program version and license");
 	addOption (OPT_DEBUG, "debug", 0, "print debug messages");
 	addOption (OPT_UTTIME, "UT", 0, "use UT (not local) time for time displays");
+	// base note: new in this tree. Every RTS2 tool can now ask for times
+	// as bare numbers instead of calendar strings - see rts2format.h's
+	// timeDisplay_t. --jd in particular is what an astronomer pasting a
+	// time into ephemeris code actually wants, and neither mode can lose
+	// resolution the way a raw streamed double does.
+	addOption (OPT_JDTIME, "jd", 0, "print times as Julian Date numbers");
+	addOption (OPT_CTIMETIME, "ctime", 0, "print times as UNIX ctime numbers");
 
 	if (masterApp == nullptr)
 		masterApp = this;
@@ -238,6 +247,12 @@ int App::processOption (int in_opt)
 		case OPT_UTTIME:
 			useLocalTime = false;
 			setLocalTimeDefault (false);
+			break;
+		case OPT_JDTIME:
+			setTimeDisplayDefault (TIME_JD);
+			break;
+		case OPT_CTIMETIME:
+			setTimeDisplayDefault (TIME_CTIME);
 			break;
 		case OPT_VERSION:
 			std::cout << "Part of RTS2 version " << BASE_VERSION << std::endl

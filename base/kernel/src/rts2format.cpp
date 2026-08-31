@@ -72,3 +72,50 @@ void setLocalTimeDefault (bool useLocalTime)
 {
 	defaultLocalTime = useLocalTime;
 }
+
+// Stored as iword+1 so that 0 - the value every stream starts with, and
+// the value a stream that never saw one of these manipulators keeps -
+// means "nothing asked for here", not TIME_ISO.
+static int flagTimeDisplay = -1;
+static timeDisplay_t defaultTimeDisplay = TIME_ISO;
+
+static std::ostream & setTimeDisplay (std::ostream & _os, timeDisplay_t display)
+{
+	if (flagTimeDisplay == -1)
+		flagTimeDisplay = _os.xalloc ();
+	_os.iword (flagTimeDisplay) = display + 1;
+	return _os;
+}
+
+std::ostream & isoTime (std::ostream & _os)
+{
+	return setTimeDisplay (_os, TIME_ISO);
+}
+
+std::ostream & ctimeNumbers (std::ostream & _os)
+{
+	return setTimeDisplay (_os, TIME_CTIME);
+}
+
+std::ostream & jdNumbers (std::ostream & _os)
+{
+	return setTimeDisplay (_os, TIME_JD);
+}
+
+timeDisplay_t formatTimeDisplay (std::ostream & _os)
+{
+	if (flagTimeDisplay != -1 && _os.iword (flagTimeDisplay) != 0)
+		return (timeDisplay_t) (_os.iword (flagTimeDisplay) - 1);
+	if (defaultTimeDisplay != TIME_ISO)
+		return defaultTimeDisplay;
+	// pureNumbers() has always meant "a timestamp prints as a ctime
+	// number" - see Timestamp's operator << in classic and here.
+	if (formatPureNumbers (_os))
+		return TIME_CTIME;
+	return TIME_ISO;
+}
+
+void setTimeDisplayDefault (timeDisplay_t display)
+{
+	defaultTimeDisplay = display;
+}

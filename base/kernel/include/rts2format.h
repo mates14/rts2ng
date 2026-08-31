@@ -54,6 +54,73 @@ std::ostream & localTime (std::ostream & _os);
 bool formatLocalTime (std::ostream & _os);
 
 /**
+ * How a time - a double carrying either UNIX ctime seconds or a Julian
+ * Date - is rendered when it is streamed out.
+ *
+ * base note: new in this tree, not in classic. Classic had exactly two
+ * renderings, the ISO-ish calendar string and, under pureNumbers(), a
+ * bare ctime number - and every other place that wanted a number simply
+ * streamed the double itself, at ostream's default precision of six
+ * *significant* digits. For a ctime that is catastrophic and silent:
+ * 1788180123.456 prints as 1.78818e+09, i.e. rounded to the nearest ~1000
+ * seconds, so a whole list of messages comes out stamped at the same
+ * instant (found exactly that way in rts2-httpd's JSON output). A time is
+ * not just a double that happens to be large - it has a display mode, and
+ * that mode belongs here in the formatting layer next to degree/local-time
+ * formatting, not re-decided at every call site.
+ *
+ * TIME_ISO is the default and is what Timestamp has always printed
+ * (2026-08-31T12:40:00.000 UT). TIME_CTIME and TIME_JD print a bare
+ * number, in fixed notation, with the precision constants below - never
+ * in significant-digit notation, which is what loses the resolution.
+ */
+typedef enum { TIME_ISO, TIME_CTIME, TIME_JD } timeDisplay_t;
+
+/**
+ * Decimal places for a bare ctime number: microseconds, which is the
+ * resolution struct timeval carries in the first place.
+ */
+#define CTIME_PRECISION   6
+
+/**
+ * Decimal places for a bare Julian Date: ~0.9 ms, and 7 + 8 = 15 digits
+ * stays inside a double's ~15-16 significant digits. Same precision
+ * Expander's %J expansion already uses.
+ */
+#define JD_PRECISION      8
+
+/**
+ * Stream times as the ISO-ish calendar string (the default).
+ */
+std::ostream & isoTime (std::ostream & _os);
+
+/**
+ * Stream times as bare UNIX ctime numbers.
+ */
+std::ostream & ctimeNumbers (std::ostream & _os);
+
+/**
+ * Stream times as bare Julian Dates.
+ */
+std::ostream & jdNumbers (std::ostream & _os);
+
+/**
+ * Effective time display mode for a stream: an explicit manipulator on
+ * the stream wins, then the process-wide default, then TIME_ISO.
+ *
+ * pureNumbers() implies TIME_CTIME when nothing else was asked for -
+ * that is what it has always meant for timestamps, and callers relying
+ * on it keep working unchanged.
+ */
+timeDisplay_t formatTimeDisplay (std::ostream & _os);
+
+/**
+ * Sets the process-wide default time display mode - App does this for
+ * --jd/--ctime, the same way it does for --UT.
+ */
+void setTimeDisplayDefault (timeDisplay_t display);
+
+/**
  * Sets the process-wide default for local-time formatting.
  *
  * base note: the classic tree read this straight off a global App

@@ -54,6 +54,13 @@ class Timestamp
 		}
 		void setTs (double _ts) { ts = _ts; }
 		double getTs () const { return ts; }
+
+		/**
+		 * The same instant as a Julian Date - what operator << prints
+		 * under jdNumbers()/--jd, and useful on its own wherever a JD is
+		 * what the astronomy code wants.
+		 */
+		double getJD () const;
 		friend std::ostream & operator << (std::ostream & _os, Timestamp _ts);
 
 	private:

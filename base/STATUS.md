@@ -2656,6 +2656,61 @@ heard of either feature despite years of RTS2 experience. Worth a model
 rts2.ini with both commented-out and explained, next time someone's
 looking for a small documentation task.
 
+## Time display mode: `timeDisplay_t` (new, 2026-08-31)
+
+`rts2format.h`/`.cpp`, `timestamp.h`/`.cpp`, `app.cpp`. New in this tree -
+classic had nothing like it.
+
+The problem it solves is a silent, everywhere-applicable one. RTS2 carries
+every time as a `double` (UNIX ctime seconds, occasionally a Julian Date),
+and the moment such a double reaches an `ostream` without an explicit
+precision it prints at C++'s default of **six significant digits**:
+`1788180123.456` becomes `1.78818e+09`, i.e. rounded to the nearest ~1000
+seconds. Nothing warns, the value still looks like a number, and it stays
+wrong. Found for real in `rts2-httpd`'s JSON output, where it made every
+entry in `/api/messages` carry the same timestamp and rendered every
+`RTS2_VALUE_TIME` in `/api/getall` useless - but the trap is in the
+language, not in that daemon, and it was one `os << someTime` away from
+being reintroduced anywhere else.
+
+The fix is to make "how a time is displayed" an explicit mode in the
+formatting layer, next to the degree-separator and local-time flags that
+already live there, rather than something every call site re-decides:
+
+- `timeDisplay_t` = `TIME_ISO` (the calendar string `Timestamp` has always
+  printed), `TIME_CTIME`, `TIME_JD`.
+- Manipulators `isoTime`/`ctimeNumbers`/`jdNumbers`, per-stream via
+  `iword` exactly like `pureNumbers`/`localTime`; `formatTimeDisplay()`
+  resolves stream flag, then process-wide default, then `TIME_ISO`.
+  `pureNumbers()` keeps implying `TIME_CTIME`, which is what it has always
+  meant for a timestamp, so existing callers are unaffected.
+- Both numeric modes print **fixed** notation with an explicit precision -
+  `CTIME_PRECISION` 6 (microseconds, `struct timeval`'s own resolution)
+  and `JD_PRECISION` 8 (~0.9 ms; 7 + 8 = 15 digits stays inside a
+  double's ~15-16 significant digits, and matches the precision
+  `Expander`'s `%J` already used). Significant-digit notation is the bug;
+  it is not reachable through this path at all.
+- `Timestamp::getJD()` does the ctime -> JD conversion (`ln_get_julian_
+  from_timet` plus the sub-second remainder), so the JD is available to
+  callers, not just to the stream operator.
+- `App` gained `--jd` and `--ctime` next to `--UT`, setting the
+  process-wide default. Every RTS2 executable therefore gets both modes
+  for free - `rts2-jsonclient --jd messages` prints Julian Dates, no code
+  in the client involved.
+- The operator now restores the stream's flags and precision on the
+  numeric path too; the old `pureNumbers` branch left `fixed`/precision 6
+  set on the stream for whatever got printed next.
+
+Verified against an independent computation of the same instant
+(`1788180123.456789` -> `2461284.02920668`, and `2461284.029206676` from
+`t/86400 + 2440587.5`), including that a stream comes back unchanged after
+printing a time.
+
+`rts2-httpd`'s JSON is deliberately *not* wired to this mode - a wire
+protocol has to mean the same thing regardless of how the daemon was
+started, so it always emits ctime seconds, just losslessly now (see
+`web/STATUS.md`).
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

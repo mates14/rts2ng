@@ -22,6 +22,8 @@
 #include "timestamp.h"
 #include "rts2format.h"
 
+#include <libnova/libnova.h>
+
 #include <iomanip>
 #include <cmath>
 #include <ctime>
@@ -29,16 +31,45 @@
 
 #include <sstream>
 
+double Timestamp::getJD () const
+{
+	// NaN/infinity pass straight through: casting one to time_t below is
+	// undefined behaviour, and a non-finite time has no Julian Date to
+	// convert to anyway - callers already have to handle "no value".
+	if (!std::isfinite (ts))
+		return ts;
+	time_t sec = (time_t) floor (ts);
+	return ln_get_julian_from_timet (&sec) + (ts - floor (ts)) / 86400.0;
+}
+
 std::ostream & operator << (std::ostream & _os, Timestamp _ts)
 {
 	// convert timestamp to timeval
 	struct timeval tv;
 	struct tm *tmval;
-	if (formatPureNumbers (_os))
+
+	// A bare number, in fixed notation with an explicit precision -
+	// never ostream's default six *significant* digits, which would
+	// round a ctime to the nearest ~1000 s. See rts2format.h's
+	// timeDisplay_t for the whole story.
+	timeDisplay_t display = formatTimeDisplay (_os);
+	if (display != TIME_ISO)
 	{
+		std::ios_base::fmtflags saved_flags = _os.flags ();
+		int saved_precision = _os.precision ();
 		_os.setf (std::ios_base::fixed, std::ios_base::floatfield);
-		_os.precision(6);
-		_os << _ts.ts;
+		if (display == TIME_JD)
+		{
+			_os.precision (JD_PRECISION);
+			_os << _ts.getJD ();
+		}
+		else
+		{
+			_os.precision (CTIME_PRECISION);
+			_os << _ts.ts;
+		}
+		_os.flags (saved_flags);
+		_os.precision (saved_precision);
 		return _os;
 	}
 	if (!std::isfinite (_ts.ts))

@@ -23,6 +23,16 @@ rts2-base (0.1.0-5) UNRELEASED; urgency=medium
     claimed a running system where there was none. The two are now 255
     and 254 (RTS2_EXIT_ALREADY_RUNNING / RTS2_EXIT_LOCK_ERROR), and a
     missing lock directory is created rather than being an error.
+  * kernel: time display mode (rts2format.h's timeDisplay_t). A time is a
+    double in this codebase, and streaming one without an explicit
+    precision prints six significant digits - 1788180123.456 comes out as
+    1.78818e+09, silently rounded to the nearest ~1000 s. Timestamp now
+    renders under an explicit mode (ISO, ctime or JD numbers, both
+    numeric ones in fixed notation with a stated precision), selectable
+    per stream with the isoTime/ctimeNumbers/jdNumbers manipulators or
+    process-wide with App's new --jd/--ctime options, so every RTS2 tool
+    gains both. Timestamp::getJD() exposes the conversion. Found via
+    rts2-httpd's JSON output, but the trap was in the formatting layer.
   * packaging: rts2-start rewritten; rts2-stop is now a front end for it
     rather than a second, drifting copy of the same logic. It reports
     what actually happened rather than what fork() returned, shows a
