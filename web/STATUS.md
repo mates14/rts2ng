@@ -2386,7 +2386,7 @@ twilight/night are identical between them to any precision this plot
 cares about; only the two telescopes' own horizon files differ. The
 twilight/night hourglass background is therefore drawn once (from the
 local data, as before), and the peer's visibility windows are overlaid
-as a second colour (`--sky-target-fill-peer`, warm/orange vs. the local
+as a second colour (`--sky-target-fill-peer`, violet vs. the local
 `--sky-target-fill` blue) via the same `drawVisibilityWindows()` (a new
 name for what was the local-only rectangle-drawing code, now a function
 taking a day list and a colour). Where both telescopes can see the
@@ -2394,6 +2394,39 @@ target at once, the two translucent fills blend into a third colour for
 free - a deliberately cheap "visible from both" cue rather than
 computing an explicit interval intersection. Legend and hover tooltip
 both label each band by the real telescope name (`SITES[..].label`).
+
+## Nightly plot: the peer telescope's horizon too
+
+Same request extended to `#sky-panel`, the single-night plot, once the
+user had it on the yearly one. `loadVisibility()` now also fetches
+`/api/db/target-altitude` from `otherSite()` in parallel with the local
+call (same `peerHasTarget` guard as the yearly plot), for the *same*
+date - no need to sequence one call after the other to learn a resolved
+"tonight" first, since D50 and SBT share one physical site and so
+resolve to the same night either way.
+
+Unlike the yearly plot, only the peer response's horizon column
+(`points[i][3]`) is used - its target/Moon/Sun altitude columns would
+just be a near-identical second copy of numbers already on screen, since
+target position, Moon and Sun don't care which of the two telescopes is
+asking. Drawn as a dotted line only (no fill - filling both telescopes'
+horizon would make whichever is drawn second obscure the first), read
+against the same `sx`/`sy` as the local trace with points outside
+`[sunset, sunrise]` dropped instead of assuming both responses reported
+exactly the same time domain.
+
+**Real color bug caught while wiring this one up, fixed before either
+plot had shipped its first live use**: the yearly plot's original
+`--sky-target-fill-peer` was `rgba(180, 83, 9, ...)` - the exact same hue
+as `--sky-moon`, `#b45309`. Harmless as an isolated translucent fill on
+the yearly plot, but the nightly plot draws the peer horizon as a dashed
+line sitting right next to the Moon's own dashed line - two
+indistinguishable dashed lines in the same colour would have been a real
+usability bug. Both `--sky-target-fill-peer` and the new
+`--sky-horizon-peer` now use violet (`#7c3aed`), a hue not already
+spoken for by target/Moon/horizon/night on either plot - one "this is
+the peer telescope" colour identity shared across both plots rather than
+two independently-chosen ones.
 
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 

@@ -794,6 +794,7 @@ const skyLegendEl = document.getElementById ('sky-legend');
 const skyDateEl = document.getElementById ('sky-date');
 
 let skyData = null;
+let skyPeerData = null;
 let skyPlot = null;
 
 const SKY_PAD = { left: 44, right: 12, top: 12, bottom: 28 };
@@ -827,25 +828,41 @@ async function loadVisibility () {
 	// one costs the daemon a target/moon/sun position.
 	const points = Math.min (600, Math.max (120, Math.round (skyCanvas.clientWidth || 800)));
 	const date = skyDateEl.value;
-	const url = apiUrl (currentSite, `api/db/target-altitude?id=${encodeURIComponent (currentId)}`
-		+ (date ? `&date=${encodeURIComponent (date)}` : '') + `&points=${points}`);
+	const dateParam = date ? `&date=${encodeURIComponent (date)}` : '';
+	const localUrl = apiUrl (currentSite, `api/db/target-altitude?id=${encodeURIComponent (currentId)}${dateParam}&points=${points}`);
+	const peer = otherSite ();
+	// D50 and SBT share one physical site (same weather station - see
+	// the cloud sensor's own "shared by both telescopes" note), so
+	// "tonight" resolves to the same night for both without sequencing
+	// one call after the other to learn the resolved date first. Only
+	// the peer's own horizon curve is used from this - its target/Moon/
+	// Sun positions would just be a near-identical second copy of the
+	// same numbers.
+	const peerHasTarget = !!(siteData[peer] && siteData[peer].exists);
+	const peerUrl = apiUrl (peer, `api/db/target-altitude?id=${encodeURIComponent (currentId)}${dateParam}&points=${points}`);
 
 	try {
 		// fetchJson() here returns { ok, body } - an API-level error comes
 		// back as a normal JSON body with an HTTP status to match, same
 		// as everywhere else on this page
-		const r = await fetchJson (url);
-		if (!r.ok)
-			throw new Error (r.body.error || 'request failed');
-		const data = r.body;
+		const [localRes, peerRes] = await Promise.all ([
+			fetchJson (localUrl),
+			peerHasTarget ? fetchJson (peerUrl).catch (er => ({ ok: false, body: { error: String (er) } })) : Promise.resolve (null),
+		]);
+		if (!localRes.ok)
+			throw new Error (localRes.body.error || 'request failed');
+		const data = localRes.body;
 		skyData = data;
+		skyPeerData = peerRes && peerRes.ok ? peerRes.body : null;
 		if (!date)
 			skyDateEl.value = skyDateString (data.sunset);
 		describeVisibility ();
 		setStatus (skyStatusEl, true, `sunset ${skyTime (data.sunset)}, sunrise ${skyTime (data.sunrise)}`
-			+ (data.nightStart ? `, RTS2 night ${skyTime (data.nightStart)}–${skyTime (data.nightEnd)} (sun below ${data.nightHorizon}°)` : ''));
+			+ (data.nightStart ? `, RTS2 night ${skyTime (data.nightStart)}–${skyTime (data.nightEnd)} (sun below ${data.nightHorizon}°)` : '')
+			+ (skyPeerData ? `, plus ${SITES[peer].label}'s horizon` : ''));
 	} catch (er) {
 		skyData = null;
+		skyPeerData = null;
 		skySummaryEl.textContent = '';
 		skyLegendEl.innerHTML = '';
 		setStatus (skyStatusEl, false, `cannot compute visibility: ${er.message}`);
@@ -898,7 +915,8 @@ function describeVisibility () {
 
 	skyLegendEl.innerHTML = '<span class="k-target">target</span>'
 		+ '<span class="k-moon">Moon</span>'
-		+ '<span class="k-horizon">horizon at target azimuth</span>'
+		+ `<span class="k-horizon">${SITES[currentSite].label} horizon at target azimuth</span>`
+		+ (skyPeerData ? `<span class="k-horizon-peer">${SITES[otherSite ()].label} horizon at target azimuth</span>` : '')
 		+ (skyData.nightStart ? '<span class="k-night">RTS2 night start/end</span>' : '');
 }
 
@@ -924,6 +942,7 @@ function drawVisibility () {
 	const cHorizonFill = style.getPropertyValue ('--sky-horizon-fill').trim () || 'rgba(107,114,128,0.25)';
 	const cNight = style.getPropertyValue ('--sky-night-line').trim () || '#15803d';
 	const cTwilight = style.getPropertyValue ('--sky-twilight').trim () || 'rgba(37,99,235,0.07)';
+	const cHorizonPeer = style.getPropertyValue ('--sky-horizon-peer').trim () || '#7c3aed';
 
 	if (!skyData || !skyData.points.length) {
 		ctx.fillStyle = fg;
@@ -1003,6 +1022,28 @@ function drawVisibility () {
 	}
 	ctx.stroke ();
 
+	// The other telescope's horizon at the same target azimuth, line
+	// only (no fill - filling both would obscure whichever one is
+	// drawn first) - D50 and SBT share one physical site, so this is
+	// genuinely the only thing that differs between "can I see it from
+	// here" for the two telescopes on this plot.
+	if (skyPeerData && skyPeerData.points.length) {
+		ctx.strokeStyle = cHorizonPeer;
+		ctx.setLineDash ([2, 3]);
+		ctx.lineWidth = 1.3;
+		ctx.beginPath ();
+		let peerPen = false;
+		for (const p of skyPeerData.points) {
+			if (p[0] < tMin || p[0] > tMax)
+				continue;
+			const x = sx (p[0]), y = sy (p[3]);
+			peerPen ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+			peerPen = true;
+		}
+		ctx.stroke ();
+		ctx.setLineDash ([]);
+	}
+
 	// Moon, dashed - it is context for the target trace, not a second
 	// thing of equal weight
 	ctx.strokeStyle = cMoon;
@@ -1073,8 +1114,18 @@ function onSkyMove (event) {
 		return;
 	}
 
-	skyTooltipEl.textContent = `${skyTime (best[0])}  alt ${best[1].toFixed (1)}°  az ${skyCompassAz (best[2]).toFixed (0)}°`
-		+ `  horizon ${best[3].toFixed (1)}°  Moon ${best[5].toFixed (0)}° away`;
+	let text = `${skyTime (best[0])}  alt ${best[1].toFixed (1)}°  az ${skyCompassAz (best[2]).toFixed (0)}°`
+		+ `  ${SITES[currentSite].label} horizon ${best[3].toFixed (1)}°  Moon ${best[5].toFixed (0)}° away`;
+	if (skyPeerData && skyPeerData.points.length) {
+		let peerBest = null, peerDist = Infinity;
+		for (const p of skyPeerData.points) {
+			const d = Math.abs (p[0] - t);
+			if (d < peerDist) { peerDist = d; peerBest = p; }
+		}
+		if (peerBest)
+			text += `  ${SITES[otherSite ()].label} horizon ${peerBest[3].toFixed (1)}°`;
+	}
+	skyTooltipEl.textContent = text;
 	skyTooltipEl.style.display = 'block';
 	const tipWidth = skyTooltipEl.offsetWidth;
 	let left = skyPlot.sx (best[0]) + 12;

@@ -27,11 +27,16 @@
 	 * butterfly - distinct from --sky-horizon-fill's neutral grey so it
 	 * doesn't read as ground */
 	--sky-target-fill: rgba(37, 99, 235, 0.30);
-	/* the *other* telescope's own visibility band, overlaid on the same
-	 * plot - a distinct hue (not just a different alpha of the same
-	 * blue) so overlapping "visible from both" reads as its own blend
-	 * rather than a darker shade of one telescope's colour */
-	--sky-target-fill-peer: rgba(180, 83, 9, 0.30);
+	/* the *other* telescope's own visibility band (yearly plot) / horizon
+	 * curve (nightly plot) - a violet distinct from every other colour
+	 * already in use here (blue target, brown Moon, grey horizon, green
+	 * night) rather than a second shade of an existing one, since the
+	 * nightly plot's peer horizon sits right next to the Moon's own
+	 * dashed line and needs to read as a different thing at a glance;
+	 * overlapping "visible from both" on the yearly plot blends into a
+	 * third colour for free */
+	--sky-target-fill-peer: rgba(124, 58, 237, 0.30);
+	--sky-horizon-peer: #7c3aed;
 }
 
 * {
@@ -822,6 +827,7 @@ header h1 {
 .sky-legend .k-target::before { border-top-color: var(--sky-target); }
 .sky-legend .k-moon::before { border-top-color: var(--sky-moon); border-top-style: dashed; }
 .sky-legend .k-horizon::before { border-top-color: var(--sky-horizon); }
+.sky-legend .k-horizon-peer::before { border-top-color: var(--sky-horizon-peer); border-top-style: dotted; }
 .sky-legend .k-night::before { border-top-color: var(--sky-night-line); border-top-style: dashed; }
 
 /* filled-swatch legend keys (yearly plot's bands, not lines) */
