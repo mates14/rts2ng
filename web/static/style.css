@@ -27,6 +27,11 @@
 	 * butterfly - distinct from --sky-horizon-fill's neutral grey so it
 	 * doesn't read as ground */
 	--sky-target-fill: rgba(37, 99, 235, 0.30);
+	/* the *other* telescope's own visibility band, overlaid on the same
+	 * plot - a distinct hue (not just a different alpha of the same
+	 * blue) so overlapping "visible from both" reads as its own blend
+	 * rather than a darker shade of one telescope's colour */
+	--sky-target-fill-peer: rgba(180, 83, 9, 0.30);
 }
 
 * {
@@ -821,11 +826,13 @@ header h1 {
 
 /* filled-swatch legend keys (yearly plot's bands, not lines) */
 .sky-legend .k-visible::before,
+.sky-legend .k-visible-peer::before,
 .sky-legend .k-twilight::before {
 	height: 10px;
 	border-top: none;
 }
 .sky-legend .k-visible::before { background: var(--sky-target-fill); }
+.sky-legend .k-visible-peer::before { background: var(--sky-target-fill-peer); }
 .sky-legend .k-twilight::before { background: var(--sky-twilight); }
 
 /* --- yearly visibility plot (target.html) ---------------------------- */

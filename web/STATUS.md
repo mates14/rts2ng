@@ -2337,6 +2337,64 @@ near-circumpolar target (high declination for this latitude) across a
 full year, checking the visibility band now shows real gaps where the
 target ducks behind the horizon rather than solid blue through them.
 
+## Site auto-detection bug: D50's own page misidentified itself as SBT
+
+Found by the user testing at D50 directly: the target editor "does not
+load properly" there - and, worse than a simple failure, `#when-panel`'s
+SBT-labelled data was actually silently showing D50's own real data
+under the wrong label.
+
+`detectSite()`'s heuristic was `location.hostname.includes('d50')`. The
+two real production hostnames are `lascaux.asu.cas.cz` (SBT/BART) and
+`lascaux50.asu.cas.cz` (D50) - and `lascaux50` does **not** contain the
+literal substring `d50` (it's `...aux50`), so that check was false on
+D50's own page, which fell through to the `sbt` default. From there,
+`apiUrl('sbt', path)` treated `site === currentSite` and returned a bare
+(same-origin) path - so "SBT" data was actually D50's own daemon
+answering about itself, mislabelled - while `apiUrl('d50', path)` was
+now the "peer" and got prefixed with `/d50`, a proxy path that exists on
+*other* vhosts to reach D50, not on D50's own vhost to reach itself, so
+it 404s/fails there. Net effect: the box labelled D50 fails to load, and
+the box labelled SBT is quietly showing real D50 data. `lascaux` (SBT)
+"worked fine" only because the `else` branch (`'sbt'`) happens to be
+correct there regardless of what the hostname actually contains.
+
+Fixed by also matching `lascaux50` explicitly in `detectSite()`
+(`web/static/target.js`) - the manual override in the page's own
+"Advanced: telescope identity" `<details>` (added for exactly this
+"auto-detection guesses wrong" case, see the target-editor reframe phase
+above) was always available as a per-browser workaround, but the actual
+production hostname should be detected correctly without it.
+
+## Yearly plot: show the other telescope's horizon too
+
+The user's own framing: "the visibility graph shows only horizon from
+'our' telescope... I want to show also the D50 horizon" (asked from
+SBT/lascaux). Fair - this page already presents D50+SBT as one facility
+everywhere else (the What/How/When boxes), so "can this be observed"
+should answer for both telescopes, not just whichever one happens to be
+serving the page.
+
+`loadYearVisibility()` now fetches `/api/db/target-visibility-year` from
+*both* `currentSite` and `otherSite()` in parallel (guarded by
+`siteData[otherSite()].exists` - a peer without this target, or one that
+fails to answer, just means no overlay, not a failed panel - matches how
+the What/How/When boxes already treat a missing peer). D50 and SBT/BART
+share the same physical site (same weather station - see the cloud
+sensor's own "shared by both telescopes" note above), so sunset/
+twilight/night are identical between them to any precision this plot
+cares about; only the two telescopes' own horizon files differ. The
+twilight/night hourglass background is therefore drawn once (from the
+local data, as before), and the peer's visibility windows are overlaid
+as a second colour (`--sky-target-fill-peer`, warm/orange vs. the local
+`--sky-target-fill` blue) via the same `drawVisibilityWindows()` (a new
+name for what was the local-only rectangle-drawing code, now a function
+taking a day list and a colour). Where both telescopes can see the
+target at once, the two translucent fills blend into a third colour for
+free - a deliberately cheap "visible from both" cue rather than
+computing an explicit interval intersection. Legend and hover tooltip
+both label each band by the real telescope name (`SITES[..].label`).
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

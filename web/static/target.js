@@ -51,7 +51,19 @@ function detectSite () {
 	const stored = localStorage.getItem (SITE_KEY);
 	if (stored && SITES[stored])
 		return stored;
-	return location.hostname.includes ('d50') ? 'd50' : 'sbt';
+	// Real hostnames: SBT/BART is lascaux.asu.cas.cz, D50 is
+	// lascaux50.asu.cas.cz - which does NOT contain the literal
+	// substring "d50" (it's "...aux50"), so a plain .includes('d50')
+	// silently misdetects D50's own page as SBT there. That's not
+	// just "detection fails and falls back to a default" - it makes
+	// D50's page treat *itself* as the peer (proxying its own data
+	// through a "/d50" path meant for reaching D50 from elsewhere,
+	// which doesn't exist on D50's own vhost) and treat SBT as local
+	// (silently serving D50's real data back mislabeled as SBT's).
+	// Both patterns are checked so a "d50.example.org"-style
+	// deployment elsewhere still matches too.
+	const h = location.hostname;
+	return (h.includes ('d50') || h.includes ('lascaux50')) ? 'd50' : 'sbt';
 }
 
 let currentSite = detectSite ();
@@ -1117,6 +1129,7 @@ const yearLegendEl = document.getElementById ('year-legend');
 const yearYearEl = document.getElementById ('year-year');
 
 let yearData = null;
+let yearPeerData = null;
 let yearPlot = null;
 
 const YEAR_PAD = { left: 44, right: 12, top: 12, bottom: 24 };
@@ -1145,18 +1158,32 @@ async function loadYearVisibility () {
 	setStatus (yearStatusEl, true, 'loading…');
 
 	const year = yearYearEl.value ? parseInt (yearYearEl.value, 10) : new Date ().getFullYear ();
-	const url = apiUrl (currentSite, `api/db/target-visibility-year?id=${encodeURIComponent (currentId)}&year=${year}`);
+	const peer = otherSite ();
+	// Own horizon only tells half the story on a page that already
+	// presents both telescopes as one facility - the peer's horizon is
+	// fetched too (when it has this target at all) purely as an overlay,
+	// so a peer that is missing, doesn't have this target, or fails to
+	// answer just means no overlay, not a failed panel.
+	const peerHasTarget = !!(siteData[peer] && siteData[peer].exists);
+	const localUrl = apiUrl (currentSite, `api/db/target-visibility-year?id=${encodeURIComponent (currentId)}&year=${year}`);
+	const peerUrl = apiUrl (peer, `api/db/target-visibility-year?id=${encodeURIComponent (currentId)}&year=${year}`);
 
 	try {
-		const r = await fetchJson (url);
-		if (!r.ok)
-			throw new Error (r.body.error || 'request failed');
-		yearData = r.body;
+		const [localRes, peerRes] = await Promise.all ([
+			fetchJson (localUrl),
+			peerHasTarget ? fetchJson (peerUrl).catch (er => ({ ok: false, body: { error: String (er) } })) : Promise.resolve (null),
+		]);
+		if (!localRes.ok)
+			throw new Error (localRes.body.error || 'request failed');
+		yearData = localRes.body;
 		yearYearEl.value = yearData.year;
+		yearPeerData = peerRes && peerRes.ok ? peerRes.body : null;
 		describeYearVisibility ();
-		setStatus (yearStatusEl, true, `${yearData.days.length} nights computed for ${yearData.year}`);
+		setStatus (yearStatusEl, true, `${yearData.days.length} nights computed for ${yearData.year}`
+			+ (yearPeerData ? `, plus ${SITES[peer].label}` : ''));
 	} catch (er) {
 		yearData = null;
+		yearPeerData = null;
 		yearSummaryEl.textContent = '';
 		yearLegendEl.innerHTML = '';
 		setStatus (yearStatusEl, false, `cannot compute yearly visibility: ${er.message}`);
@@ -1184,7 +1211,8 @@ function describeYearVisibility () {
 			+ `visible on ${visibleNights} of ${yearData.days.length} nights`
 		: 'never rises above the horizon this year';
 
-	yearLegendEl.innerHTML = '<span class="k-visible">above horizon at night</span>'
+	yearLegendEl.innerHTML = `<span class="k-visible">above horizon at night (${SITES[currentSite].label})</span>`
+		+ (yearPeerData ? `<span class="k-visible-peer">above horizon at night (${SITES[otherSite ()].label})</span>` : '')
 		+ '<span class="k-twilight">twilight</span>'
 		+ '<span class="k-night">RTS2 night start/end</span>';
 }
@@ -1229,6 +1257,7 @@ function drawYearVisibility () {
 	const cNight = style.getPropertyValue ('--sky-night-line').trim () || '#15803d';
 	const cTwilight = style.getPropertyValue ('--sky-twilight').trim () || 'rgba(37,99,235,0.07)';
 	const cTargetFill = style.getPropertyValue ('--sky-target-fill').trim () || 'rgba(37,99,235,0.30)';
+	const cTargetFillPeer = style.getPropertyValue ('--sky-target-fill-peer').trim () || 'rgba(180,83,9,0.30)';
 
 	if (!yearData || !yearData.days.length) {
 		ctx.fillStyle = fg;
@@ -1303,19 +1332,31 @@ function drawYearVisibility () {
 	// obstruction and reappear, so this is drawn as one filled rectangle
 	// per interval per day rather than a single ribbon connected across
 	// days, which would paint over any such dip as still visible.
-	ctx.fillStyle = cTargetFill;
-	for (let i = 0; i < days.length; i++) {
-		const d = days[i];
-		if (!d[7].length)
-			continue;
-		const cx = sx (d[0]);
-		const xL = i > 0 ? (cx + sx (days[i - 1][0])) / 2 : cx - (days.length > 1 ? (sx (days[1][0]) - cx) / 2 : 0);
-		const xR = i < days.length - 1 ? (cx + sx (days[i + 1][0])) / 2 : cx + (days.length > 1 ? (cx - sx (days[i - 1][0])) / 2 : 0);
-		for (const [ws, we] of d[7]) {
-			const yTop = sy (we - d[0]), yBottom = sy (ws - d[0]);
-			ctx.fillRect (xL, yTop, xR - xL, yBottom - yTop);
+	function drawVisibilityWindows (dayList, color) {
+		ctx.fillStyle = color;
+		for (let i = 0; i < dayList.length; i++) {
+			const d = dayList[i];
+			if (!d[7].length)
+				continue;
+			const cx = sx (d[0]);
+			const xL = i > 0 ? (cx + sx (dayList[i - 1][0])) / 2 : cx - (dayList.length > 1 ? (sx (dayList[1][0]) - cx) / 2 : 0);
+			const xR = i < dayList.length - 1 ? (cx + sx (dayList[i + 1][0])) / 2 : cx + (dayList.length > 1 ? (cx - sx (dayList[i - 1][0])) / 2 : 0);
+			for (const [ws, we] of d[7]) {
+				const yTop = sy (we - d[0]), yBottom = sy (ws - d[0]);
+				ctx.fillRect (xL, yTop, xR - xL, yBottom - yTop);
+			}
 		}
 	}
+
+	// Own horizon drawn first, the peer telescope's on top (a page that
+	// already presents D50+SBT as one facility shouldn't only answer
+	// "can I see it from here" for whichever one happens to be serving
+	// the page) - where both overlap, the two translucent fills blend
+	// into a third colour, a cheap and honest "visible from both" cue
+	// without computing an explicit intersection.
+	drawVisibilityWindows (days, cTargetFill);
+	if (yearPeerData && yearPeerData.days.length)
+		drawVisibilityWindows (yearPeerData.days, cTargetFillPeer);
 
 	// y grid + labels, on a nice round number of hours
 	ctx.strokeStyle = grid;
@@ -1410,9 +1451,17 @@ function onYearMove (event) {
 
 	let text = `${yearDateString (best[0])}  sunset ${yearTimeLabel (best[1] - best[0])}  sunrise ${yearTimeLabel (best[4] - best[0])}`;
 	text += best[7].length
-		? '  up ' + best[7].map (([ws, we]) => `${yearTimeLabel (ws - best[0])}–${yearTimeLabel (we - best[0])}`).join (', ')
+		? `  ${SITES[currentSite].label} up ` + best[7].map (([ws, we]) => `${yearTimeLabel (ws - best[0])}–${yearTimeLabel (we - best[0])}`).join (', ')
 			+ `, peak ${best[5].toFixed (0)}°`
-		: '  never above the horizon that night';
+		: `  never above the horizon from ${SITES[currentSite].label} that night`;
+
+	if (yearPeerData) {
+		const peerDay = yearPeerData.days.find (d => d[0] === best[0]);
+		text += peerDay && peerDay[7].length
+			? `  |  ${SITES[otherSite ()].label} up ` + peerDay[7].map (([ws, we]) => `${yearTimeLabel (ws - peerDay[0])}–${yearTimeLabel (we - peerDay[0])}`).join (', ')
+				+ `, peak ${peerDay[5].toFixed (0)}°`
+			: `  |  never above the horizon from ${SITES[otherSite ()].label} that night`;
+	}
 	yearTooltipEl.textContent = text;
 	yearTooltipEl.style.display = 'block';
 	const tipWidth = yearTooltipEl.offsetWidth;
