@@ -114,32 +114,55 @@
 			</div>
 			<div id="when-status" class="status-line"></div>
 		</section>
-	</div>
 
-	<section id="sky-panel" class="panel" hidden>
-		<h2>Visibility <span id="sky-summary" class="sky-summary"></span></h2>
-		<p class="hint">
-			The night this target gets, sunset to sunrise, with RTS2's own
-			night boundaries marked - the same picture classic's
-			<code>rts2-targetinfo -g</code> drew through gnuplot. The
-			bottom curve is the horizon <em>at the target's azimuth at
-			that moment</em>, so where the trace dips into it is where
-			this telescope actually loses the target, not merely where it
-			gets low.
-		</p>
-		<form id="sky-form" class="inline-form">
-			<label>Night of <input id="sky-date" type="date"></label>
-			<button type="button" id="sky-prev">&larr; previous</button>
-			<button type="button" id="sky-today">tonight</button>
-			<button type="button" id="sky-next">next &rarr;</button>
-		</form>
-		<div id="sky-chart-wrap">
-			<canvas id="sky-chart"></canvas>
-			<div id="sky-tooltip" class="rec-tooltip"></div>
-		</div>
-		<div id="sky-legend" class="sky-legend"></div>
-		<div id="sky-status" class="status-line"></div>
-	</section>
+		<section id="sky-panel" class="panel target-box" hidden>
+			<h2>Visibility <span id="sky-summary" class="sky-summary"></span></h2>
+			<p class="hint">
+				The night this target gets, sunset to sunrise, with RTS2's own
+				night boundaries marked - the same picture classic's
+				<code>rts2-targetinfo -g</code> drew through gnuplot. The
+				bottom curve is the horizon <em>at the target's azimuth at
+				that moment</em>, so where the trace dips into it is where
+				this telescope actually loses the target, not merely where it
+				gets low.
+			</p>
+			<form id="sky-form" class="inline-form">
+				<label>Night of <input id="sky-date" type="date"></label>
+				<button type="button" id="sky-prev">&larr; previous</button>
+				<button type="button" id="sky-today">tonight</button>
+				<button type="button" id="sky-next">next &rarr;</button>
+			</form>
+			<div id="sky-chart-wrap">
+				<canvas id="sky-chart"></canvas>
+				<div id="sky-tooltip" class="rec-tooltip"></div>
+			</div>
+			<div id="sky-legend" class="sky-legend"></div>
+			<div id="sky-status" class="status-line"></div>
+		</section>
+
+		<section id="year-panel" class="panel target-box" hidden>
+			<h2>Yearly visibility <span id="year-summary" class="sky-summary"></span></h2>
+			<p class="hint">
+				One point in the plot per night of the year: sunset/sunrise
+				and RTS2's night boundaries trace the day/twilight/night
+				"hourglass" that shifts with the seasons, and the shaded band
+				is when this target is actually above this telescope's real
+				horizon that night.
+			</p>
+			<form id="year-form" class="inline-form">
+				<label>Year <input id="year-year" type="number" step="1"></label>
+				<button type="button" id="year-prev">&larr; previous</button>
+				<button type="button" id="year-this">this year</button>
+				<button type="button" id="year-next">next &rarr;</button>
+			</form>
+			<div id="year-chart-wrap">
+				<canvas id="year-chart"></canvas>
+				<div id="year-tooltip" class="rec-tooltip"></div>
+			</div>
+			<div id="year-legend" class="sky-legend"></div>
+			<div id="year-status" class="status-line"></div>
+		</section>
+	</div>
 
 	<details id="peer-settings">
 		<summary>Advanced: telescope identity / proxy path (auto-detected, override only if wrong)</summary>

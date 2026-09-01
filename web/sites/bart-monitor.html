@@ -18,6 +18,8 @@
             --error: #ff0000;
             --graph-line: #2563eb;
             --graph-band: rgba(37, 99, 235, 0.18);
+            --graph-day-bg: rgba(255, 190, 40, 0.12);
+            --graph-twilight-bg: rgba(37, 99, 235, 0.08);
         }
 
         body.dark {
@@ -33,6 +35,8 @@
             --error: #ff5c5c;
             --graph-line: #6fb3ff;
             --graph-band: rgba(111, 179, 255, 0.22);
+            --graph-day-bg: rgba(255, 190, 40, 0.10);
+            --graph-twilight-bg: rgba(111, 179, 255, 0.10);
         }
 
         body {
@@ -969,6 +973,52 @@
             return 10 * exp;
         }
 
+        // Sun altitude at an arbitrary time, for shading the cloud graph
+        // by day/twilight/night - the same low-precision ephemeris
+        // renderSkyChart() already uses for the Sun marker (julianDate/
+        // gmstDeg/sunEquatorial/equToHrz below), just evaluated at any
+        // time rather than "now". Cloudmeter readings mean something
+        // different in daylight than at night, hence marking which is
+        // which rather than adding a new astronomy stack for it.
+        function sunAltDeg(t) {
+            if (!horizonInfo)
+                return null;
+            const jd = julianDate(new Date(t * 1000));
+            const sun = sunEquatorial(jd);
+            const lst = normDeg(gmstDeg(jd) + horizonInfo.lon);
+            return equToHrz(lst - sun.ra, sun.dec, horizonInfo.lat).alt;
+        }
+
+        // Splits [tMin, tMax] into contiguous {from, to, band} runs of
+        // 'day' | 'twilight' | 'night', using the same night_horizon/
+        // day_horizon thresholds RTS2 itself classifies night by
+        // (/api/horizon) - this is what "night" means to RTS2, not a
+        // fixed astronomical-twilight constant. 3-minute sampling: fine
+        // enough that even a short twilight near the equator still gets
+        // its own band, coarse enough that even a multi-day range is a
+        // few hundred trig evaluations.
+        function dayNightBands(tMin, tMax) {
+            if (!horizonInfo || horizonInfo.nightHorizon === undefined)
+                return [];
+            const classify = alt => alt > horizonInfo.dayHorizon ? 'day'
+                : (alt > horizonInfo.nightHorizon ? 'twilight' : 'night');
+
+            const step = 180;
+            const bands = [];
+            let segStart = tMin;
+            let segClass = classify(sunAltDeg(tMin));
+            for (let t = tMin + step; t < tMax; t += step) {
+                const cls = classify(sunAltDeg(t));
+                if (cls !== segClass) {
+                    bands.push({ from: segStart, to: t, band: segClass });
+                    segStart = t;
+                    segClass = cls;
+                }
+            }
+            bands.push({ from: segStart, to: tMax, band: segClass });
+            return bands;
+        }
+
         function drawCloudGraph() {
             const canvas = document.getElementById('cloud-canvas');
             if (!canvas)
@@ -991,6 +1041,8 @@
             const grid = style.getPropertyValue('--border').trim() || '#ccc';
             const line = style.getPropertyValue('--graph-line').trim() || '#2563eb';
             const band = style.getPropertyValue('--graph-band').trim() || 'rgba(37,99,235,0.18)';
+            const dayBg = style.getPropertyValue('--graph-day-bg').trim() || 'rgba(255,190,40,0.12)';
+            const twilightBg = style.getPropertyValue('--graph-twilight-bg').trim() || 'rgba(37,99,235,0.08)';
 
             if (!cloudSeries || !cloudSeries.points.length) {
                 ctx.fillStyle = fg;
@@ -1020,6 +1072,17 @@
 
             const sx = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
             const sy = v => y1 - (v - vMin) / (vMax - vMin) * (y1 - y0);
+
+            // day/twilight/night background, drawn before anything else
+            // so grid, band and line all stay fully legible on top of it
+            // - night gets no fill at all (unchanged from before this
+            // existed), day and twilight get a minimal tint
+            for (const seg of dayNightBands(tMin, tMax)) {
+                if (seg.band === 'night')
+                    continue;
+                ctx.fillStyle = seg.band === 'day' ? dayBg : twilightBg;
+                ctx.fillRect(sx(seg.from), y0, sx(seg.to) - sx(seg.from), y1 - y0);
+            }
 
             ctx.strokeStyle = grid;
             ctx.fillStyle = fg;

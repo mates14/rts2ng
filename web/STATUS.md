@@ -2213,6 +2213,106 @@ headless Firefox, which is what caught this page's `fetchJson()`
 returning `{ ok, body }` rather than the body - the plot had been
 silently reading `undefined.points`.
 
+## Three graph follow-ups (2026-09-01)
+
+Three requests against the two graphs above - two small, one a new
+endpoint - after this checkout was found nine commits behind (`git pull`
+brought in both graphs above; this session had been working from a stale
+tree that had neither).
+
+**Day/twilight/night shading on the cloud sensor graph.** The user's own
+observation: cloudmeter readings mean something different taken in
+daylight than at night. `/api/horizon` (`httpd.cpp`) now also reports
+`nightHorizon`/`dayHorizon` - the same `[observatory]` keys
+`dbTargetAltitude()` already reads - alongside the existing lat/lon/
+horizon, so a client classifying day/twilight/night off the Sun's
+altitude it computes itself agrees with what RTS2 itself calls night,
+not a fixed astronomical-twilight constant. `d50-monitor.html` and
+`bart-monitor.html` each gained `sunAltDeg()` (their existing
+`julianDate`/`gmstDeg`/`sunEquatorial`/`equToHrz` - already there for
+`renderSkyChart()`'s Sun marker - evaluated at an arbitrary time instead
+of "now") and `dayNightBands()` (3-minute sampling into contiguous `day`/
+`twilight`/`night` runs), and `drawCloudGraph()` fills `day`/`twilight`
+bands (new `--graph-day-bg`/`--graph-twilight-bg` per file, light/dark
+tuned like the other graph colours there) before drawing anything else -
+`night` gets no fill at all, unchanged from before this existed, per the
+user's own "let night stay as it was" framing. Deliberately not added to
+the generic `records.js` explorer (confirmed with the user): day/night
+framing is specific to what the cloudmeter means, not something every
+recorded value should assume.
+
+**`#sky-panel` narrowed to one grid column.** It was a full-width
+`.panel` sitting outside `#target-boxes`; now it is a fourth
+`.panel.target-box` inside that grid, picking up the same
+`repeat(auto-fit, minmax(340px, 1fr))` sizing the What/How/When boxes
+already use - exactly the "accept a fourth box" extensibility that grid
+was built for (see the target-editor reframe phase above). No JS
+changes; the panel's contents are looked up by id regardless of DOM
+position.
+
+**Yearly visibility ("butterfly") plot**: `/api/db/target-visibility-year
+?id=N[&year=YYYY]` (or `ra=&dec=` for an unsaved target, same contract as
+`target-altitude`) plus a fifth `.target-box`, `#year-panel`, right after
+`#sky-panel`.
+
+- One point per calendar day of the year (noon-anchored, walked via
+  `struct tm` + `mktime()` rather than adding 86400 to a `time_t`, so the
+  two DST-transition days don't leave every later noon off by an hour
+  until the next transition corrects it back). For each day: that
+  night's sunset/nightStart/nightEnd/sunrise (`findNightBoundaries()`,
+  factored out of `dbTargetAltitude()`'s own inline loop so both
+  endpoints agree on where night starts and ends instead of keeping two
+  copies of it - `dbTargetAltitude()` itself is otherwise unchanged), then
+  the target's `riseTime`/`setTime` (first/last sample above the real,
+  per-azimuth horizon that night - `ObjectCheck::getHorizonHeight()`,
+  same as `dbTargetAltitude()`) and `peakAlt`/`peakTime`, sampled at ~10
+  minute resolution (coarser than `dbTargetAltitude()`'s up-to-2000-point
+  single night, because this is one call doing that 365-366 times, not
+  once per pixel of one interactive plot).
+- A day with no sunset/sunrise pair at all (polar day/night) is skipped
+  outright rather than aborting the whole year the way a single missing
+  night is an error in `dbTargetAltitude()` - one bad day out of 365
+  shouldn't blank the other 364. No Moon in this response: at one sample
+  per night its ~29.5-day cycle doesn't carry a stable per-night meaning
+  the way it does in the single-night plot.
+- The editor's panel (`target.js`) draws it in a canvas, same
+  no-charting-library convention as everywhere else: X axis is the
+  day's actual date (so a skipped polar day leaves a real gap, not a
+  seam), Y axis is seconds-after-that-day's-own-local-noon (DST-safe by
+  construction - real elapsed time, not wall-clock arithmetic),
+  auto-scaled to the year's own sunset/sunrise extremes rather than a
+  fixed window that would need re-tuning per latitude. Twilight is
+  filled between sunset/sunrise and the night boundary curves (reusing
+  `--sky-twilight`, the same variable `drawVisibility()` uses, so the two
+  panels agree visually) - a day with no true RTS2 night (sun never
+  reaches `night_horizon`, a summer "white night" at high latitude) is
+  twilight the *entire* sunset-to-sunrise span rather than unshaded: a
+  real bug caught before shipping, where the naive "twilight ends at
+  nightStart, or nothing if there's no nightStart" fallback silently
+  turned every white night into a blank (day-looking) gap instead of the
+  solid twilight band it actually is. The target's visibility band
+  (`riseTime`..`setTime`, new `--sky-target-fill`) is the actual
+  butterfly wing - it sweeps across the plot over the year as sidereal
+  time drifts against the calendar, with a real gap on any day the
+  target never clears the horizon, matching the gap-stays-a-gap
+  convention `records.js` and `drawVisibility()` already established
+  rather than bridging it with a line nobody measured.
+- Year navigation (prev/this year/next) mirrors `#sky-panel`'s
+  prev/today/next, same `apiUrl(currentSite, ...)` per-telescope pattern.
+
+**Not verified against a live daemon** - this session had no running
+centrald/httpd or database to test against (the prior phases' "smoke-
+tested end to end" entries were against real local instances this
+checkout doesn't have). Backend changes build clean
+(`cmake --build . --target rts2-httpd`); both monitor pages' inline
+`<script>` blocks and `target.js` pass `node --check`. Still needs the
+same live-daemon pass every prior phase got before this is trusted:
+a full year including at least one date the target never rises (confirm
+`riseTime`/`setTime`/`peakTime` come back `null` there, not garbage), a
+site with a real `night_horizon`/`day_horizon` far from the -10/0
+defaults, and the cloud graph's day/twilight bands checked against
+`next_event()` across the 8h/24h/3d range buttons.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

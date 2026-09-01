@@ -288,6 +288,30 @@ void dbRecords (const std::string &device, const std::string &value, double from
  */
 void dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double refTime, int points, std::ostringstream &os);
 
+/**
+ * GET /api/db/target-visibility-year?id=N[&year=YYYY] - one point per
+ * night of a year: the sunset/twilight/sunrise "hourglass" that shifts
+ * with the seasons, plus when this target is above this telescope's real
+ * horizon that night, for a whole-year observability overview - the
+ * yearly counterpart to dbTargetAltitude()'s single night.
+ *
+ * Each day is [noon, sunset, nightStart, nightEnd, sunrise, riseTime,
+ * setTime, peakAlt, peakTime]: an array again, for the same size reason
+ * every other endpoint here gives. nightStart/nightEnd/riseTime/setTime/
+ * peakTime are `null` when they don't apply that day - no true RTS2-night
+ * state that day (polar-ish twilight-only nights), or the target never
+ * clears the horizon at all.
+ *
+ * A day with no sunset/sunrise pair at all (polar day/night) is silently
+ * skipped rather than aborting the whole year the way dbTargetAltitude()
+ * errors on a single missing night - one bad night is nothing to plot,
+ * one bad day out of 365 shouldn't blank the other 364.
+ *
+ * @param targetId  target to plot, or -1 to use fixedRa/fixedDec.
+ * @param year      calendar year (local time) to cover.
+ */
+void dbTargetVisibilityYear (int targetId, double fixedRa, double fixedDec, int year, std::ostringstream &os);
+
 }
 
 #endif // WEB_HAVE_DB

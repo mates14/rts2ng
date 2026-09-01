@@ -1521,6 +1521,70 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/target-visibility-year"))
+	{
+		const char *idStr = getParam (connection, "id", "");
+		const char *raStr = getParam (connection, "ra", "");
+		const char *decStr = getParam (connection, "dec", "");
+		if (idStr[0] == '\0' && (raStr[0] == '\0' || decStr[0] == '\0'))
+		{
+			static const char *msg = "{\"error\":\"pass id=<target> or ra=&dec= (degrees)\"}";
+			struct MHD_Response *response = MHD_create_response_from_buffer (strlen (msg), (void *) msg, MHD_RESPMEM_PERSISTENT);
+			MHD_add_response_header (response, "Content-Type", "application/json");
+			MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_BAD_REQUEST, response);
+			MHD_destroy_response (response);
+			return ret;
+		}
+
+		int targetId = idStr[0] != '\0' ? atoi (idStr) : -1;
+		double fixedRa = atof (raStr);
+		double fixedDec = atof (decStr);
+
+		const char *yearStr = getParam (connection, "year", "");
+		int year;
+		if (yearStr[0] != '\0')
+		{
+			year = atoi (yearStr);
+		}
+		else
+		{
+			time_t now = getNow ();
+			struct tm tmNow;
+			localtime_r (&now, &tmNow);
+			year = tmNow.tm_year + 1900;
+		}
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, targetId, fixedRa, fixedDec, year] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbTargetVisibilityYear (targetId, fixedRa, fixedDec, year, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 	else if (!strcmp (url, "/api/db/target-save"))
 	{
 		const char *idStr = getParam (connection, "id", "");
@@ -1891,10 +1955,17 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 			// horizon polygon rts2ng already loads and uses for real
 			// (dome safety / ignoreHorizon), plus the observer's
 			// position. Stars, sun, moon and the actual plotting stay
-			// entirely client-side.
+			// entirely client-side. nightHorizon/dayHorizon are the same
+			// [observatory] keys centrald's own state machine reads
+			// (initValues()) and dbTargetAltitude() reuses - so a client
+			// classifying day/twilight/night off the Sun's altitude it
+			// computes itself agrees with what RTS2 itself calls night,
+			// rather than a hand-picked astronomical twilight constant.
 			struct ln_lnlat_posn *obs = Configuration::instance ()->getObserver ();
 			os << "{\"lat\":" << obs->lat << ",\"lon\":" << obs->lng
 				<< ",\"alt\":" << Configuration::instance ()->getObservatoryAltitude ()
+				<< ",\"nightHorizon\":" << Configuration::instance ()->getDoubleDefault ("observatory", "night_horizon", -10)
+				<< ",\"dayHorizon\":" << Configuration::instance ()->getDoubleDefault ("observatory", "day_horizon", 0)
 				<< ",\"horizon\":[";
 			bool first = true;
 			for (horizon_t::iterator iter = Configuration::instance ()->getObjectChecker ()->begin ();

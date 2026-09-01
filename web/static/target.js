@@ -216,6 +216,7 @@ async function loadTarget (id) {
 	targetBoxesEl.hidden = true;
 	tarIdLabelEl.hidden = true;
 	document.getElementById ('sky-panel').hidden = true;
+	document.getElementById ('year-panel').hidden = true;
 	document.getElementById ('create-type-row').hidden = true;
 
 	const [d50, sbt] = await Promise.all ([loadSiteData ('d50', id), loadSiteData ('sbt', id)]);
@@ -239,6 +240,7 @@ async function loadTarget (id) {
 	renderWhenBox ();
 	await renderScriptsBox ();
 	await loadVisibility ();
+	await loadYearVisibility ();
 }
 
 document.getElementById ('load-form').addEventListener ('submit', (ev) => {
@@ -1096,6 +1098,333 @@ window.addEventListener ('resize', () => {
 	// ephemeris positions for nothing
 	clearTimeout (skyResizeTimer);
 	skyResizeTimer = setTimeout (drawVisibility, 200);
+});
+
+// --- Yearly visibility ("butterfly") plot ------------------------------
+//
+// One point per night of the year, from /api/db/target-visibility-year:
+// sunset/twilight/sunrise trace an hourglass that pinches and widens with
+// the seasons, and a filled band shows when this target actually clears
+// this telescope's real horizon that night - the wing that sweeps across
+// the plot over the year as sidereal time drifts against the calendar.
+
+const yearPanelEl = document.getElementById ('year-panel');
+const yearCanvas = document.getElementById ('year-chart');
+const yearTooltipEl = document.getElementById ('year-tooltip');
+const yearStatusEl = document.getElementById ('year-status');
+const yearSummaryEl = document.getElementById ('year-summary');
+const yearLegendEl = document.getElementById ('year-legend');
+const yearYearEl = document.getElementById ('year-year');
+
+let yearData = null;
+let yearPlot = null;
+
+const YEAR_PAD = { left: 44, right: 12, top: 12, bottom: 24 };
+
+/** Seconds-after-local-noon -> "HH:MM", without going through Date (and
+ * so without that day's own DST offset getting in the way) - a day
+ * entry's non-noon fields are already stored as plain epoch-seconds
+ * differences from that day's noon, which is exactly hours-after-noon in
+ * real elapsed time. */
+function yearTimeLabel (offsetSec) {
+	const totalMin = (Math.round (offsetSec / 60) + 12 * 60 + 1440) % 1440;
+	const h = Math.floor (totalMin / 60), m = totalMin % 60;
+	return String (h).padStart (2, '0') + ':' + String (m).padStart (2, '0');
+}
+
+function yearDateString (noon) {
+	const d = new Date (noon * 1000);
+	return d.getFullYear () + '-' + String (d.getMonth () + 1).padStart (2, '0')
+		+ '-' + String (d.getDate ()).padStart (2, '0');
+}
+
+async function loadYearVisibility () {
+	if (currentId === null)
+		return;
+	yearPanelEl.hidden = false;
+	setStatus (yearStatusEl, true, 'loading…');
+
+	const year = yearYearEl.value ? parseInt (yearYearEl.value, 10) : new Date ().getFullYear ();
+	const url = apiUrl (currentSite, `api/db/target-visibility-year?id=${encodeURIComponent (currentId)}&year=${year}`);
+
+	try {
+		const r = await fetchJson (url);
+		if (!r.ok)
+			throw new Error (r.body.error || 'request failed');
+		yearData = r.body;
+		yearYearEl.value = yearData.year;
+		describeYearVisibility ();
+		setStatus (yearStatusEl, true, `${yearData.days.length} nights computed for ${yearData.year}`);
+	} catch (er) {
+		yearData = null;
+		yearSummaryEl.textContent = '';
+		yearLegendEl.innerHTML = '';
+		setStatus (yearStatusEl, false, `cannot compute yearly visibility: ${er.message}`);
+	}
+	drawYearVisibility ();
+}
+
+function describeYearVisibility () {
+	if (!yearData || !yearData.days.length) {
+		yearSummaryEl.textContent = '';
+		yearLegendEl.innerHTML = '';
+		return;
+	}
+
+	let best = null, visibleNights = 0;
+	for (const d of yearData.days) {
+		if (d[5] !== null)
+			visibleNights++;
+		if (!best || d[7] > best[7])
+			best = d;
+	}
+
+	yearSummaryEl.textContent = best
+		? `best around ${yearDateString (best[0])}: up to ${best[7].toFixed (0)}°, `
+			+ `visible on ${visibleNights} of ${yearData.days.length} nights`
+		: 'never rises above the horizon this year';
+
+	yearLegendEl.innerHTML = '<span class="k-visible">above horizon at night</span>'
+		+ '<span class="k-twilight">twilight</span>'
+		+ '<span class="k-night">RTS2 night start/end</span>';
+}
+
+/** Runs the callback over each maximal run of days where getter(day) is
+ * not null, as [{x, y}, ...] point lists - the shared shape for drawing
+ * both the night-boundary curves and the target-visibility band without
+ * a straight line bridging across a gap (polar-ish nights with no true
+ * RTS2 night, or the target never clearing the horizon that night). */
+function yearRuns (days, sx, sy, getter) {
+	const runs = [];
+	let run = null;
+	for (const d of days) {
+		const v = getter (d);
+		if (v === null) {
+			if (run) { runs.push (run); run = null; }
+			continue;
+		}
+		if (!run) { run = []; runs.push (run); }
+		run.push ({ x: sx (d[0]), y: sy (v - d[0]) });
+	}
+	return runs;
+}
+
+function drawYearVisibility () {
+	if (!yearCanvas)
+		return;
+	const ratio = window.devicePixelRatio || 1;
+	const width = yearCanvas.clientWidth;
+	const height = yearCanvas.clientHeight;
+	yearCanvas.width = Math.round (width * ratio);
+	yearCanvas.height = Math.round (height * ratio);
+	const ctx = yearCanvas.getContext ('2d');
+	ctx.setTransform (ratio, 0, 0, ratio, 0, 0);
+	ctx.clearRect (0, 0, width, height);
+	yearPlot = null;
+
+	const style = getComputedStyle (document.body);
+	const fg = style.getPropertyValue ('--text-muted').trim () || '#6b7280';
+	const grid = style.getPropertyValue ('--border').trim () || '#dcdfe4';
+	const cHorizon = style.getPropertyValue ('--sky-horizon').trim () || '#6b7280';
+	const cNight = style.getPropertyValue ('--sky-night-line').trim () || '#15803d';
+	const cTwilight = style.getPropertyValue ('--sky-twilight').trim () || 'rgba(37,99,235,0.07)';
+	const cTargetFill = style.getPropertyValue ('--sky-target-fill').trim () || 'rgba(37,99,235,0.30)';
+
+	if (!yearData || !yearData.days.length) {
+		ctx.fillStyle = fg;
+		ctx.font = '13px sans-serif';
+		ctx.textAlign = 'center';
+		ctx.fillText ('no visibility data', width / 2, height / 2);
+		return;
+	}
+
+	const days = yearData.days;
+	const x0 = YEAR_PAD.left, x1 = width - YEAR_PAD.right;
+	const y0 = YEAR_PAD.top, y1 = height - YEAR_PAD.bottom;
+	if (x1 <= x0 || y1 <= y0)
+		return;
+
+	const tMinX = days[0][0], tMaxX = days[days.length - 1][0];
+	// Y axis: seconds after that day's own local noon, auto-scaled to
+	// this year's actual sunset/sunrise extremes rather than a fixed
+	// window that would need re-tuning per latitude.
+	let yMin = Infinity, yMax = -Infinity;
+	for (const d of days) {
+		yMin = Math.min (yMin, d[1] - d[0]);
+		yMax = Math.max (yMax, d[4] - d[0]);
+	}
+	const yMargin = (yMax - yMin) * 0.04;
+	yMin -= yMargin;
+	yMax += yMargin;
+
+	const sx = t => x0 + (tMaxX > tMinX ? (t - tMinX) / (tMaxX - tMinX) : 0) * (x1 - x0);
+	const sy = off => y1 - (off - yMin) / (yMax - yMin) * (y1 - y0);
+
+	// Twilight/visibility bands, filled between two per-day getters (e.g.
+	// sunset and nightStart) - a plain area fill rather than yearRuns()'s
+	// line-run shape, since top and bottom share the same day set here
+	// and a run just needs to skip days where either side is null.
+	function fillArea (topGetter, bottomGetter, color) {
+		ctx.fillStyle = color;
+		let i = 0;
+		while (i < days.length) {
+			if (topGetter (days[i]) === null || bottomGetter (days[i]) === null) { i++; continue; }
+			const pts = [];
+			while (i < days.length && topGetter (days[i]) !== null && bottomGetter (days[i]) !== null) {
+				pts.push (days[i]);
+				i++;
+			}
+			ctx.beginPath ();
+			pts.forEach ((d, k) => {
+				const x = sx (d[0]), y = sy (topGetter (d) - d[0]);
+				k ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+			});
+			for (let k = pts.length - 1; k >= 0; k--) {
+				const d = pts[k];
+				ctx.lineTo (sx (d[0]), sy (bottomGetter (d) - d[0]));
+			}
+			ctx.closePath ();
+			ctx.fill ();
+		}
+	}
+
+	// A day with no true RTS2 night (nightStart/nightEnd null - the sun
+	// never reaches night_horizon, a summer "white night" at high
+	// latitude) is twilight the whole way from sunset to sunrise, not
+	// unshaded: the first band's bottom falls back to sunrise itself,
+	// and the second band is skipped entirely for that day (its top is
+	// null) so the two never double-paint the same night.
+	fillArea (d => d[1], d => d[2] !== null ? d[2] : d[4], cTwilight);	// sunset -> nightStart (or sunrise)
+	fillArea (d => d[3], d => d[4], cTwilight);						// nightEnd -> sunrise
+	fillArea (d => d[5], d => d[6], cTargetFill);						// riseTime -> setTime
+
+	// y grid + labels, on a nice round number of hours
+	ctx.strokeStyle = grid;
+	ctx.fillStyle = fg;
+	ctx.lineWidth = 1;
+	ctx.font = '11px sans-serif';
+	ctx.textAlign = 'right';
+	ctx.textBaseline = 'middle';
+	const hourStep = 3600 * Math.max (1, Math.round ((yMax - yMin) / 3600 / 6));
+	for (let off = Math.ceil (yMin / hourStep) * hourStep; off <= yMax; off += hourStep) {
+		const y = Math.round (sy (off)) + 0.5;
+		ctx.beginPath ();
+		ctx.moveTo (x0, y);
+		ctx.lineTo (x1, y);
+		ctx.stroke ();
+		ctx.fillText (yearTimeLabel (off), x0 - 6, y);
+	}
+
+	// x grid + labels, one per month (the 1st of each month in range)
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'top';
+	const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+	for (const d of days) {
+		const dt = new Date (d[0] * 1000);
+		if (dt.getDate () !== 1)
+			continue;
+		const x = Math.round (sx (d[0])) + 0.5;
+		ctx.beginPath ();
+		ctx.moveTo (x, y0);
+		ctx.lineTo (x, y1);
+		ctx.stroke ();
+		const label = monthNames[dt.getMonth ()];
+		const half = ctx.measureText (label).width / 2;
+		ctx.textAlign = x + half > width ? 'right' : (x - half < 0 ? 'left' : 'center');
+		ctx.fillText (label, x, y1 + 4);
+		ctx.textAlign = 'center';
+	}
+
+	// sunset/sunrise outline
+	ctx.strokeStyle = cHorizon;
+	ctx.lineWidth = 1;
+	for (const getter of [d => d[1], d => d[4]]) {
+		ctx.beginPath ();
+		let pen = false;
+		for (const d of days) {
+			const x = sx (d[0]), y = sy (getter (d) - d[0]);
+			pen ? ctx.lineTo (x, y) : ctx.moveTo (x, y);
+			pen = true;
+		}
+		ctx.stroke ();
+	}
+
+	// RTS2 night boundary curves, dashed - gaps where a day has no true
+	// night state (only twilight, at high latitude midsummer)
+	ctx.strokeStyle = cNight;
+	ctx.setLineDash ([5, 4]);
+	ctx.lineWidth = 1.2;
+	for (const getter of [d => d[2], d => d[3]]) {
+		for (const run of yearRuns (days, sx, sy, getter)) {
+			ctx.beginPath ();
+			run.forEach ((p, k) => k ? ctx.lineTo (p.x, p.y) : ctx.moveTo (p.x, p.y));
+			ctx.stroke ();
+		}
+	}
+	ctx.setLineDash ([]);
+
+	yearPlot = { x0, x1, y0, y1, tMinX, tMaxX, sx, sy, yMin, yMax };
+}
+
+function onYearMove (event) {
+	if (!yearPlot || !yearData || !yearData.days.length) {
+		yearTooltipEl.style.display = 'none';
+		return;
+	}
+	const rect = yearCanvas.getBoundingClientRect ();
+	const x = event.clientX - rect.left;
+	if (x < yearPlot.x0 || x > yearPlot.x1) {
+		yearTooltipEl.style.display = 'none';
+		return;
+	}
+
+	const t = yearPlot.tMinX + (x - yearPlot.x0) / (yearPlot.x1 - yearPlot.x0) * (yearPlot.tMaxX - yearPlot.tMinX);
+	let best = null, bestDist = Infinity;
+	for (const d of yearData.days) {
+		const dist = Math.abs (d[0] - t);
+		if (dist < bestDist) { bestDist = dist; best = d; }
+	}
+	if (!best) {
+		yearTooltipEl.style.display = 'none';
+		return;
+	}
+
+	let text = `${yearDateString (best[0])}  sunset ${yearTimeLabel (best[1] - best[0])}  sunrise ${yearTimeLabel (best[4] - best[0])}`;
+	text += best[5] !== null
+		? `  up ${yearTimeLabel (best[5] - best[0])}–${yearTimeLabel (best[6] - best[0])}, peak ${best[7].toFixed (0)}°`
+		: '  never above the horizon that night';
+	yearTooltipEl.textContent = text;
+	yearTooltipEl.style.display = 'block';
+	const tipWidth = yearTooltipEl.offsetWidth;
+	let left = yearPlot.sx (best[0]) + 12;
+	if (left + tipWidth > rect.width)
+		left = yearPlot.sx (best[0]) - tipWidth - 12;
+	yearTooltipEl.style.left = left + 'px';
+	yearTooltipEl.style.top = '8px';
+}
+
+function shiftYear (delta) {
+	const year = (yearYearEl.value ? parseInt (yearYearEl.value, 10) : new Date ().getFullYear ()) + delta;
+	yearYearEl.value = year;
+	loadYearVisibility ();
+}
+
+document.getElementById ('year-prev').addEventListener ('click', () => shiftYear (-1));
+document.getElementById ('year-next').addEventListener ('click', () => shiftYear (1));
+document.getElementById ('year-this').addEventListener ('click', () => {
+	yearYearEl.value = new Date ().getFullYear ();
+	loadYearVisibility ();
+});
+yearYearEl.addEventListener ('change', loadYearVisibility);
+document.getElementById ('year-form').addEventListener ('submit', (ev) => ev.preventDefault ());
+
+yearCanvas.addEventListener ('mousemove', onYearMove);
+yearCanvas.addEventListener ('mouseleave', () => { yearTooltipEl.style.display = 'none'; });
+
+let yearResizeTimer = null;
+window.addEventListener ('resize', () => {
+	clearTimeout (yearResizeTimer);
+	yearResizeTimer = setTimeout (drawYearVisibility, 200);
 });
 
 // Support ?id=N in the URL so a link (e.g. from a future target-list

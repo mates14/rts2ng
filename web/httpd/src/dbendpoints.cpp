@@ -768,6 +768,63 @@ void rts2web::dbRecords (const std::string &device, const std::string &value, do
 	os << "]}";
 }
 
+namespace
+{
+
+/**
+ * Walks centrald's own next_event() state machine (riseset.h) forward
+ * from local noon on the day containing `noon`, recording where DUSK/
+ * NIGHT/MORNING begin - sunset, the night_horizon crossing in, the
+ * night_horizon crossing out, and sunrise. Factored out of
+ * dbTargetAltitude() so dbTargetVisibilityYear() (one call per day of a
+ * year, rather than one per request) agrees with it on where night
+ * starts and ends instead of keeping a second copy of the loop.
+ *
+ * Returns false (not an error) when no sunset/sunrise pair was found for
+ * this day at this observer - a polar day/night, or a horizon
+ * configuration that never crosses. Callers decide what that means: a
+ * single night with none is nothing to plot (an error), a day inside a
+ * year with none is just a day to skip.
+ */
+bool findNightBoundaries (struct ln_lnlat_posn *observer, time_t noon,
+	double nightHorizon, double dayHorizon, int eveningTime, int morningTime,
+	time_t &sunset, time_t &nightStart, time_t &nightEnd, time_t &sunrise)
+{
+	sunset = nightStart = nightEnd = sunrise = 0;
+	rts2_status_t currType = -1, nextType = -1;
+	time_t cursor = noon;
+	for (int i = 0; i < 24 && !(sunset && sunrise); i++)
+	{
+		time_t probe = cursor + 1;
+		time_t evTime = cursor;
+		next_event (observer, &probe, &currType, &nextType, &evTime, nightHorizon, dayHorizon, eveningTime, morningTime);
+		if (evTime <= cursor)
+			break;					 // no progress - refuse to spin
+		switch (currType)
+		{
+			case SERVERD_DUSK:
+				if (!sunset)
+					sunset = cursor;
+				break;
+			case SERVERD_NIGHT:
+				if (!nightStart)
+				{
+					nightStart = cursor;
+					nightEnd = evTime;
+				}
+				break;
+			case SERVERD_MORNING:
+				if (!sunrise)
+					sunrise = cursor;
+				break;
+		}
+		cursor = evTime;
+	}
+	return sunset != 0 && sunrise != 0 && sunrise > sunset;
+}
+
+}
+
 void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double refTime, int points, std::ostringstream &os)
 {
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
@@ -802,42 +859,12 @@ void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, d
 	tmRef.tm_isdst = -1;
 	time_t noon = mktime (&tmRef);
 
-	// Walk centrald's own state machine (riseset.h's next_event) forward
-	// from noon, recording where each state begins: DUSK starts at
-	// sunset, NIGHT at the night_horizon crossing, DAWN at the end of
+	// Walk centrald's own state machine (riseset.h's next_event, via the
+	// shared findNightBoundaries() above) forward from noon: DUSK starts
+	// at sunset, NIGHT at the night_horizon crossing, DAWN at the end of
 	// night, MORNING at sunrise.
-	time_t sunset = 0, nightStart = 0, nightEnd = 0, sunrise = 0;
-	rts2_status_t currType = -1, nextType = -1;
-	time_t cursor = noon;
-	for (int i = 0; i < 24 && !(sunset && sunrise); i++)
-	{
-		time_t probe = cursor + 1;
-		time_t evTime = cursor;
-		next_event (observer, &probe, &currType, &nextType, &evTime, nightHorizon, dayHorizon, eveningTime, morningTime);
-		if (evTime <= cursor)
-			break;					 // no progress - refuse to spin
-		switch (currType)
-		{
-			case SERVERD_DUSK:
-				if (!sunset)
-					sunset = cursor;
-				break;
-			case SERVERD_NIGHT:
-				if (!nightStart)
-				{
-					nightStart = cursor;
-					nightEnd = evTime;
-				}
-				break;
-			case SERVERD_MORNING:
-				if (!sunrise)
-					sunrise = cursor;
-				break;
-		}
-		cursor = evTime;
-	}
-
-	if (!sunset || !sunrise || sunrise <= sunset)
+	time_t sunset, nightStart, nightEnd, sunrise;
+	if (!findNightBoundaries (observer, noon, nightHorizon, dayHorizon, eveningTime, morningTime, sunset, nightStart, nightEnd, sunrise))
 		throw rts2core::Error ("cannot find a sunset/sunrise pair for this date at this observatory - a polar day or night, or a horizon configuration that never crosses");
 
 	if (points < 10)
@@ -938,6 +965,170 @@ void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, d
 		os << ",\"moonDisk\":";
 		jsonNumber (ln_get_lunar_disk (Timestamp ((sunset + sunrise) / 2.0).getJD ()), os);
 		os << ",\"points\":[" << pts.str () << "]}";
+	}
+	catch (...)
+	{
+		delete tar;
+		throw;
+	}
+	delete tar;
+}
+
+void rts2web::dbTargetVisibilityYear (int targetId, double fixedRa, double fixedDec, int year, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2core::Configuration *config = rts2core::Configuration::instance ();
+	struct ln_lnlat_posn *observer = config->getObserver ();
+
+	// Same [observatory] keys as dbTargetAltitude(), same reason: a plan
+	// for the whole year is based on the configured thresholds, not
+	// whatever an operator may have nudged centrald's live value to.
+	double nightHorizon = config->getDoubleDefault ("observatory", "night_horizon", -10);
+	double dayHorizon = config->getDoubleDefault ("observatory", "day_horizon", 0);
+	int eveningTime = config->getIntegerDefault ("observatory", "evening_time", 7200);
+	int morningTime = config->getIntegerDefault ("observatory", "morning_time", 1800);
+
+	rts2db::Target *tar = nullptr;
+	if (targetId >= 0)
+	{
+		// throws rts2db::SqlError for a nonexistent id, same as every
+		// other target endpoint here
+		tar = createTarget (targetId, observer, config->getObservatoryAltitude ());
+	}
+
+	ObjectCheck *checker = config->getObjectChecker ();
+
+	// Walked one calendar day at a time via struct tm (not by adding
+	// 86400 to a time_t): re-deriving each day's noon through mktime()
+	// lets libc apply that day's own DST offset, so the two days a year
+	// DST actually changes don't leave every following noon off by an
+	// hour until the next transition corrects it back.
+	struct tm tmDay;
+	memset (&tmDay, 0, sizeof (tmDay));
+	tmDay.tm_year = year - 1900;
+	tmDay.tm_mon = 0;
+	tmDay.tm_mday = 1;
+	tmDay.tm_hour = 12;
+	tmDay.tm_isdst = -1;
+
+	std::ostringstream days;
+	bool first = true;
+	try
+	{
+		for (int i = 0; i < 366; i++)
+		{
+			time_t dayNoon = mktime (&tmDay);
+			struct tm normalized;
+			localtime_r (&dayNoon, &normalized);
+			if (i > 0 && normalized.tm_year != year - 1900)
+				break;						 // wrapped into next year - done
+
+			// advance to the next calendar day for the following
+			// iteration before anything below can `continue` past it
+			tmDay = normalized;
+			tmDay.tm_mday += 1;
+			tmDay.tm_hour = 12;
+			tmDay.tm_min = 0;
+			tmDay.tm_sec = 0;
+			tmDay.tm_isdst = -1;
+
+			time_t sunset, nightStart, nightEnd, sunrise;
+			if (!findNightBoundaries (observer, dayNoon, nightHorizon, dayHorizon, eveningTime, morningTime, sunset, nightStart, nightEnd, sunrise))
+				continue;					 // polar day/night here on this date - just skip it
+
+			// ~10 min resolution: dbTargetAltitude() samples one night at
+			// up to 2000 points for an interactive per-pixel plot; this
+			// endpoint samples every night of a year, so a coarser fixed
+			// step keeps the whole response cheap without losing
+			// anything a one-point-per-day plot could show anyway.
+			int nSamples = (int) ((sunrise - sunset) / 600);
+			if (nSamples < 10)
+				nSamples = 10;
+
+			time_t riseTime = 0, setTime = 0;
+			double peakAlt = -90, peakTime = sunset;
+			bool everUp = false;
+
+			for (int s = 0; s <= nSamples; s++)
+			{
+				double t = sunset + (double) (sunrise - sunset) * s / nSamples;
+				double JD = Timestamp (t).getJD ();
+
+				struct ln_equ_posn equ;
+				struct ln_hrz_posn hrz;
+				if (tar)
+				{
+					tar->getPosition (&equ, JD);
+					tar->getAltAz (&hrz, JD, observer);
+				}
+				else
+				{
+					equ.ra = fixedRa;
+					equ.dec = fixedDec;
+					ln_get_hrz_from_equ (&equ, observer, JD, &hrz);
+				}
+
+				if (hrz.alt > peakAlt)
+				{
+					peakAlt = hrz.alt;
+					peakTime = t;
+				}
+
+				// the horizon at *this moment's* azimuth, same reason as
+				// dbTargetAltitude(): a target the telescope loses behind
+				// a hill isn't "up" just because it is above 0 degrees
+				if (hrz.alt > checker->getHorizonHeight (&hrz, 0))
+				{
+					everUp = true;
+					if (!riseTime)
+						riseTime = (time_t) t;
+					setTime = (time_t) t;
+				}
+			}
+
+			if (!first)
+				days << ",";
+			first = false;
+			days << "[";
+			jsonTime (dayNoon, days);
+			days << ",";
+			jsonTime (sunset, days);
+			days << ",";
+			if (nightStart)
+				jsonTime (nightStart, days);
+			else
+				days << "null";
+			days << ",";
+			if (nightEnd)
+				jsonTime (nightEnd, days);
+			else
+				days << "null";
+			days << ",";
+			jsonTime (sunrise, days);
+			days << ",";
+			if (everUp)
+				jsonTime (riseTime, days);
+			else
+				days << "null";
+			days << ",";
+			if (everUp)
+				jsonTime (setTime, days);
+			else
+				days << "null";
+			days << ",";
+			jsonNumber (peakAlt, days);
+			days << ",";
+			if (everUp)
+				jsonTime (peakTime, days);
+			else
+				days << "null";
+			days << "]";
+		}
+
+		os << "{\"id\":" << (tar ? tar->getTargetID () : -1) << ",\"name\":";
+		jsonString (tar ? tar->getTargetName () : "", os);
+		os << ",\"year\":" << year << ",\"days\":[" << days.str () << "]}";
 	}
 	catch (...)
 	{
