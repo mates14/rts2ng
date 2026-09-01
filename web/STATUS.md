@@ -2300,28 +2300,42 @@ independently of however many plot panels follow.
   real bug caught before shipping, where the naive "twilight ends at
   nightStart, or nothing if there's no nightStart" fallback silently
   turned every white night into a blank (day-looking) gap instead of the
-  solid twilight band it actually is. The target's visibility band
-  (`riseTime`..`setTime`, new `--sky-target-fill`) is the actual
-  butterfly wing - it sweeps across the plot over the year as sidereal
-  time drifts against the calendar, with a real gap on any day the
-  target never clears the horizon, matching the gap-stays-a-gap
-  convention `records.js` and `drawVisibility()` already established
-  rather than bridging it with a line nobody measured.
+  solid twilight band it actually is.
 - Year navigation (prev/this year/next) mirrors `#sky-panel`'s
   prev/today/next, same `apiUrl(currentSite, ...)` per-telescope pattern.
 
-**Not verified against a live daemon** - this session had no running
-centrald/httpd or database to test against (the prior phases' "smoke-
-tested end to end" entries were against real local instances this
-checkout doesn't have). Backend changes build clean
-(`cmake --build . --target rts2-httpd`); both monitor pages' inline
-`<script>` blocks and `target.js` pass `node --check`. Still needs the
-same live-daemon pass every prior phase got before this is trusted:
-a full year including at least one date the target never rises (confirm
-`riseTime`/`setTime`/`peakTime` come back `null` there, not garbage), a
-site with a real `night_horizon`/`day_horizon` far from the -10/0
-defaults, and the cloud graph's day/twilight bands checked against
-`next_event()` across the 8h/24h/3d range buttons.
+**Tested live at D50** - real day/night shading and the one-column width
+both confirmed working. The butterfly plot itself had a real bug, caught
+this way: a screenshot showed the visibility band staying solid blue
+across large stretches of the night "particularly at times when there
+should be none." Cause: the endpoint tracked only the first sample above
+the horizon and the last one (`riseTime`/`setTime`, one span per night) -
+correct for a simple rise-culminate-set target, wrong for anything
+circumpolar or near it, which sweeps through every azimuth over the
+course of a night and can duck behind a real horizon obstruction and
+re-emerge. The single span painted straight through that dip as if still
+visible. It also explains the plot's stray rectangular "notches": as the
+target's visibility structure flips between one continuous window and
+two separate ones through the year, which extreme sample "first-up" or
+"last-up" happens to land in jumps discontinuously day to day.
+
+Fixed by having `dbTargetVisibilityYear()` track the actual union of
+above-horizon intervals per night (`windowStart`/`windowEnd` vectors,
+one open/close pair per up/down transition) instead of two scalars. The
+day array is now `[noon, sunset, nightStart, nightEnd, sunrise, peakAlt,
+peakTime, windows]` - `windows` a (possibly empty) list of `[start, end]`
+pairs, `peakTime` no longer nulled (it is well-defined - the best moment
+that night - whether or not the target ever clears the horizon).
+`target.js` draws the visibility band as one filled rectangle per
+interval per day (column edges at the midpoint to each neighbouring
+day) rather than a single ribbon connected across days - a smooth
+connected area assumes one span per day, which is exactly the assumption
+that was wrong.
+
+Still to verify live after this fix: a genuinely circumpolar or
+near-circumpolar target (high declination for this latitude) across a
+full year, checking the visibility band now shows real gaps where the
+target ducks behind the horizon rather than solid blue through them.
 
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 

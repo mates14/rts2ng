@@ -295,12 +295,17 @@ void dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double ref
  * horizon that night, for a whole-year observability overview - the
  * yearly counterpart to dbTargetAltitude()'s single night.
  *
- * Each day is [noon, sunset, nightStart, nightEnd, sunrise, riseTime,
- * setTime, peakAlt, peakTime]: an array again, for the same size reason
- * every other endpoint here gives. nightStart/nightEnd/riseTime/setTime/
- * peakTime are `null` when they don't apply that day - no true RTS2-night
- * state that day (polar-ish twilight-only nights), or the target never
- * clears the horizon at all.
+ * Each day is [noon, sunset, nightStart, nightEnd, sunrise, peakAlt,
+ * peakTime, windows]: an array again, for the same size reason every
+ * other endpoint here gives. nightStart/nightEnd are `null` when there is
+ * no true RTS2-night state that day (polar-ish twilight-only nights).
+ * `windows` is a (possibly empty) list of [start, end] pairs: the actual
+ * intervals the target is above this telescope's real horizon that
+ * night, not just a single first-rise/last-set span - a circumpolar (or
+ * near-circumpolar) target sweeps through every azimuth over one night
+ * and can duck behind a real obstruction and reappear more than once, so
+ * collapsing this to one span would paint the dip in between as visible
+ * when it is not.
  *
  * A day with no sunset/sunrise pair at all (polar day/night) is silently
  * skipped rather than aborting the whole year the way dbTargetAltitude()

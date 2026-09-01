@@ -1173,14 +1173,14 @@ function describeYearVisibility () {
 
 	let best = null, visibleNights = 0;
 	for (const d of yearData.days) {
-		if (d[5] !== null)
+		if (d[7].length)
 			visibleNights++;
-		if (!best || d[7] > best[7])
+		if (!best || d[5] > best[5])
 			best = d;
 	}
 
 	yearSummaryEl.textContent = best
-		? `best around ${yearDateString (best[0])}: up to ${best[7].toFixed (0)}°, `
+		? `best around ${yearDateString (best[0])}: up to ${best[5].toFixed (0)}°, `
 			+ `visible on ${visibleNights} of ${yearData.days.length} nights`
 		: 'never rises above the horizon this year';
 
@@ -1296,7 +1296,26 @@ function drawYearVisibility () {
 	// null) so the two never double-paint the same night.
 	fillArea (d => d[1], d => d[2] !== null ? d[2] : d[4], cTwilight);	// sunset -> nightStart (or sunrise)
 	fillArea (d => d[3], d => d[4], cTwilight);						// nightEnd -> sunrise
-	fillArea (d => d[5], d => d[6], cTargetFill);						// riseTime -> setTime
+
+	// Target visibility: a set of intervals per night (d[7], [[start,
+	// end], ...]), not one span - a circumpolar target sweeps through
+	// every azimuth over a night and can duck behind a real horizon
+	// obstruction and reappear, so this is drawn as one filled rectangle
+	// per interval per day rather than a single ribbon connected across
+	// days, which would paint over any such dip as still visible.
+	ctx.fillStyle = cTargetFill;
+	for (let i = 0; i < days.length; i++) {
+		const d = days[i];
+		if (!d[7].length)
+			continue;
+		const cx = sx (d[0]);
+		const xL = i > 0 ? (cx + sx (days[i - 1][0])) / 2 : cx - (days.length > 1 ? (sx (days[1][0]) - cx) / 2 : 0);
+		const xR = i < days.length - 1 ? (cx + sx (days[i + 1][0])) / 2 : cx + (days.length > 1 ? (cx - sx (days[i - 1][0])) / 2 : 0);
+		for (const [ws, we] of d[7]) {
+			const yTop = sy (we - d[0]), yBottom = sy (ws - d[0]);
+			ctx.fillRect (xL, yTop, xR - xL, yBottom - yTop);
+		}
+	}
 
 	// y grid + labels, on a nice round number of hours
 	ctx.strokeStyle = grid;
@@ -1390,8 +1409,9 @@ function onYearMove (event) {
 	}
 
 	let text = `${yearDateString (best[0])}  sunset ${yearTimeLabel (best[1] - best[0])}  sunrise ${yearTimeLabel (best[4] - best[0])}`;
-	text += best[5] !== null
-		? `  up ${yearTimeLabel (best[5] - best[0])}–${yearTimeLabel (best[6] - best[0])}, peak ${best[7].toFixed (0)}°`
+	text += best[7].length
+		? '  up ' + best[7].map (([ws, we]) => `${yearTimeLabel (ws - best[0])}–${yearTimeLabel (we - best[0])}`).join (', ')
+			+ `, peak ${best[5].toFixed (0)}°`
 		: '  never above the horizon that night';
 	yearTooltipEl.textContent = text;
 	yearTooltipEl.style.display = 'block';

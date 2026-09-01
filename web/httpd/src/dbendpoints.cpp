@@ -21,6 +21,7 @@
 #include <ctime>
 #include <map>
 #include <mutex>
+#include <vector>
 
 using namespace rts2web;
 
@@ -1046,9 +1047,18 @@ void rts2web::dbTargetVisibilityYear (int targetId, double fixedRa, double fixed
 			if (nSamples < 10)
 				nSamples = 10;
 
-			time_t riseTime = 0, setTime = 0;
+			// A circumpolar (or near-circumpolar) target sweeps through
+			// every azimuth over the course of one night, so it can duck
+			// behind a real horizon obstruction and reappear more than
+			// once - the visible portion of a night is a set of
+			// intervals, not always one contiguous "rise to set" span.
+			// Collapsing it to first-up/last-up (an earlier version of
+			// this endpoint did) silently painted the dip in between as
+			// still visible.
+			std::vector<time_t> windowStart, windowEnd;
+			bool wasUp = false;
+			time_t curStart = 0, lastT = sunset;
 			double peakAlt = -90, peakTime = sunset;
-			bool everUp = false;
 
 			for (int s = 0; s <= nSamples; s++)
 			{
@@ -1078,13 +1088,21 @@ void rts2web::dbTargetVisibilityYear (int targetId, double fixedRa, double fixed
 				// the horizon at *this moment's* azimuth, same reason as
 				// dbTargetAltitude(): a target the telescope loses behind
 				// a hill isn't "up" just because it is above 0 degrees
-				if (hrz.alt > checker->getHorizonHeight (&hrz, 0))
+				bool up = hrz.alt > checker->getHorizonHeight (&hrz, 0);
+				if (up && !wasUp)
+					curStart = (time_t) t;
+				else if (!up && wasUp)
 				{
-					everUp = true;
-					if (!riseTime)
-						riseTime = (time_t) t;
-					setTime = (time_t) t;
+					windowStart.push_back (curStart);
+					windowEnd.push_back ((time_t) t);
 				}
+				wasUp = up;
+				lastT = (time_t) t;
+			}
+			if (wasUp)
+			{
+				windowStart.push_back (curStart);
+				windowEnd.push_back (lastT);
 			}
 
 			if (!first)
@@ -1107,23 +1125,21 @@ void rts2web::dbTargetVisibilityYear (int targetId, double fixedRa, double fixed
 			days << ",";
 			jsonTime (sunrise, days);
 			days << ",";
-			if (everUp)
-				jsonTime (riseTime, days);
-			else
-				days << "null";
-			days << ",";
-			if (everUp)
-				jsonTime (setTime, days);
-			else
-				days << "null";
-			days << ",";
 			jsonNumber (peakAlt, days);
 			days << ",";
-			if (everUp)
-				jsonTime (peakTime, days);
-			else
-				days << "null";
-			days << "]";
+			jsonTime (peakTime, days);
+			days << ",[";
+			for (size_t w = 0; w < windowStart.size (); w++)
+			{
+				if (w)
+					days << ",";
+				days << "[";
+				jsonTime (windowStart[w], days);
+				days << ",";
+				jsonTime (windowEnd[w], days);
+				days << "]";
+			}
+			days << "]]";
 		}
 
 		os << "{\"id\":" << (tar ? tar->getTargetID () : -1) << ",\"name\":";
