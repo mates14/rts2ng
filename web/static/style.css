@@ -642,6 +642,14 @@ header h1 {
 	align-items: start;
 }
 
+/* the two visibility plots sit in their own grid, below What/How/When -
+ * a separate grid container rather than a fourth/fifth column in the
+ * same one, so they always start a new row instead of competing with
+ * the editor boxes for width on a narrower screen */
+#target-graphs {
+	margin-top: 16px;
+}
+
 .target-box {
 	margin-bottom: 0;
 }

@@ -2242,13 +2242,23 @@ framing is specific to what the cloudmeter means, not something every
 recorded value should assume.
 
 **`#sky-panel` narrowed to one grid column.** It was a full-width
-`.panel` sitting outside `#target-boxes`; now it is a fourth
-`.panel.target-box` inside that grid, picking up the same
-`repeat(auto-fit, minmax(340px, 1fr))` sizing the What/How/When boxes
-already use - exactly the "accept a fourth box" extensibility that grid
-was built for (see the target-editor reframe phase above). No JS
-changes; the panel's contents are looked up by id regardless of DOM
-position.
+`.panel` sitting outside `#target-boxes`; now it is a `.panel.target-box`
+picking up the same `repeat(auto-fit, minmax(340px, 1fr))` sizing the
+What/How/When boxes already use - exactly the "accept a fourth box"
+extensibility that grid was built for (see the target-editor reframe
+phase above). No JS changes; the panel's contents are looked up by id
+regardless of DOM position.
+
+Tested live at D50 with five boxes (What/How/When plus the two
+visibility plots) all in that one grid: on a narrower/laptop screen
+`auto-fit` was cramming all five into one row rather than wrapping after
+three, per the user ("the number of columns raised to 5 may be too much
+for my screen"). Fixed by giving the two plots their own sibling grid,
+`#target-graphs` (same `.target-boxes` class, so identical column
+sizing/gap), placed after `#target-boxes` closes rather than as more
+items inside it - a separate grid container always starts its own row,
+where `auto-fit` within a single grid does not, so What/How/When wrap
+independently of however many plot panels follow.
 
 **Yearly visibility ("butterfly") plot**: `/api/db/target-visibility-year
 ?id=N[&year=YYYY]` (or `ra=&dec=` for an unsaved target, same contract as
