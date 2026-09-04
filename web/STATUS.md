@@ -2428,6 +2428,52 @@ spoken for by target/Moon/horizon/night on either plot - one "this is
 the peer telescope" colour identity shared across both plots rather than
 two independently-chosen ones.
 
+### "New target id doesn't work" - real bug, found via a real user report (2026-09-04)
+
+Filip reported the **New target…** button failing with "could not find
+an id free on both telescopes after several tries - try again" where it
+should have found something around 8040. Root cause, confirmed by
+reading the actual current code rather than assuming: a genuine
+regression interaction between two changes that landed separately and
+never got reconciled.
+
+`rts2db::newTargetId()` was rewritten (commit a322bf1, a fix for a real
+problem of its own - `nextval('tar_id')` permanently burned an id even
+when the web form was abandoned without saving, which is exactly how
+IDs 8044..30007 got silently consumed during this session's own
+testing) from a monotonic sequence draw into a **stateless live scan**
+for the smallest free `tar_id`. That's correct and desirable on its
+own, but nobody updated the caller that mattered: the web target-
+editor's "New target" retry loop (`web/static/target.js`,
+`new-target-btn`'s click handler) was written against the *old*
+semantics - "call `/api/db/new-target-id` again, get a fresh number" -
+and calling the *new* stateless scan again with nothing changed in
+between simply returns the **identical** candidate every time. On a
+genuine cross-telescope collision (the candidate free on this site but
+already a real, unrelated target on the sibling site), the loop
+re-asked the exact same question up to 8 times, got the exact same
+(still-colliding) answer every time, and failed - not occasionally,
+*every single time* there was a real collision to resolve, which is
+exactly what Filip hit.
+
+**Fix**: `rts2db::newTargetId()` now takes an `after` parameter
+(default: the whole `[8000,49999]` range) so a caller can ask "the
+smallest free id *above* this one" - `GET /api/db/new-target-id?after=N`.
+The frontend's retry loop now tracks the last rejected candidate and
+passes it back in as `after` on the next attempt, so each retry
+genuinely advances instead of re-asking the same question.
+
+**Verified against the literal failure mode, not just the API in
+isolation**: seeded two real target rows (`8000`, `8001`) on a test
+"SBT" database specifically to block D50's first two scan results,
+confirmed via raw `curl` that `new-target-id` without `after` returns
+`8000` twice in a row (the bug, reproduced deliberately) while
+`?after=8000` correctly returns `8001` and `?after=8001` returns
+`8002`, then drove the real **New target** button via headless-Chrome/
+CDP against that exact seeded collision and confirmed it now correctly
+lands on `8002` - free on both sides - instead of failing. Test rows
+and databases cleaned up afterward.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.

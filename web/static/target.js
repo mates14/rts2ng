@@ -469,10 +469,19 @@ document.getElementById ('new-target-btn').addEventListener ('click', async () =
 	setStatus (loadStatusEl, true, 'reserving a new target id…');
 
 	let id = null;
+	let after = null; // see rts2db::newTargetId()'s doc comment - the
+	// scan is stateless, so re-asking with the same `after` (or none)
+	// after a collision just returns the identical candidate again,
+	// forever. Must advance `after` past each rejected id to make
+	// real progress - found live, see STATUS.md task 10's "New target
+	// id doesn't work" writeup (this loop originally assumed the old
+	// nextval()-sequence backend, which handed out a fresh number on
+	// every call with no `after` needed at all).
 	for (let attempt = 0; attempt < 8 && id === null; attempt++) {
 		let candidate;
 		try {
-			const r = await fetchJson (apiUrl (currentSite, 'api/db/new-target-id'));
+			const url = 'api/db/new-target-id' + (after !== null ? `?after=${after}` : '');
+			const r = await fetchJson (apiUrl (currentSite, url));
 			if (!r.ok) {
 				setStatus (loadStatusEl, false, `cannot reserve an id: ${r.body.error || 'error'}`);
 				return;
@@ -485,12 +494,14 @@ document.getElementById ('new-target-btn').addEventListener ('click', async () =
 
 		// tar_id sequences are independent per database - a fresh id from
 		// this site's sequence could already be a real, unrelated target
-		// on the other site. Check, and draw again if so (see
-		// STATUS.md task 10 phase 5).
+		// on the other site. Check, and draw again (past this one - see
+		// above) if so.
 		try {
 			const r = await fetchJson (apiUrl (otherSite (), `api/db/target?id=${candidate}`));
 			if (!r.ok)
 				id = candidate; // not found there either - safe on both sides
+			else
+				after = candidate;
 		} catch (e) {
 			id = candidate; // other site unreachable - can't check, proceed with what we have
 		}

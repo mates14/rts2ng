@@ -1839,29 +1839,47 @@ int Target::printImages (double JD, std::ostream &_os, int flags, const char *im
 	return img_set.size ();
 }
 
-int rts2db::newTargetId ()
+int rts2db::newTargetId (int after)
 {
 	if (checkDbConnection ())
 		throw SqlError ();
 
 	EXEC SQL BEGIN DECLARE SECTION;
 	int db_new_id;
+	int db_after = after;
 	EXEC SQL END DECLARE SECTION;
 
 	// Mirrors rts2-addtarget's own algorithm (rtspy/cli/addtarget.py,
-	// _find_free_id): the smallest tar_id in [8000, 49999] not already
-	// present in this database, computed fresh on every call instead of
-	// drawn from a monotonic sequence. A sequence draw is never given
-	// back even if the caller abandons it without saving anything
-	// (nextval() is intentionally non-transactional) - that's what
-	// silently burned through IDs 8044..30007 during web UI testing
-	// before this was a live scan. Scanning live also means an id that
-	// was inserted and later deleted (e.g. purged because it was never
-	// observed) becomes available again right away. 50000+ is GRB's own
-	// reserved range (grb_tar_id sequence), left untouched.
+	// _find_free_id): the smallest tar_id above `after` and within
+	// [8000, 49999] not already present in this database, computed
+	// fresh on every call instead of drawn from a monotonic sequence.
+	// A sequence draw is never given back even if the caller abandons
+	// it without saving anything (nextval() is intentionally non-
+	// transactional) - that's what silently burned through IDs
+	// 8044..30007 during web UI testing before this was a live scan.
+	// Scanning live also means an id that was inserted and later
+	// deleted (e.g. purged because it was never observed) becomes
+	// available again right away. 50000+ is GRB's own reserved range
+	// (grb_tar_id sequence), left untouched.
+	//
+	// `after` matters because this is stateless: calling it twice with
+	// the same `after` and nothing inserted in between returns the
+	// identical id both times. The web target-creation flow calls this
+	// per-database, and a candidate id can be free here but already
+	// taken by an unrelated real target in a sibling database - the
+	// caller has to pass that rejected id back in as `after` to get a
+	// genuinely different candidate on retry, or it loops on the same
+	// answer forever. Found live (STATUS.md task 10): the frontend's own
+	// retry loop was written assuming this was still the old sequence
+	// draw (a fresh number every call) and never got updated when this
+	// function became a stateless scan - every retry re-asked the exact
+	// same question and got the exact same (still-colliding) answer,
+	// failing "could not find an id free on both telescopes" every time
+	// there was a genuine collision, not just occasionally.
 	EXEC SQL SELECT gs.id INTO :db_new_id
 		FROM generate_series (8000, 49999) AS gs (id)
-		WHERE NOT EXISTS (SELECT 1 FROM targets WHERE tar_id = gs.id)
+		WHERE gs.id > :db_after
+		AND NOT EXISTS (SELECT 1 FROM targets WHERE tar_id = gs.id)
 		ORDER BY gs.id LIMIT 1;
 	if (sqlca.sqlcode == ECPG_NOT_FOUND)
 		throw SqlError ("no free tar_id in the auto-assign range [8000,49999]");

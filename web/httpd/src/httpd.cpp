@@ -1701,24 +1701,30 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 	}
 	else if (!strcmp (url, "/api/db/new-target-id"))
 	{
-		// Read-only in effect (mints an ID via nextval but creates
-		// nothing), but treated as a write for auth purposes anyway -
-		// there's no legitimate read-only use for "reserve me an ID",
-		// and it costs nothing to gate it the same as the endpoints it
-		// exists to feed.
+		// Read-only in effect (finds a free id via a live scan but
+		// creates nothing), but treated as a write for auth purposes
+		// anyway - there's no legitimate read-only use for "reserve me
+		// an id", and it costs nothing to gate it the same as the
+		// endpoints it exists to feed.
 		std::string authError;
 		if (!checkWriteAuth (connection, "db-targets", authError))
 			return sendUnauthorized (connection, authError.c_str ());
 
+		// See rts2db::newTargetId()'s doc comment for why this matters:
+		// the scan is stateless, so a caller retrying past a candidate
+		// that collided in a sibling database must pass it back in here
+		// to get a genuinely different answer.
+		int after = atoi (getParam (connection, "after", "7999"));
+
 		MHD_suspend_connection (connection);
-		workerPool->submit ([this, connection] ()
+		workerPool->submit ([this, connection, after] ()
 		{
 			DbResult r;
 			r.connection = connection;
 			std::ostringstream os;
 			try
 			{
-				dbNewTargetId (os);
+				dbNewTargetId (after, os);
 				r.body = os.str ();
 				r.httpStatus = MHD_HTTP_OK;
 			}

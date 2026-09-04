@@ -319,11 +319,11 @@ void rts2web::dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostrin
 	delete fresh;
 }
 
-void rts2web::dbNewTargetId (std::ostringstream &os)
+void rts2web::dbNewTargetId (int after, std::ostringstream &os)
 {
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
 
-	int id = rts2db::newTargetId ();
+	int id = rts2db::newTargetId (after);
 	os << "{\"id\":" << id << "}";
 }
 

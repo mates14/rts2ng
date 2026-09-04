@@ -1215,18 +1215,26 @@ class TargetTerestial:public ConstTarget
 // deliberately-unported/removed target types.
 
 /**
- * Mint a fresh, currently-unused target ID from the same `tar_id`
- * sequence Target::save() already draws from internally when no
- * explicit ID is given - factored out as its own function so a caller
- * (the web target-creation flow) can reserve an ID *before* any fields
- * are filled in, e.g. to check it's also free in a sibling database
- * before committing to it. Does not create a target row - a caller that
- * never follows up just leaves a small gap in the sequence, same as any
- * other save() that's abandoned mid-edit.
+ * Find a fresh, currently-unused target ID: the smallest value in
+ * (after, 49999] not already present in `targets` (mirrors
+ * rts2-addtarget's own `_find_free_id` algorithm - see target.ec).
+ * Stateless - computed live on every call, not drawn from a sequence -
+ * so calling this twice with the same `after` and no intervening insert
+ * returns the *same* id both times. That matters to the web target-
+ * creation flow: when a candidate id is free here but already taken in
+ * a sibling database, the caller must pass that rejected id back in as
+ * `after` on the next call to actually make progress, rather than
+ * re-asking the identical question and looping forever (found live -
+ * see STATUS.md task 10's "New target id doesn't work" writeup).
+ * Does not create a target row - an id nobody ever saves against just
+ * stays free for the next caller, unlike a sequence draw.
  *
- * @throw SqlError on a DB-layer failure.
+ * @param after   scan starts strictly above this id (default: the
+ *                whole [8000,49999) auto-assign range).
+ *
+ * @throw SqlError on a DB-layer failure or if the range is exhausted.
  */
-int newTargetId ();
+int newTargetId (int after = 7999);
 
 }
 

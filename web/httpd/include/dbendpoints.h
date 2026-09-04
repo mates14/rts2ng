@@ -96,14 +96,15 @@ struct TargetUpdate
 void dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostringstream &os);
 
 /**
- * GET /api/db/new-target-id - mints a fresh, currently-unused target ID
- * (rts2db::newTargetId()) without creating anything. The frontend's "new
- * target" / "replicate to the telescope that's missing it" flows use
- * this to reserve a single ID before deciding which database(s) to
- * actually create the row in (checking it's free on both first, when
- * creating a genuinely brand-new target that should exist on both).
+ * GET /api/db/new-target-id?after=N - finds a fresh, currently-unused
+ * target ID (rts2db::newTargetId()) without creating anything. `after`
+ * (optional, default: whole range) matters because this is stateless -
+ * see newTargetId()'s doc comment. The frontend's "new target" /
+ * "replicate to the telescope that's missing it" flows call this per
+ * database and pass a rejected candidate back in as `after` to actually
+ * advance on retry, instead of re-asking the identical question.
  */
-void dbNewTargetId (std::ostringstream &os);
+void dbNewTargetId (int after, std::ostringstream &os);
 
 /**
  * POST /api/db/target-create?id=N&type=equatorial|elliptical&... -
