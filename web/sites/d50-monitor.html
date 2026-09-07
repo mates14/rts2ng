@@ -767,10 +767,21 @@
             }
         }
 
+        // The caption needs the same `?t=` cache-buster the <img> reloads
+        // above already carry.  Apache serves these files with only
+        // Last-Modified/ETag - no Cache-Control - so a plain fetch() is
+        // subject to heuristic freshness (~10% of the file's age), and the
+        // browser will happily serve a stale C{n}_info.txt without even
+        // revalidating.  That bites hardest at the start of a night: the
+        // file is then ~15 h old, so the heuristic pins it for over an
+        // hour while the pictures next to it refresh every 15 s - exactly
+        // the "picture is current but the caption is from last night"
+        // report this came from.
         function updateImageInfo() {
+            const t = new Date().getTime();
             for (const cam of ['C0', 'C1']) {
                 const el = document.getElementById(cam.toLowerCase() + '-info');
-                fetch(`${cam}_info.txt`)
+                fetch(`${cam}_info.txt?t=${t}`)
                     .then(res => res.text())
                     .then(text => { el.textContent = text.trim(); })
                     .catch(() => { el.textContent = ''; });
