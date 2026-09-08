@@ -316,7 +316,7 @@ void Camera::startImageData (rts2core::Connection * conn)
 			}
 			sharedData->clearChan2Seg ();
 			logStream (MESSAGE_WARNING) << "starting binary connection instead of shared data connection" << sendLog;
-			currentImageData = conn->startBinaryData (dataType->getValueInteger (), chnTot, chansize);
+			currentImageData = conn->startBinaryData (getDataType (), chnTot, chansize);
 			currentImageTransfer = TCPIP;
 		}
 		else
@@ -327,7 +327,7 @@ void Camera::startImageData (rts2core::Connection * conn)
 	}
 	else
 	{
-		currentImageData = conn->startBinaryData (dataType->getValueInteger (), chnTot, chansize);
+		currentImageData = conn->startBinaryData (getDataType (), chnTot, chansize);
 		currentImageTransfer = TCPIP;
 	}
 	exposureConn = conn;
@@ -420,6 +420,8 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 	lastExposurePixels = 0;
 	lastExposureBytes = 0;
+	// initDataTypes() has not run yet, so getDataType() is not callable here
+	lastExposureDataType = RTS2_DATA_USHORT;
 
 	histories = 0;
 	comments = 0;
@@ -972,7 +974,7 @@ int Camera::sendReadoutData (char *data, size_t dataSize, int chan)
 	{
 		int totPix = 0;
 		// update sum. min and max
-		switch (getDataType ())
+		switch (getLastExposureDataType ())
 		{
 			case RTS2_DATA_BYTE:
 				totPix = updateStatistics ((uint8_t *) data, dataSize);
@@ -1035,7 +1037,7 @@ int Camera::sendReadoutData (char *data, size_t dataSize, int chan)
 	}
 	else
 	{
-		computedPix->setValueLong (computedPix->getValueLong () + dataSize / usedPixelByteSize ());
+		computedPix->setValueLong (computedPix->getValueLong () + dataSize / lastExposurePixelByteSize ());
 		sendValueAll (computedPix);
 	}
 
@@ -1047,7 +1049,7 @@ int Camera::sendReadoutData (char *data, size_t dataSize, int chan)
 
 	if (calculateCenter->getValueBool ())
 	{
-		switch (getDataType ())
+		switch (getLastExposureDataType ())
 		{
 			case RTS2_DATA_BYTE:
 				updateCenter ((uint8_t *) data, dataSize);
@@ -1139,6 +1141,28 @@ void Camera::addDataType (int in_type)
 	}
 	std::cerr << "Cannot find type: " << in_type << std::endl;
 	exit (1);
+}
+
+int Camera::setDataType (int ntype)
+{
+	int i = 0;
+	for (std::vector < rts2core::SelVal >::iterator iter = dataType->selBegin (); iter != dataType->selEnd (); iter++, i++)
+	{
+		if (((DataType *) iter->data)->type == ntype)
+		{
+			dataType->setValueInteger (i);
+			// dataType is private, so a driver switching the type cannot
+			// announce it itself - do it here, or clients keep displaying
+			// the type the camera has stopped using
+			sendValueAll (dataType);
+			return 0;
+		}
+	}
+	// the caller asked for a type it never registered in initDataTypes(); silently
+	// picking something else would mean announcing one type and sending another
+	logStream (MESSAGE_ERROR) << "setDataType: data type " << ntype
+		<< " was not registered by initDataTypes(), keeping " << getDataType () << sendLog;
+	return -1;
 }
 
 void Camera::initDataTypes ()
@@ -1633,7 +1657,8 @@ int Camera::camStartExposureWithoutCheck ()
 	}
 
 	// Fill the image header while we have all the actual values used to start exposure
-	fhd->data_type = htons (getDataType ());
+	lastExposureDataType = getDataType ();
+	fhd->data_type = htons (lastExposureDataType);
 	fhd->naxes = 2;
 	fhd->sizes[0] = htonl (chipUsedReadout->getWidthInt () / binningHorizontal ());
 	fhd->sizes[1] = htonl (chipUsedReadout->getHeightInt () / binningVertical ());

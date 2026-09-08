@@ -393,14 +393,27 @@ class Camera:public rts2core::ScriptDevice
 		}
 
 		/**
-		 * Set data type to given value. Value is index to dataType selection, created in
-		 * initDataTypes method.
+		 * Data type latched at exposure start, as one of the RTS2_DATA_XXXX
+		 * constants. A driver which changes the data type between exposures
+		 * must use this - and not getDataType() - during readout, so that it
+		 * decodes the frame the way it was announced to the client.
 		 *
-		 * @param ntype new data type index
+		 * @see camStartExposure()
+		 */
+		const int getLastExposureDataType () { return lastExposureDataType; }
+
+		/**
+		 * Set data type to one of the RTS2_DATA_XXXX constants. The type must
+		 * have been registered with addDataType() from initDataTypes(); asking
+		 * for anything else is a driver bug and leaves the type unchanged.
+		 *
+		 * @param ntype new data type, a RTS2_DATA_XXXX constant
+		 *
+		 * @return 0 on success, -1 if the type is not among the registered ones
 		 *
 		 * @see initDataTypes()
 		 */
-		void setDataType (int ntype) { dataType->setValueInteger (ntype); }
+		int setDataType (int ntype);
 
 		/**
 		 * Allow user change data type directly. Usually data type should be changed
@@ -489,6 +502,18 @@ class Camera:public rts2core::ScriptDevice
 			if (getDataType () == RTS2_DATA_ULONG)
 				return 4;
 			return abs (getDataType () / 8);
+		}
+
+		/**
+		 * Size of a pixel in bytes for the data type latched at exposure start.
+		 *
+		 * @see getLastExposureDataType()
+		 */
+		const int lastExposurePixelByteSize ()
+		{
+			if (getLastExposureDataType () == RTS2_DATA_ULONG)
+				return 4;
+			return abs (getLastExposureDataType () / 8);
 		}
 
 		/**
@@ -999,6 +1024,7 @@ class Camera:public rts2core::ScriptDevice
 		// Sizes of last exposed frame, to be used for readout
 		size_t lastExposurePixels;
 		size_t lastExposureBytes;
+		int lastExposureDataType;
 
 		int histories;
 		int comments;

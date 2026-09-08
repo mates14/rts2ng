@@ -209,6 +209,7 @@ namespace rts2camd
 
     // ACQUISITION MODE
     int setTiming ();           // Really set and recompute the acq mode
+    void setAccumulationDataType ();    // 32-bit pixels for ACCUMULATE, 16-bit elsewhere
     int setAcqMode (int mode);  // now does nothing, needed to compile the expose, which is not changed yet
     // Values that are really considered when recomputing Timing
     // rts2core::ValueFloat * accCycleGap; // assumed zero
@@ -455,7 +456,7 @@ Andor::isExposing ()
       status = GetTotalNumberImagesAcquired (&lAcquired);
       logStream (MESSAGE_DEBUG) << "Circular buffer size " << lAcquired <<
         " status " << status << sendLog;
-      switch (getDataType ())
+      switch (getLastExposureDataType ())
         {
         case RTS2_DATA_LONG:
           if (GetMostRecentImage
@@ -556,7 +557,7 @@ Andor::doReadout ()
   if (acqMode->getValueInteger () == ACQMODE_KINETIC)
     {
 
-      switch (getDataType ())
+      switch (getLastExposureDataType ())
         {
         case RTS2_DATA_FLOAT:
           logStream (MESSAGE_INFO) << "doReadout: GetAcquiredFloatData" <<
@@ -609,7 +610,7 @@ Andor::doReadout ()
               return 100;
             }
           logStream (MESSAGE_ERROR) << "andor GetAcquiredXXXX " <<
-            getDataType () << " return " << ret << sendLog;
+            getLastExposureDataType () << " return " << ret << sendLog;
           return -1;
         }
 
@@ -625,7 +626,7 @@ Andor::doReadout ()
   if (acqMode->getValueInteger () == ACQMODE_SINGLE
       || acqMode->getValueInteger () == ACQMODE_ACCUMULATE)
     {
-      switch (getDataType ())
+      switch (getLastExposureDataType ())
         {
         case RTS2_DATA_FLOAT:
           logStream (MESSAGE_INFO) << "doReadout: GetAcquiredFloatData" <<
@@ -663,7 +664,7 @@ Andor::doReadout ()
               return 100;
             }
           logStream (MESSAGE_ERROR) << "andor GetAcquiredXXXX " <<
-            getDataType () << " return " << ret << sendLog;
+            getLastExposureDataType () << " return " << ret << sendLog;
           return -1;
         }
 
@@ -719,6 +720,47 @@ Andor::scriptEnds ()
   return Camera::scriptEnds ();
 }
 
+/*
+ * Pick the pixel data type the current acquisition mode needs.
+ *
+ * Only ACCUMULATE sums scans into the frame we save, and there the sum runs
+ * past 16 bits long before the object does: every one of the ACCNUM scans
+ * carries the full bias offset and the full sky, so a 250x accumulation is
+ * already tens of thousands of ADU deep with the shutter closed on a dark
+ * sky.  Those frames go out as 32-bit ints, which is what GetAcquiredData()
+ * hands us anyway; GetAcquiredData16() is documented to corrupt data above
+ * 65535, so 16 bits there is not a saturated frame, it is a wrapped one.
+ *
+ * Everything else stays 16-bit.  A single scan cannot exceed the ADC, and
+ * the kinetic series is averaged back down by ACCNUM in doReadout() and is
+ * a preview rather than a science product - neither has anything to gain
+ * from doubling the size of every file on disk.
+ *
+ * data_type stays read-only for clients on purpose: it is a consequence of
+ * ACQMODE and ACCNUM, not an independent knob, and a script that could set
+ * the two apart would only be able to get them wrong.  Changing the value
+ * from here works regardless of the writable flag, which gates only
+ * client-side set commands.
+ */
+void
+Andor::setAccumulationDataType ()
+{
+  bool accumulating = (acqMode->getValueInteger () == ACQMODE_ACCUMULATE)
+    && (accNumber->getValueInteger () > 1);
+  int wanted = accumulating ? RTS2_DATA_LONG : RTS2_DATA_USHORT;
+
+  if (getDataType () == wanted)
+    return;
+
+  if (setDataType (wanted))
+    return;                     // setDataType() logged what went wrong
+
+  logStream (MESSAGE_INFO) << "setTiming: acqMode=" <<
+    acqMode->getValueInteger () << " accnum=" <<
+    accNumber->getValueInteger () << ", switching to " <<
+    (accumulating ? "32-bit" : "16-bit") << " pixels" << sendLog;
+}
+
 // *** recalculate CCD timing, this function should be called after any change of parameters involved
 int
 Andor::setTiming ()
@@ -768,6 +810,8 @@ Andor::setTiming ()
 
   ret = GetAcquisitionTimings (&expt, &acct, &kint);
   checkRet ("setTiming()", "GetAcquisitionTimings()");
+
+  setAccumulationDataType ();
 
   // When somene decides to support gaps between exposures, here is a chunk...
   //        acct+=accCycleGap->getValueFloat();
