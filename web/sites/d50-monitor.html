@@ -1254,9 +1254,6 @@
         // which JSON has no room for), and null means "not guiding" -
         // never "same as last time".
         const GUIDE_CAM = 'C1';
-        // /preview/<path>?ps= is the same daemon and the same proxy path
-        // as the API, one step up: /images/api -> /images/preview.
-        const PREVIEW_BASE = API_BASE.replace(/\/api$/, '/preview');
         const GUIDE_LIVE_SECONDS = 300;
 
         let guideLive = [];              // {t, dx, dy, fwhm, n} for the last 5 min
@@ -1318,15 +1315,20 @@
             while (guideLive.length && guideLive[0].t < now - GUIDE_LIVE_SECONDS)
                 guideLive.shift();
 
+            // The cutout is rendered by the guide script itself, using the
+            // stretch pyrt-f2cj fitted for this field, and dropped beside the
+            // C0 preview for Apache to serve.  Deliberately not /preview/:
+            // that endpoint has no histogram case for signed short, so it
+            // scales the guide cutouts to a flat grey.  guide_last_image
+            // still drives the reload - it names the FITS this JPEG was made
+            // from, and changes exactly once per kept frame.
             const path = typeof data.guide_last_image === 'string' ? data.guide_last_image : '';
             if (path && path !== guideLastImage) {
                 guideLastImage = path;
-                // Same encoding the archive thumbnails use: each path
-                // segment separately, so the slashes survive.
-                const url = `${PREVIEW_BASE}/${path.split('/').map(encodeURIComponent).join('/')}`;
-                document.getElementById('guide-frame-img').src = `${url}?ps=240`;
+                const url = `guide_last.jpg?t=${Date.now()}`;
+                document.getElementById('guide-frame-img').src = url;
                 document.getElementById('guide-frame-img').onclick =
-                    () => openLightbox(`${url}?ps=900`, `${GUIDE_CAM} - ${path.split('/').pop()}`);
+                    () => openLightbox(url, `${GUIDE_CAM} - ${path.split('/').pop()}`);
             }
 
             status.className = 'cloud-status';

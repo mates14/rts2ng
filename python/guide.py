@@ -17,8 +17,10 @@ import shutil
 from datetime import datetime
 import subprocess
 import time
+import threading
 import numpy as np
 import astropy.io.fits as pyfits
+from PIL import Image
 import rts2comm
 
 # --- site configuration ----------------------------------------------------
@@ -40,6 +42,25 @@ GUIDE_CAM = 'C1'
 # the first, which is exactly what /preview/<path> expects.
 IMAGES_DIR = os.environ.get('RTS2_IMAGES_DIR', '/data')
 GUIDE_SUBDIR = 'guide'
+
+# The web copy of the latest cutout, and the cached stretch used to make
+# it.  This goes to the httpd's *static* directory rather than the images
+# directory, because rts2-httpd exposes the latter only through /preview/,
+# whose scaling collapses anything that is not USHORT or FLOAT to a flat
+# grey (getChannelHistogram() has no case for signed short).  The page
+# therefore loads a plain JPEG from Apache, exactly as it already does for
+# the C0 preview next to it.
+WEB_JPEG = '/var/www/info/guide_last.jpg'
+
+# pyrt-f2cj fits log10(counts) to the byte range and prints the three
+# coefficients.  It costs ~1.7 s, nearly all of it interpreter start-up,
+# against a guiding cadence of ~2 s - so it runs once per observation, off
+# the guiding thread, and every frame in between is rendered with the
+# coefficients already in hand.  Keeping the last set in /dev/shm means a
+# fresh run has something to publish from its very first frame instead of
+# showing nothing until the fit lands.
+LEVELS_CACHE = '/dev/shm/%s_guide_levels' % GUIDE_CAM
+LEVELS_RE = re.compile(r'Fitted parameters: A=(\S+?), B=(\S+?), C=(\S+?) ')
 
 # Kept frames are sorted into per-night directories named the way RTS2
 # names nights (%N: the UT date at the start of the night, boundary near
@@ -69,9 +90,37 @@ FWHM_BOX = 15
 PIXEL_SCALE = 1.42
 
 
+def load_levels():
+    """Last stretch pyrt-f2cj fitted, or None when there is not one yet."""
+    try:
+        with open(LEVELS_CACHE) as f:
+            a, b, c = (float(v) for v in f.read().split())
+        return a, b, c
+    except Exception:
+        return None
+
+
+def save_levels(levels):
+    """Best-effort: a stretch that cannot be cached is not worth a failure."""
+    try:
+        tmp = LEVELS_CACHE + '.tmp'
+        with open(tmp, 'w') as f:
+            f.write('%.10g %.10g %.10g\n' % levels)
+        os.replace(tmp, LEVELS_CACHE)
+    except Exception:
+        pass
+
+
 class GuideScript(rts2comm.Rts2Comm):
     """ Guide the telescope with a CMOS camera on a WF lens."""
     def __init__(self):
+        super().__init__()
+
+        # Stretch for the web cutout: whatever the last run left behind,
+        # refined once this run's own field has been through pyrt-f2cj.
+        self.levels = load_levels()
+        self.levels_thread = None
+
         self.detect4g = "/etc/rts2/detect4g"
 
         # how much of the detected offset to apply (to dump resonance)
@@ -106,9 +155,6 @@ class GuideScript(rts2comm.Rts2Comm):
 #        self.lasty = 0  # will be removed
 #        self.lastx = 0  # will be removed
 
-#       It would be nice to call the parent init(), but I do not happen to find a clean way
-#       ... rts2comm.init() is empty anyway
-#        super(GuideScript, self).__init__()
 
     def run_prg_get_array(self, imgfile):
         """ pass the image to sextractor and geta star list """
@@ -381,6 +427,7 @@ class GuideScript(rts2comm.Rts2Comm):
                     fwhm = self.measure_fwhm(box)
                     path = self.write_frame(box, header, (c0, r0), star,
                                             dx, dy, pra, pdec, nstars, fwhm)
+                    self.publish_jpeg(box, path)
         except Exception as ex:
             # Guiding continues without its frames; the telescope does
             # not stop tracking over a full disk or a missing directory.
@@ -388,6 +435,58 @@ class GuideScript(rts2comm.Rts2Comm):
 
         self.publish(dx, dy, pra, pdec, nstars, fwhm, path)
         self.frame = None
+
+    def fit_levels(self, path):
+        """Re-derive the stretch for this field, on a thread of its own.
+
+        Runs once per observation.  Guiding must not wait on it, and the
+        display must not either - until it lands, the cached coefficients
+        from the previous run are close enough to be worth showing.
+        """
+        try:
+            # No -i here: in pyrt-f2cj that is --inverted, not --input.  The
+            # input file is positional.
+            ret = subprocess.run(['pyrt-f2cj', '-o', '/dev/shm/guide_fit.jpg',
+                                  path],
+                                 capture_output=True, text=True, timeout=120)
+            found = LEVELS_RE.search(ret.stdout)
+            if found is None:
+                self.warn('guide: pyrt-f2cj gave no levels for %s' % path)
+                return
+            self.levels = tuple(float(v.rstrip(',')) for v in found.groups())
+            save_levels(self.levels)
+        except Exception as ex:
+            self.warn('guide: cannot fit levels: %s' % ex)
+
+    def publish_jpeg(self, box, path):
+        """Write the cutout where the web page can see it.
+
+        Same transformation pyrt-f2cj applies, with the coefficients it
+        fitted: 10 ** (A + B * log10(counts - C)), clipped to a byte.  The
+        file is replaced atomically so the page never loads a half-written
+        frame, and every failure here is silent to the telescope - a
+        missing thumbnail is not a reason to stop guiding.
+        """
+        if self.levels_thread is None:
+            self.levels_thread = threading.Thread(
+                target=self.fit_levels, args=(os.path.join(IMAGES_DIR, path),),
+                daemon=True)
+            self.levels_thread.start()
+
+        levels = self.levels
+        if levels is None:
+            return
+
+        try:
+            a, b, c = levels
+            counts = np.maximum(np.asarray(box, dtype=float), c + 1e-10)
+            scaled = 10.0 ** (a + b * np.log10(counts - c))
+            tmp = WEB_JPEG + '.tmp'
+            Image.fromarray(np.clip(scaled, 0, 255).astype(np.uint8)).save(
+                tmp, 'JPEG', quality=90)
+            os.replace(tmp, WEB_JPEG)
+        except Exception as ex:
+            self.warn('guide: cannot publish guiding frame: %s' % ex)
 
     def run(self):
         """ Guide the NF using WF """
