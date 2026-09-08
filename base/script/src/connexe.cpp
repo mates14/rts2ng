@@ -547,7 +547,12 @@ void ConnExe::processLine ()
 		return;
 	} catch (rts2core::Error &er)
 	{
-		logStream (MESSAGE_ERROR) << "while processing " << cmd << " : " << er << sendLog;
+		// Log the whole line, not just cmd: paramNextString() has already cut
+		// it at the first whitespace, so a script that puts something other
+		// than protocol on stdout gets reported as an unreadable fragment.
+		// A stray Python repr showed up as "unknow command ['pyrt-dophot'," -
+		// enough to be alarming, not enough to place.
+		logStream (MESSAGE_ERROR) << "while processing " << getCommandFull () << " : " << er << sendLog;
 	}
 }
 
