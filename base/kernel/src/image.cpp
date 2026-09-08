@@ -1134,7 +1134,10 @@ void Image::getImgHeader (struct imghdr *im_h, int chan)
 
 void Image::getHistogram (long *histogram, long nbins)
 {
-	memset (histogram, 0, nbins * sizeof(int));
+	// sizeof(*histogram), not sizeof(int): histogram is long*, so on LP64
+	// this cleared exactly half the array and left the upper half of the
+	// range counting whatever was on the stack.
+	memset (histogram, 0, nbins * sizeof (*histogram));
 	int bins;
 	if (channels.size () == 0)
 		loadChannels ();
@@ -1168,7 +1171,10 @@ void Image::getHistogram (long *histogram, long nbins)
 
 void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *npixels)
 {
-	memset (histogram, 0, nbins * sizeof(int));
+	// sizeof(*histogram), not sizeof(int): histogram is long*, so on LP64
+	// this cleared exactly half the array and left the upper half of the
+	// range counting whatever was on the stack.
+	memset (histogram, 0, nbins * sizeof (*histogram));
 	int bins;
 	if (channels.size () == 0)
 		loadChannels ();
@@ -1232,6 +1238,30 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 				}
 			}
 			break;
+		case RTS2_DATA_SHORT:
+			// Signed short shares the unsigned bins on purpose:
+			// getChannelQuantiles() reads a bin index straight back as a
+			// pixel value, so the two conventions have to agree, and there
+			// the scan counts up from zero.  Negative counts fall into bin
+			// 0 - that scan could never have reached them anyway.
+			bins = 65536 / nbins;
+			{
+				int16_t *data = (int16_t *)(channels[chan]->getData ());
+
+				for (i = 0; i < npix; i++)
+				{
+					int y = i / width;
+					int x = i - y * width;
+
+					if (x + 1 >= x1 && x + 1 <= x2 &&
+						y + 1 >= y1 && y + 1 <= y2)
+					{
+						histogram[(data[i] > 0 ? data[i] : 0) / bins] ++;
+						N += 1;
+					}
+				}
+			}
+			break;
 		case RTS2_DATA_FLOAT:
 			bins = 65536 / nbins;
 			{
@@ -1252,6 +1282,15 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 			}
 			break;
 		default:
+			// An untouched histogram is all zeros, getChannelQuantiles()
+			// then never crosses its threshold, and the caller scales the
+			// frame across the whole range of its type - which comes out a
+			// uniform mid-grey, indistinguishable from a blank image.  Say
+			// so rather than leave it to be debugged from the picture.
+			// RTS2_DATA_LONG and wider need a data-driven range rather than
+			// these fixed 16-bit bins, and still have no case here.
+			logStream (MESSAGE_ERROR) << "getChannelHistogram: no histogram for dataType "
+				<< dataType << ", image will be scaled over the full type range" << sendLog;
 			break;
 	}
 
