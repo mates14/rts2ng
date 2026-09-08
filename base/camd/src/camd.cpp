@@ -536,6 +536,11 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 	createValue (exposure, "exposure", "current exposure time", false, RTS2_VALUE_WRITABLE, CAM_WORKING);
 	exposure->setValueDouble (1);
 
+	// not written to FITS: it reaches the header as EXPTIME/EXPOSURE, through
+	// DevClientCameraImage::cameraMetadata(), rather than under its own name
+	createValue (exposureTotal, RTS2_VALUE_EXPOSURE_TOTAL, "[s] total integration one frame represents, NAN unless the mode coadds scans", false, 0, CAM_WORKING);
+	exposureTotal->setValueDouble (NAN);
+
 	createValue (lastImagePath, "last_image", "path to the last image", false, RTS2_VALUE_WRITABLE);
 
 	sendOkInExposure = false;
@@ -1141,6 +1146,18 @@ void Camera::addDataType (int in_type)
 	}
 	std::cerr << "Cannot find type: " << in_type << std::endl;
 	exit (1);
+}
+
+void Camera::setExposureTotal (double t)
+{
+	// a value that only ever gets set to the same thing does not need to go
+	// back over the wire on every retiming
+	if (std::isnan (t) && std::isnan (exposureTotal->getValueDouble ()))
+		return;
+	if (t == exposureTotal->getValueDouble ())
+		return;
+	exposureTotal->setValueDouble (t);
+	sendValueAll (exposureTotal);
 }
 
 int Camera::setDataType (int ntype)

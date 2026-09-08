@@ -59,6 +59,15 @@
 #define RTS2_DATA_USHORT    20
 #define RTS2_DATA_ULONG     40
 
+/**
+ * Name of the camera value carrying the total integration one frame represents,
+ * for a mode that coadds several scans into a single image; NAN on a camera
+ * whose frames are single scans.  Written by Camera::setExposureTotal() and read
+ * by DevClientCameraImage::cameraMetadata(), which puts it in EXPTIME in place
+ * of the scan length in "exposure".
+ */
+#define RTS2_VALUE_EXPOSURE_TOTAL	"exposure_total"
+
 #define RTS2_H_FLIPPED     0x01			//! horizontaly flip data before writing to FITS file
 #define RTS2_V_FLIPPED     0x02			//! verticaly flip data before writing to FITS file
 

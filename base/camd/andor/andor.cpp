@@ -704,6 +704,8 @@ Andor::scriptEnds ()
   accNumber->setValueInteger (1);
   kinNumber->setValueInteger (1);
   intExposure = 0;
+  // set straight, not through setValue(), so setTiming() does not run here
+  setExposureTotal (NAN);
   changeValue (acqMode, 1);     // Single scan default
   //      setTiming();
 
@@ -812,6 +814,19 @@ Andor::setTiming ()
   checkRet ("setTiming()", "GetAcquisitionTimings()");
 
   setAccumulationDataType ();
+
+  // What the frame is the integration of, which for an accumulation is not the
+  // scan length in "exposure".  EXPTIME follows this, and RTS2 halves EXPTIME to
+  // place JD_HELIO - so leaving it at one scan would put the timestamp of a 250x
+  // accumulation about fourteen seconds early.  expt is what GetAcquisitionTimings()
+  // just reported, ie. the scan length the SDK actually settled on rather than the
+  // one we asked for.  The shifts between scans are photon-blind and do not belong
+  // in it; the wall-clock duration is ACQTIME.
+  if (acqMode->getValueInteger () == ACQMODE_ACCUMULATE
+      && accNumber->getValueInteger () > 1)
+    setExposureTotal (accNumber->getValueInteger () * expt);
+  else
+    setExposureTotal (NAN);
 
   // When somene decides to support gaps between exposures, here is a chunk...
   //        acct+=accCycleGap->getValueFloat();

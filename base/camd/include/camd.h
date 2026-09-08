@@ -421,6 +421,18 @@ class Camera:public rts2core::ScriptDevice
 		 */
 		void setDataTypeWritable () { dataType->setWritable (); }
 
+		/**
+		 * Declare the total integration a single frame represents, for a driver
+		 * whose current mode coadds several scans into one image.  Pass NAN when
+		 * a frame is a single scan, which is what every mode that does not coadd
+		 * should do.
+		 *
+		 * @param t total integration in seconds, or NAN for a single scan
+		 *
+		 * @see exposureTotal
+		 */
+		void setExposureTotal (double t);
+
 		int nAcc;
 		struct imghdr *focusingHeader;
 
@@ -987,6 +999,20 @@ class Camera:public rts2core::ScriptDevice
 		void setFitsTransfer () { currentImageTransfer = FITS; }
 
                 rts2core::ValueDoubleMinMax *exposure;
+
+		/**
+		 * Total integration one frame represents, for a mode that coadds
+		 * several scans into a single image, or NAN when a frame is one scan.
+		 *
+		 * "exposure" stays the length of a single scan - it is what scripts set
+		 * and what the hardware is told - so it is not the integration the
+		 * frame is the result of, and EXPTIME must be the latter: DevClient-
+		 * CameraImage::cameraMetadata() prefers this value when a camera
+		 * publishes it, and Image::getMidExposureJD() halves whatever it gets
+		 * to place JD_HELIO.  Set it through setExposureTotal().
+		 */
+		rts2core::ValueDouble *exposureTotal;
+
 		// physical readout time from device
 		rts2core::ValueDouble *pixelsSecond;
 		rts2core::ValueDouble *readoutTime;

@@ -187,6 +187,22 @@ void DevClientCameraImage::postEvent (rts2core::Event * event)
 void DevClientCameraImage::cameraMetadata (Image *image)
 {
 	double exposureTime = getConnection ()->getValueDouble ("exposure");
+
+	// A camera whose current mode coadds several scans into one frame publishes
+	// the integration that frame actually represents in "exposure_total" (see
+	// Camera::setExposureTotal); "exposure" stays the length of a single scan,
+	// because that is what scripts set and what the hardware is told.  EXPTIME
+	// has to be the former: getMidExposureJD() halves it to place JD_HELIO, so
+	// a 250x accumulation carrying one scan's length would be timestamped some
+	// fourteen seconds early.  NAN, absent, or non-positive means single scans.
+	rts2core::Value *totalExp = getConnection ()->getValue (RTS2_VALUE_EXPOSURE_TOTAL);
+	if (totalExp != NULL)
+	{
+		double total = totalExp->getValueDouble ();
+		if (!std::isnan (total) && total > 0)
+			exposureTime = total;
+	}
+
 	image->setTemplate (fitsTemplate);
 
 	image->setExposureLength (exposureTime);
