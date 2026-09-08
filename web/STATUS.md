@@ -2474,6 +2474,105 @@ CDP against that exact seeded collision and confirmed it now correctly
 lands on `8002` - free on both sides - instead of failing. Test rows
 and databases cleaned up afterward.
 
+### Guiding performance display (C1) - 2026-09-08
+
+D50's monitor page had a C1 box showing `C1_small.jpg`/`C1_center.jpg`
+from the external dark+flat pipeline, and what it actually displayed was
+a **very old image**: C1 is the guide camera, so the last frame that
+pipeline ever had for it was whatever C1 last took as something other
+than a guider. The user asked for the last guiding frame plus a plot of
+the same content as their `guiding.png` gnuplot script (which greps
+`guide: val` lines out of `/var/log/rts2-debug` and plots RA/DEC error
+against time plus an RA-vs-DEC scatter).
+
+Built in three layers, all hanging off **one** change of source: the
+guide script now publishes its own numbers on the bus.
+
+- **`python/guide.py`** (D50's `/etc/rts2/guide.py`, copied into the tree
+  this session) creates `guide_dx`, `guide_dy`, `guide_pulse_ra`,
+  `guide_pulse_dec`, `guide_stars`, `guide_fwhm` (+ a static
+  `guide_scale`, arcsec/pixel, and a string `guide_last_image`) **on C1**
+  and updates them every guiding cycle, alongside the `guide: val` log
+  line it already wrote. Values have to name the camera explicitly:
+  `value_create` is handled by `ConnExe` in the *executor*
+  (`base/script/src/connexe.cpp:523`), unlike a plain `value X = Y` which
+  `elementexe.cpp:395` routes to the camera running the script, so an
+  unqualified create would land on `EXEC`. NaN when not guiding, which is
+  what both consumers want: `rts2-recordd` skips it
+  (`db/recordd/src/recordd.cpp:384`) rather than recording a flat line,
+  and `jsonNumber()` sends it as `null`.
+- **The frames**: `toArchive()` became `delete()`. The `images` row is
+  inserted well before a script ever sees a frame
+  (`processCameraImage()` saves the image, which for an object frame is
+  an INSERT via `ImageSkyDb::updateDB`), so archiving guide frames had
+  been filling the database with thousands of junk rows a night;
+  `delete` is the one image action that also removes that row
+  (`ImageSkyDb::deleteImage` -> `deleteFromDB`). What is worth keeping is
+  kept outside the database entirely: a 48x48 int16 cutout around the
+  brightest detected star, written by the script into
+  `<images-dir>/guide/<night>/C1_YYYYmmdd-HHMMSS-mmm.fits` - RTS2's own
+  naming, RTS2's own night boundary (`Configuration::getNight()`), ~9 kB
+  a frame, ~250 MB for a full night at 1 Hz, and the first frame of a new
+  night deletes the previous ones. rts2-httpd's existing `/preview`
+  endpoint renders them, cache and all, with no new server code.
+- **`web/sites/d50-monitor.html`**: the C1 camera box is gone, replaced
+  by a full-width **Guiding** panel - the kept cutout, a 5-minute strip
+  chart of dx/dy, an RA/DEC scatter with the newest points brightest, and
+  underneath, the night's history from `/api/db/records` with 2 h/8 h/
+  24 h buttons (the same shape as the cloud panel, which is the working
+  precedent for a records-backed canvas plot on this page). The live half
+  polls `/api/get?d=C1` at guiding rate and needs no database at all; it
+  self-reschedules to 5 s when nothing is guiding rather than asking
+  every second all day. `updateCameraStatus()`'s FWHM for C1 now falls
+  back to `guide_fwhm` - IMGP has no `fwhm_C1` and never will.
+
+**FWHM is measured here, not taken from `detect4g`**: that wrapper's
+column meaning is undocumented in this tree and the two scripts using it
+disagree (`guide.py` treats column 2 as SNR, `guideccd.py` calls column 3
+snr), so the cutout gets its own area-above-half-maximum estimate - no
+fit to fail to converge, one bad frame costs a NaN instead of an
+exception. Same reasoning for the y convention: nothing here documents
+whether `detect4g`'s y counts numpy rows or FITS rows (guiding never
+cared - it only ever compares one frame against another), so both are
+tried on the first star of a run and the one that lands on the star is
+kept, logged once.
+
+**Tested offline** (`scratchpad/test_guide.py`, not committed): synthetic
+frames with a known FWHM through the real `keep_frame()` path - cutout
+centred and 16-bit, FWHM recovered to ~0.1 px, both y conventions
+detected correctly, night purge removing only 8-digit directories,
+`value_create`/`V` wire format verbatim, and an unwritable images
+directory logging once and letting guiding continue. That last one found
+a real bug: **astropy refuses NaN in a FITS header**, so writing a
+reference frame (no shift to record) threw and would have silently
+dropped every such frame - cards that would carry NaN are now simply
+left out. **Tested live** in headless Chrome against a mocked daemon:
+guiding, not-guiding, "camera has no guiding values" (an older guide.py)
+and "recordd is not recording this" all render sensibly, no page errors.
+
+**Not done here, deliberately**: the `rts2-recordd` config line
+(`C1  5  guide_dx guide_dy guide_pulse_ra guide_pulse_dec guide_stars
+guide_fwhm`) is site configuration, not repo content, and that daemon
+has to actually be running at D50 for the history plot to have anything
+in it - same dependency the cloud panel already carries.
+
+**Also fixed, on the user's call** (found while reading `guide.py`, not
+part of the display work): `self.setValue('T0', 10, 'speed_guide_ra')`
+had its arguments in the wrong order - the signature is `setValue(name,
+value, device)` - so it addressed a device named `speed_guide_ra`, which
+does not exist. The command went nowhere and the 10% sidereal guiding
+rate the 947 pulse-calibration constant is derived from was never
+actually being set; the mount evidently already sat at it, since guiding
+worked. Both lines now say `setValue('speed_guide_ra', 10, 'T0')`.
+
+**No daemon change at all**: this whole feature is a script, a static
+page, and one line of `rts2-recordd` configuration. `/preview/` and
+`/api/db/records` are endpoints the deployed daemon already serves (the
+image archive and the cloud panel use them), so nothing here needs
+rts2-httpd rebuilt or restarted - `d50-monitor.html` is served by the
+site's own Apache, and `guide.py` is picked up by the executor the next
+time it launches the script.
+
 ## Conventions to follow (inherited from `base`/`db`/`gui`)
 
 - C++17, `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>` over C headers.
