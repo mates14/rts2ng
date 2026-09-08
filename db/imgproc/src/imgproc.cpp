@@ -660,13 +660,25 @@ int ImageProc::commandAuthorized (rts2core::Connection * conn)
 		}
 		return 0;
 	}
-	else if (conn->isCommand("stop_reprocess")) // Re-process unprocessed images from queue dir
+	else if (conn->isCommand("stop_reprocess")) // Stop the re-processing started above
 	{
 		logStream (MESSAGE_INFO) << "Stopping re-processing of " << image_glob->getValue () << sendLog;
 
-		globfree (&imageGlob);
-		imageGlob.gl_pathc = 0;
+		// Only free a glob we actually filled.  The constructor zeroes
+		// gl_pathc and gl_offs but not gl_pathv, so an unconditional
+		// globfree() here would free an uninitialised pointer whenever
+		// stop_reprocess arrives before the first successful glob - which is
+		// exactly when someone reaches for it as an emergency brake.  Same
+		// guard the destructor already uses.
+		if (imageGlob.gl_pathc)
+		{
+			globfree (&imageGlob);
+			imageGlob.gl_pathc = 0;
+		}
 		globPos = 0;
+		// ...and stay stopped, rather than relying on the emptied glob to make
+		// queNextFromGlob() a no-op on every subsequent slot release.
+		reprocessingPossible = 0;
 		return 0;
 	}
 
