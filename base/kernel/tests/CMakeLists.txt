@@ -10,6 +10,7 @@ set(RTS2_KERNEL_TESTS
 	test_connection_prereqs
 	test_app
 	test_block_connection
+	test_image_histogram
 )
 
 add_executable(test_hoststring test_hoststring.cpp)
@@ -35,6 +36,10 @@ add_test(NAME connection_prereqs COMMAND test_connection_prereqs)
 add_executable(test_app test_app.cpp)
 target_link_libraries(test_app PRIVATE base_kernel)
 add_test(NAME app COMMAND test_app)
+
+add_executable(test_image_histogram test_image_histogram.cpp)
+target_link_libraries(test_image_histogram PRIVATE base_kernel)
+add_test(NAME image_histogram COMMAND test_image_histogram)
 
 add_executable(test_block_connection test_block_connection.cpp)
 target_link_libraries(test_block_connection PRIVATE base_kernel)

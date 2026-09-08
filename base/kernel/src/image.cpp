@@ -1169,12 +1169,18 @@ void Image::getHistogram (long *histogram, long nbins)
 	}
 }
 
-void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *npixels)
+void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *npixels, double *binOffset, double *binScale)
 {
 	// sizeof(*histogram), not sizeof(int): histogram is long*, so on LP64
 	// this cleared exactly half the array and left the upper half of the
 	// range counting whatever was on the stack.
 	memset (histogram, 0, nbins * sizeof (*histogram));
+	// Bin i holds the values [offset + i * scale, offset + (i + 1) * scale).
+	// The 16-bit types keep the fixed range they always had; the wide ones have
+	// no fixed range to keep, so they report the one they actually used and
+	// getChannelQuantiles() inverts it to get a pixel value back out.
+	double offset = 0;
+	double scale = 1;
 	int bins;
 	if (channels.size () == 0)
 		loadChannels ();
@@ -1217,10 +1223,12 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 
 	int npix = channels[chan]->getNPixels ();
 
+	bins = 65536 / nbins;
+	scale = bins;
+
 	switch (dataType)
 	{
 		case RTS2_DATA_USHORT:
-			bins = 65536 / nbins;
 			{
 				uint16_t *data = (uint16_t *)(channels[chan]->getData ());
 
@@ -1244,7 +1252,6 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 			// pixel value, so the two conventions have to agree, and there
 			// the scan counts up from zero.  Negative counts fall into bin
 			// 0 - that scan could never have reached them anyway.
-			bins = 65536 / nbins;
 			{
 				int16_t *data = (int16_t *)(channels[chan]->getData ());
 
@@ -1262,8 +1269,59 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 				}
 			}
 			break;
+		case RTS2_DATA_LONG:
+			// An accumulated frame has no fixed range the way 16-bit data does:
+			// it sits wherever ACCNUM x (bias + sky) puts it, and spans however
+			// much of the well the object used.  Binning it over 0..65535, or
+			// over the whole of int32, both come out as one spike and a flat
+			// preview - so find the range first and bin over that.
+			{
+				int32_t *data = (int32_t *)(channels[chan]->getData ());
+				int64_t dmin = INT32_MAX;
+				int64_t dmax = INT32_MIN;
+
+				for (i = 0; i < npix; i++)
+				{
+					int y = i / width;
+					int x = i - y * width;
+
+					if (x + 1 >= x1 && x + 1 <= x2 &&
+						y + 1 >= y1 && y + 1 <= y2)
+					{
+						if (data[i] < dmin)
+							dmin = data[i];
+						if (data[i] > dmax)
+							dmax = data[i];
+					}
+				}
+
+				// no pixel passed the DATASEC test - leave the histogram empty
+				// rather than divide by a range that does not exist
+				if (dmin > dmax)
+					break;
+
+				// round the width up, so that dmax lands in the last bin and not
+				// one past the end of the array
+				int64_t width64 = (dmax - dmin + nbins) / nbins;
+
+				offset = dmin;
+				scale = width64;
+
+				for (i = 0; i < npix; i++)
+				{
+					int y = i / width;
+					int x = i - y * width;
+
+					if (x + 1 >= x1 && x + 1 <= x2 &&
+						y + 1 >= y1 && y + 1 <= y2)
+					{
+						histogram[(data[i] - dmin) / width64] ++;
+						N += 1;
+					}
+				}
+			}
+			break;
 		case RTS2_DATA_FLOAT:
-			bins = 65536 / nbins;
 			{
 				float *data = (float *)(channels[chan]->getData ());
 
@@ -1287,8 +1345,8 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 			// frame across the whole range of its type - which comes out a
 			// uniform mid-grey, indistinguishable from a blank image.  Say
 			// so rather than leave it to be debugged from the picture.
-			// RTS2_DATA_LONG and wider need a data-driven range rather than
-			// these fixed 16-bit bins, and still have no case here.
+			// The types wider than RTS2_DATA_LONG need a data-driven range
+			// rather than these fixed 16-bit bins, and still have no case here.
 			logStream (MESSAGE_ERROR) << "getChannelHistogram: no histogram for dataType "
 				<< dataType << ", image will be scaled over the full type range" << sendLog;
 			break;
@@ -1296,6 +1354,10 @@ void Image::getChannelHistogram (int chan, long *histogram, long nbins, long *np
 
 	if (npixels)
 		*npixels = N;
+	if (binOffset)
+		*binOffset = offset;
+	if (binScale)
+		*binScale = scale;
 }
 
 template <typename bt, typename dt> void Image::getChannelGrayscaleByteBuffer (int chan, bt * &buf, bt black, dt low, dt high, long s, size_t offset, bool invert_y)
@@ -1540,23 +1602,32 @@ template <typename bt, typename dt> void Image::getChannelPseudocolourByteBuffer
 
 template <typename dt> void Image::getChannelQuantiles (int chan, dt minval, dt mval, float quantiles, dt * low_ptr, dt * high_ptr)
 {
-	long hist[65536];
+	const long nbins = 65536;
+	long hist[nbins];
 	long s = getChannelNPixels (chan);
-	getChannelHistogram (chan, hist, 65536, &s);
+	// getChannelHistogram() chooses how it maps values onto bins - one bin per
+	// ADU for the 16-bit types, whatever the data needs for the wider ones - so
+	// ask for that mapping and undo it, rather than reading a bin index back as
+	// if it were a pixel value.
+	double binOffset = 0;
+	double binScale = 1;
+	getChannelHistogram (chan, hist, nbins, &s, &binOffset, &binScale);
+
+#define BIN_VALUE(i)	((dt) (binOffset + (double) (i) * binScale))
 
 	long psum = 0;
 	dt low = minval;
 	dt high = minval;
 
-	uint32_t i;
+	long i;
 
 	// find quantiles
-	for (i = 0; (dt) i < mval; i++)
+	for (i = 0; i < nbins && BIN_VALUE (i) < mval; i++)
 	{
 		psum += hist[i];
 		if (psum > s * quantiles)
 		{
-			low = i;
+			low = BIN_VALUE (i);
 			break;
 		}
 	}
@@ -1568,12 +1639,12 @@ template <typename dt> void Image::getChannelQuantiles (int chan, dt minval, dt 
 	}
 	else
 	{
-		for (; (dt) i < mval; i++)
+		for (; i < nbins && BIN_VALUE (i) < mval; i++)
 		{
 			psum += hist[i];
 			if (psum > s * (1 - quantiles))
 			{
-				high = i;
+				high = BIN_VALUE (i);
 				break;
 			}
 		}
@@ -1582,6 +1653,8 @@ template <typename dt> void Image::getChannelQuantiles (int chan, dt minval, dt 
 			high = mval;
 		}
 	}
+
+#undef BIN_VALUE
 
 	if (low_ptr)
 		*low_ptr = low;

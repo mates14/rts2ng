@@ -287,7 +287,18 @@ class Image:public FitsFile
 		 * @param nbins     number of histogram bins
 		 * @param npixels   number of good pixels
 		 */
-		void getChannelHistogram (int chan, long *histogram, long nbins, long *npixels);
+		/**
+		 * Histogram one channel, over the DATASEC part of it if the image has one.
+		 *
+		 * Bin i counts the values [offset + i * scale, offset + (i + 1) * scale).
+		 * The 16-bit types bin one ADU each over their fixed range; the wider ones
+		 * have no fixed range and bin over the one the data occupies, so a caller
+		 * turning a bin back into a pixel value has to ask for the mapping.
+		 *
+		 * @param binOffset if not NULL, filled with the value bin 0 starts at
+		 * @param binScale  if not NULL, filled with the width of a bin in ADU
+		 */
+		void getChannelHistogram (int chan, long *histogram, long nbins, long *npixels, double *binOffset = NULL, double *binScale = NULL);
 
 
 		template <typename bt, typename dt> void getChannelGrayscaleByteBuffer (int chan, bt * &buf, bt black, dt low, dt high, long s, size_t offset, bool invert_y);
