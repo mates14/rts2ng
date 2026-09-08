@@ -102,12 +102,28 @@
 
         .temp-table th { background-color: var(--th-bg); font-weight: bold; }
 
-        .webcam-panel, .cloud-panel, .guide-panel {
+        .webcam-panel, .cloud-panel {
             /* Placed as a direct grid child of .container (not nested
                inside .left-panel, which is fixed at 320px) so it can
                span the full page width, below the title/status +
                cameras row. */
             grid-column: 1 / -1;
+        }
+
+        .right-panel {
+            /* Cameras and guiding share .container's second (flexible)
+               column, stacked - so the guiding panel is exactly as wide
+               as the C0 box above it and sits beside the title/status
+               column rather than under it. The left column is going to
+               grow; a full-width panel under a short left column would
+               leave the page lopsided. Same align-self reasoning as
+               .left-panel's, and min-width:0 so the plots inside can be
+               narrower than their content wants to be. */
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            align-self: start;
+            min-width: 0;
         }
 
         /* Guiding: the guide star as it looks right now, the last few
@@ -117,7 +133,7 @@
            photograph, hence image-rendering. */
         .guide-grid {
             display: grid;
-            grid-template-columns: 200px 1fr 200px;
+            grid-template-columns: 200px minmax(0, 1fr) 200px;
             gap: 12px;
             align-items: start;
         }
@@ -146,7 +162,7 @@
             .guide-grid { grid-template-columns: 1fr; }
         }
 
-        body.compact .guide-grid { grid-template-columns: 150px 1fr 150px; gap: 6px; }
+        body.compact .guide-grid { grid-template-columns: 150px minmax(0, 1fr) 150px; gap: 6px; }
         body.compact #guide-live { height: 130px; }
         body.compact #guide-history { height: 110px; }
 
@@ -180,8 +196,6 @@
            showing its two images large. Only two rows here (C0/C1) vs
            bart-monitor.html's three (C1/C2/C3) - same .cam-grid/.cam-box
            rules handle either count without change. */
-        .cam-panel { align-self: start; }
-
         .cam-grid {
             display: flex;
             flex-direction: column;
@@ -353,7 +367,9 @@
            the page enough to fit on one screen for a quick glance. */
         body.compact .container { max-width: none; gap: 6px; }
         body.compact .status-panel, body.compact .image-panel,
-        body.compact .webcam-panel, body.compact .cam-panel, body.compact .cloud-panel { padding: 5px; }
+        body.compact .webcam-panel, body.compact .cam-panel, body.compact .cloud-panel,
+        body.compact .guide-panel { padding: 5px; }
+        body.compact .right-panel { gap: 6px; }
         body.compact .logo { padding: 4px; }
         body.compact .logo h1 { font-size: 16px; margin: 2px 0; }
         body.compact .logo h2 { font-size: 11px; margin: 2px 0; }
@@ -459,80 +475,82 @@
             </div>
         </div>
 
-        <div class="cam-panel">
-            <h3 style="margin-top: 0;">Cameras</h3>
-            <div class="cam-grid">
-                <div class="cam-box">
-                    <h4>C0</h4>
-                    <div class="cam-box-body">
-                        <div class="latest-image">
-                            <img id="c0-image" src="C0_small.jpg" alt="C0" onclick="openLightbox('C0_full.jpg', 'C0 - Full Image')">
-                            <img id="c0-center" src="C0_center.jpg" alt="C0 center" onclick="openLightbox('C0_full.jpg', 'C0 - Full Image')">
+        <div class="right-panel">
+            <div class="cam-panel">
+                <h3 style="margin-top: 0;">Cameras</h3>
+                <div class="cam-grid">
+                    <div class="cam-box">
+                        <h4>C0</h4>
+                        <div class="cam-box-body">
+                            <div class="latest-image">
+                                <img id="c0-image" src="C0_small.jpg" alt="C0" onclick="openLightbox('C0_full.jpg', 'C0 - Full Image')">
+                                <img id="c0-center" src="C0_center.jpg" alt="C0 center" onclick="openLightbox('C0_full.jpg', 'C0 - Full Image')">
+                            </div>
+                            <div id="c0-info" class="latest-image-info"></div>
+                            <div id="c0-status"></div>
                         </div>
-                        <div id="c0-info" class="latest-image-info"></div>
-                        <div id="c0-status"></div>
                     </div>
                 </div>
+                <!--
+                    C{n}_small.jpg/C{n}_center.jpg/C{n}_full.jpg/C{n}_info.txt
+                    are written by the same external dark+flat-correction
+                    process bart-monitor.html relies on, as sibling files in
+                    this page's own directory - the user confirmed these
+                    already work correctly for D50's own deployment ("the
+                    images are OK"), so the relative-path convention is kept
+                    exactly as-is rather than re-verified via a guessed
+                    /images/ absolute path (which 404s - that's simply not
+                    where this page or its sibling files actually live).
+                    C1 is not here any more: it is D50's guide camera (its
+                    own SCRIPT value runs /etc/rts2/guide.py, confirmed live)
+                    rather than a second science camera, and that external
+                    pipeline never had a current frame to give it - what the
+                    box actually showed was whichever image C1 last took as
+                    something other than a guider, which is to say a very old
+                    one. Its live view is the Guiding panel below, fed by the
+                    guide script itself.
+                -->
             </div>
-            <!--
-                C{n}_small.jpg/C{n}_center.jpg/C{n}_full.jpg/C{n}_info.txt
-                are written by the same external dark+flat-correction
-                process bart-monitor.html relies on, as sibling files in
-                this page's own directory - the user confirmed these
-                already work correctly for D50's own deployment ("the
-                images are OK"), so the relative-path convention is kept
-                exactly as-is rather than re-verified via a guessed
-                /images/ absolute path (which 404s - that's simply not
-                where this page or its sibling files actually live).
-                C1 is not here any more: it is D50's guide camera (its
-                own SCRIPT value runs /etc/rts2/guide.py, confirmed live)
-                rather than a second science camera, and that external
-                pipeline never had a current frame to give it - what the
-                box actually showed was whichever image C1 last took as
-                something other than a guider, which is to say a very old
-                one. Its live view is the Guiding panel below, fed by the
-                guide script itself.
-            -->
-        </div>
 
-        <div class="guide-panel">
-            <h3 style="margin-top: 0;">
-                Guiding - C1
-                <span id="guide-ranges" class="cloud-ranges">
-                    <button data-hours="2" onclick="setGuideRange(2)">2 h</button>
-                    <button data-hours="8" onclick="setGuideRange(8)">8 h</button>
-                    <button data-hours="24" onclick="setGuideRange(24)">24 h</button>
-                </span>
-            </h3>
-            <!--
-                Three views of the same thing, because they answer
-                different questions: the cutout says whether there is a
-                star and what it looks like (FWHM: seeing, or focus), the
-                strip chart says whether the last few minutes were quiet,
-                and the scatter says whether the errors are centred or
-                the mount is being pulled one way. All of it comes from
-                values the guide script publishes on C1 itself -
-                guide_dx/guide_dy/guide_fwhm/guide_stars, plus
-                guide_last_image naming the frame - so the live half
-                needs no database at all. The history plot underneath is
-                the same series after rts2-recordd has sampled them into
-                records_double, read back through /api/db/records exactly
-                like the cloud panel: that daemon has to be running and
-                configured for C1 or only the live half will have
-                anything in it.
-            -->
-            <div class="guide-grid">
-                <div>
-                    <img id="guide-frame-img" alt="last guiding frame"
-                         title="last kept guiding frame - click to enlarge">
-                    <div id="guide-readout" class="guide-readout"></div>
+            <div class="guide-panel">
+                <h3 style="margin-top: 0;">
+                    Guiding - C1
+                    <span id="guide-ranges" class="cloud-ranges">
+                        <button data-hours="2" onclick="setGuideRange(2)">2 h</button>
+                        <button data-hours="8" onclick="setGuideRange(8)">8 h</button>
+                        <button data-hours="24" onclick="setGuideRange(24)">24 h</button>
+                    </span>
+                </h3>
+                <!--
+                    Three views of the same thing, because they answer
+                    different questions: the cutout says whether there is a
+                    star and what it looks like (FWHM: seeing, or focus), the
+                    strip chart says whether the last few minutes were quiet,
+                    and the scatter says whether the errors are centred or
+                    the mount is being pulled one way. All of it comes from
+                    values the guide script publishes on C1 itself -
+                    guide_dx/guide_dy/guide_fwhm/guide_stars, plus
+                    guide_last_image naming the frame - so the live half
+                    needs no database at all. The history plot underneath is
+                    the same series after rts2-recordd has sampled them into
+                    records_double, read back through /api/db/records exactly
+                    like the cloud panel: that daemon has to be running and
+                    configured for C1 or only the live half will have
+                    anything in it.
+                -->
+                <div class="guide-grid">
+                    <div>
+                        <img id="guide-frame-img" alt="last guiding frame"
+                             title="last kept guiding frame - click to enlarge">
+                        <div id="guide-readout" class="guide-readout"></div>
+                    </div>
+                    <canvas id="guide-live"></canvas>
+                    <canvas id="guide-scatter"></canvas>
                 </div>
-                <canvas id="guide-live"></canvas>
-                <canvas id="guide-scatter"></canvas>
+                <canvas id="guide-history"></canvas>
+                <div id="guide-status" class="cloud-status"></div>
+                <div id="c1-status" class="guide-readout" style="margin-top: 6px;"></div>
             </div>
-            <canvas id="guide-history"></canvas>
-            <div id="guide-status" class="cloud-status"></div>
-            <div id="c1-status" class="guide-readout" style="margin-top: 6px;"></div>
         </div>
 
         <div class="webcam-panel">

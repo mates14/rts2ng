@@ -2516,14 +2516,21 @@ guide script now publishes its own numbers on the bus.
   night deletes the previous ones. rts2-httpd's existing `/preview`
   endpoint renders them, cache and all, with no new server code.
 - **`web/sites/d50-monitor.html`**: the C1 camera box is gone, replaced
-  by a full-width **Guiding** panel - the kept cutout, a 5-minute strip
+  by a **Guiding** panel - the kept cutout, a 5-minute strip
   chart of dx/dy, an RA/DEC scatter with the newest points brightest, and
   underneath, the night's history from `/api/db/records` with 2 h/8 h/
   24 h buttons (the same shape as the cloud panel, which is the working
   precedent for a records-backed canvas plot on this page). The live half
   polls `/api/get?d=C1` at guiding rate and needs no database at all; it
   self-reschedules to 5 s when nothing is guiding rather than asking
-  every second all day. `updateCameraStatus()`'s FWHM for C1 now falls
+  every second all day. The panel is **not** full width: it and
+  `.cam-panel` now share a `.right-panel` flex column, so it is exactly
+  as wide as the C0 box and sits beside the title/status column rather
+  than under it - that left column is going to grow, and a full-width
+  panel under a short one left the page lopsided (user call, 2026-09-08).
+  Note `align-self: start` cannot be used on `.cam-panel` any more: in a
+  flex column that is the horizontal axis, and it would shrink the panel
+  to its content width. `updateCameraStatus()`'s FWHM for C1 now falls
   back to `guide_fwhm` - IMGP has no `fwhm_C1` and never will.
 
 **FWHM is measured here, not taken from `detect4g`**: that wrapper's
