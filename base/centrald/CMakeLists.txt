@@ -15,3 +15,12 @@ target_include_directories(rts2-centrald PRIVATE
 )
 
 target_link_libraries(rts2-centrald PRIVATE base_kernel ${LIBNOVA_LIBRARY})
+
+# rts2-state answers the same day/night question centrald does, from the
+# same riseset.cpp code and the same rts2.ini, but offline - hence it lives
+# here next to centrald rather than in a tools directory of its own.
+add_executable(rts2-state src/stateapp.cpp)
+
+target_include_directories(rts2-state PRIVATE ${LIBNOVA_INCLUDE_DIR})
+
+target_link_libraries(rts2-state PRIVATE base_kernel ${LIBNOVA_LIBRARY})

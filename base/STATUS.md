@@ -2711,6 +2711,54 @@ protocol has to mean the same thing regardless of how the daemon was
 started, so it always emits ctime seconds, just losslessly now (see
 `web/STATUS.md`).
 
+## rts2-state (base/centrald/src/stateapp.cpp, 2026-09-08)
+
+Ported from the classic tree's `src/centrald/stateapp.cpp` on request -
+something at a site still calls it. It is the only RTS2 tool that answers
+"what part of the night is it?" *without* a running system: everything it
+prints comes from `riseset.cpp` plus the observer position and horizons in
+`rts2.ini`, so cron/shell scripts can use it when centrald is down (or was
+never started). `rts2-jsonclient` is not a substitute - it asks a live
+`rts2-httpd`+centrald pair over HTTP for the state centrald *is currently
+in*, which is a different question and needs the daemons up. Only `-c`
+(current state number) overlaps at all, and even there the two disagree
+whenever centrald is off/standby-forced, since centrald's state carries the
+on/off and blocking bits on top of the day/night part.
+
+Options are the classic set: no arguments prints the sun alt/az table plus
+the day-state schedule, `-c` prints just the current state number, `-t`/`-d`
+compute for another instant, `--sun-altitude`/`--sun-azimuth`,
+`--sun-below`/`--sun-above ALT` (print when the sun crosses ALT, exit 1 if
+it is already past it - the shell-script idiom), `-e` expands an
+`Expander` string, `--latitude`/`--longtitude` override the config.
+
+Built as `centrald/rts2-state` and shipped in `rts2-base` (added to
+`debian/rules`' `RTS2_BASE_BINARIES`). Sits in `centrald/` rather than a
+tools directory because it is the same riseset/`rts2.ini` question centrald
+itself answers.
+
+Deviations from the classic file:
+- Derives from `CliApp` (`doProcessing()`) instead of `App` with a
+  hand-written `run()` that called `init()` itself - same control flow and
+  same exit codes, one less thing to get wrong. First `CliApp` user in
+  base.
+- Horizons/times read via `getDoubleDefault`/`getIntegerDefault` instead of
+  `getDouble`/`getInteger` into a pre-seeded variable: identical defaults
+  (-10, 0, 7200, 1800), minus the two "cannot find value 'night_horizon' in
+  section 'observatory'" warnings the classic binary prints on every run
+  for a config that simply doesn't set them.
+- `printAltTable()` restores the stream with `flags()`, not `setf()` - the
+  classic code saved `flags()` and passed the result to `setf()`, which
+  only ever ORs bits back in and cannot clear what the function set.
+  Harmless there (it prints to a fresh `std::cout` and exits), a real leak
+  of `fixed` if the ostream is ever reused.
+- `-d` now fails on an unparsable date instead of ignoring `parseDate()`'s
+  return and silently computing for "now".
+
+Verified against the classic binary built from `~/src/rts2`: for the same
+`-t` instant the full table + schedule output is byte-identical, as are
+`--sun-azimuth`, `-N -c` and `-d`.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

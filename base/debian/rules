@@ -43,6 +43,7 @@ override_dh_auto_configure:
 # host happens to have BASE_ANDOR_SDK_DIR/BASE_PARACL_DIR set.
 RTS2_BASE_BINARIES = \
 	centrald/rts2-centrald \
+	centrald/rts2-state \
 	monitor/rts2-mon \
 	scriptexec/rts2-scriptexec \
 	sendcmd/rts2-sendcmd \
