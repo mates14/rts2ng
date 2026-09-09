@@ -50,8 +50,9 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 
 		/**
 		 * Expand-path expression (image.h's %b/%y/%N/... syntax) used for
-		 * frames that are actually being kept (saveImage on) - e.g.
-		 * "%b%Y/%N/%c_%H%M%S-%s.fits", which lands under the observatory's
+		 * frames that are actually being kept (saveImage on). Defaults to
+		 * "%c_%H%M%S-%s.fits" in the current directory; give it something
+		 * like "%b%Y/%N/%c_%H%M%S-%s.fits" to land under the observatory's
 		 * shared archive (Configuration::observatoryBasePath(), rts2.ini's
 		 * [observatory] base_path) in per-year/per-night subdirectories, no
 		 * target involved. Set once at startup from ViewerClient (CLI

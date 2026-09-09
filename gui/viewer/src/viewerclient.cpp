@@ -18,7 +18,7 @@ ViewerClient::ViewerClient (int argc, char **argv):
 	configFile = NULL;
 	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
-	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %b%Y/%N/%c_%H%M%S-%s.fits");
+	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %c_%H%M%S-%s.fits, in the current directory");
 }
 
 int ViewerClient::processOption (int in_opt)
@@ -66,12 +66,18 @@ int ViewerClient::init ()
 
 	// --images already set it; otherwise fall back to rts2.ini's own
 	// [viewer] expand_path, same convention as [scriptexec] expand_path
-	// (scriptexec.cpp) - and if neither is set, a built-in default that
-	// reuses Configuration::observatoryBasePath() (%b, "/images/" unless
-	// overridden by [observatory] base_path) with per-year/per-night
-	// subdirectories, no target involved.
+	// (scriptexec.cpp) - and if neither is set, just a filename in the
+	// directory the viewer was started from.
+	//
+	// Deliberately not %b (observatoryBasePath, "/images/"): that is the
+	// site archive, typically root-owned, so the default used to fail with
+	// "cannot create directory ... Permission denied" for anyone running
+	// the viewer as themselves - and when it did succeed it dropped ad-hoc
+	// frames into the archive. Somewhere like FLORES, where the archive
+	// really is where viewer frames belong, says so explicitly with
+	// --images or [viewer] expand_path.
 	if (imageExpandPath.empty ())
-		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%b%Y/%N/%c_%H%M%S-%s.fits");
+		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%c_%H%M%S-%s.fits");
 
 	return 0;
 }

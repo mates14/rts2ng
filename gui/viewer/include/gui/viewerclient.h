@@ -108,11 +108,11 @@ class ViewerClient : public QObject, public rts2core::Client
 		 * Expand-path expression for frames that get kept (saveImage on) -
 		 * see ViewerCamera::setArchivePath(). Populated in init(): the
 		 * --images command-line option if given, else rts2.ini's
-		 * [viewer] expand_path, else a built-in default that lands under
-		 * Configuration::observatoryBasePath() ("/images/" by default, or
-		 * whatever [observatory] base_path is set to) in per-year/
-		 * per-night subdirectories - no target involved, since this
-		 * viewer has no concept of one.
+		 * [viewer] expand_path, else a built-in default of just
+		 * "%c_%H%M%S-%s.fits", relative to wherever the viewer was
+		 * started - no target involved, since this viewer has no concept
+		 * of one, and no site archive either, since a hand-run viewer
+		 * usually cannot write there and its frames rarely belong there.
 		 */
 		std::string imageExpandPath;
 
