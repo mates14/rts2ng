@@ -774,7 +774,10 @@ Andor::setTiming ()
   float acct = 0.0;
   float kint = 0.0;
 
-  float acqt;
+  // NAN until one of the acquisition modes below claims it - the default
+  // case has no duration to report, and an unknown mode should say so
+  // rather than hand acquireTime whatever was on the stack.
+  float acqt = NAN;
 
   int binh = binningHorizontal ();
   int binv = binningVertical ();
@@ -1596,28 +1599,36 @@ Andor::initDataTypes ()
 int
 Andor::initAndorID ()
 {
-  char textbuf[TEXTBUF_LEN];
   char name[128];
-  int n = 0, ret;
+  char typebuf[TEXTBUF_LEN];
+  const char *type;
+  int ret;
 
   // Set camera type etc.
   switch (cap.ulCameraType)
     {                           // only tested types, see definitions for more
     case AC_CAMERATYPE_IXON:
-      n = snprintf (textbuf, TEXTBUF_LEN, "ANDOR iXon");
+      type = "ANDOR iXon";
       break;
     case AC_CAMERATYPE_IXONULTRA:
-      n = snprintf (textbuf, TEXTBUF_LEN, "ANDOR iXon-Ultra");
+      type = "ANDOR iXon-Ultra";
       break;
     default:
-      n =
-        snprintf (textbuf, TEXTBUF_LEN, "ANDOR type %lu",
-                  (unsigned long) cap.ulCameraType);
+      snprintf (typebuf, TEXTBUF_LEN, "ANDOR type %lu",
+                (unsigned long) cap.ulCameraType);
+      type = typebuf;
       break;
     }
 
   GetHeadModel (name);
-  snprintf (textbuf + n, TEXTBUF_LEN - n, " %s", name);
+
+  // Type and head model joined in one pass: appending at textbuf+n with a
+  // TEXTBUF_LEN-n remainder left barely twenty bytes for a model name that
+  // can be 127, so the interesting half got cut off - and had the type
+  // itself ever filled the buffer, snprintf()'s would-have-written return
+  // would have walked the offset off the end with a negative size.
+  char textbuf[TEXTBUF_LEN + sizeof (name)];
+  snprintf (textbuf, sizeof (textbuf), "%s %s", type, name);
   ccdRealType->setValueCharArr (textbuf);
 
   // Serial Number
