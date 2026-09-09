@@ -393,6 +393,20 @@ class Camera:public rts2core::ScriptDevice
 		}
 
 		/**
+		 * Whether initDataTypes() has registered anything yet. getDataType()
+		 * dereferences the selected entry and there is none before
+		 * Camera::initValues() runs - which is *after* initHardware(), where
+		 * a driver may already be settling its readout geometry. Code
+		 * reachable from initHardware() has to ask before it reads the type.
+		 *
+		 * @see initDataTypes()
+		 */
+		bool hasDataTypes ()
+		{
+			return dataType->selSize () > 0;
+		}
+
+		/**
 		 * Data type latched at exposure start, as one of the RTS2_DATA_XXXX
 		 * constants. A driver which changes the data type between exposures
 		 * must use this - and not getDataType() - during readout, so that it

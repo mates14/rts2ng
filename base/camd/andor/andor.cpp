@@ -747,6 +747,16 @@ Andor::scriptEnds ()
 void
 Andor::setAccumulationDataType ()
 {
+  // setADCMode() ends in setTiming(), and initHardware() calls it long
+  // before Camera::initValues() gets round to initDataTypes() - so on the
+  // way up there is no registered type for getDataType() to return and it
+  // would dereference an empty selection.  Nothing is lost by waiting:
+  // initAndorValues() has just defaulted ACQMODE and ACCNUM to a plain
+  // single scan, which is the 16-bit case, and that is what dataType comes
+  // up as anyway.  Any later change to either runs setTiming() again.
+  if (!hasDataTypes ())
+    return;
+
   bool accumulating = (acqMode->getValueInteger () == ACQMODE_ACCUMULATE)
     && (accNumber->getValueInteger () > 1);
   int wanted = accumulating ? RTS2_DATA_LONG : RTS2_DATA_USHORT;
