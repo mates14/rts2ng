@@ -26,12 +26,20 @@ test $* && modules="$*"
 # base/debian/rules' `BASE_FLI_SDK_DIR ?= ...` / `BASE_GXCCD_SDK_DIR ?= ...`
 # pick them up too, without needing to edit that file per-site.
 #
-# These are two *different* trees with two different layouts: libfli wants
-# the built source dir itself (libfli.h + libfli.a at the top level),
-# libgxccd wants an SDK root with include/ and lib/ subdirectories. They
-# were both pointed at the FLI path once, which silently produced empty
-# rts2-drivers-fli/rts2-drivers-gxccd packages - CMake just skips the
-# driver when detection fails, and debian/rules skips the missing binary.
+# These are *different* trees with different layouts: libfli wants the
+# built source dir itself (libfli.h + libfli.a at the top level), libgxccd
+# and Andor each want an SDK root with include/ and lib/ subdirectories.
+# libfli and libgxccd were both pointed at the FLI path once, which
+# silently produced empty rts2-drivers-fli/rts2-drivers-gxccd packages -
+# CMake just skips the driver when detection fails, and debian/rules skips
+# the missing binary.
+#
+# Exporting alone is not enough for the cmake branch below: these are cache
+# PATH variables, and CMake never reads the environment for those, so each
+# one also has to be repeated as -D on the cmake line or the driver is
+# skipped with nothing but a STATUS line among a hundred others to say so.
+# The export is what base/debian/rules picks up.
+export BASE_ANDOR_SDK_DIR=/home/mates/andor
 export BASE_FLI_SDK_DIR=/home/torman/fliusb/libfli
 export BASE_GXCCD_SDK_DIR=/home/torman/libgxccd-0.9.0
 
@@ -48,7 +56,7 @@ if [ $build_deb == 0 ] && [ $build_src == 0 ]; then
             continue
         fi
         rm -rf $tree/build
-        cmake -S $tree -B $tree/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBASE_FLI_SDK_DIR=$BASE_FLI_SDK_DIR -DBASE_GXCCD_SDK_DIR=$BASE_GXCCD_SDK_DIR
+        cmake -S $tree -B $tree/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBASE_ANDOR_SDK_DIR=$BASE_ANDOR_SDK_DIR -DBASE_FLI_SDK_DIR=$BASE_FLI_SDK_DIR -DBASE_GXCCD_SDK_DIR=$BASE_GXCCD_SDK_DIR
         cmake --build $tree/build -j4
     done
 fi
