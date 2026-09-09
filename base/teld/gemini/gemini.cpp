@@ -538,7 +538,10 @@ int Gemini::tel_gemini_get_deg (int id, double &val)
 		return ret;
 	// parse returned string
 	val2 = hmstod (buf);
-	if (std::isnan (val))
+	// val2, not val: the point is to reject a reply hmstod() could not
+	// parse before it reaches the caller, and val is the output reference,
+	// still holding whatever the caller happened to declare it with
+	if (std::isnan (val2))
 		return -1;
 	val = val2;
 	return 0;
@@ -1608,7 +1611,9 @@ int Gemini::guide (char direction, unsigned int val)
 int Gemini::changeDec ()
 {
 	char direction;
-	struct timeval chng_time;
+	// tv_usec is never assigned below - the change is a whole number of
+	// seconds - but timeradd() reads it either way
+	struct timeval chng_time = { 0, 0 };
 	int ret;
 	direction = nextChangeDec > 0 ? DIR_NORTH : DIR_SOUTH;
 	ret = guide (direction,
@@ -1631,7 +1636,8 @@ int Gemini::changeDec ()
 int Gemini::change_real (double chng_ra, double chng_dec)
 {
 	char direction;
-	struct timeval chng_time;
+	// same as changeDec() above: only tv_sec is ever set
+	struct timeval chng_time = { 0, 0 };
 	int ret = 0;
 
 	// smaller then 30 arcsec
