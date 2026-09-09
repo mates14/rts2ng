@@ -18,7 +18,7 @@ ViewerClient::ViewerClient (int argc, char **argv):
 	configFile = NULL;
 	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
-	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %c_%H%M%S-%s.fits, in the current directory");
+	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %Y%m%d%H%M%S-%s.fits, in the current directory");
 }
 
 int ViewerClient::processOption (int in_opt)
@@ -77,7 +77,7 @@ int ViewerClient::init ()
 	// really is where viewer frames belong, says so explicitly with
 	// --images or [viewer] expand_path.
 	if (imageExpandPath.empty ())
-		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%c_%H%M%S-%s.fits");
+		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%Y%m%d%H%M%S-%s.fits");
 
 	return 0;
 }
