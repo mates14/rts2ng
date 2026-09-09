@@ -18,7 +18,7 @@ ViewerClient::ViewerClient (int argc, char **argv):
 	configFile = NULL;
 	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
-	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %Y%m%d%H%M%S-%s.fits, in the current directory");
+	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %y%m%d%H%M%S-%s.fits, in the current directory");
 }
 
 int ViewerClient::processOption (int in_opt)
@@ -69,6 +69,13 @@ int ViewerClient::init ()
 	// (scriptexec.cpp) - and if neither is set, just a filename in the
 	// directory the viewer was started from.
 	//
+	// Lowercase %y, not %Y: the expander has two families, actual date
+	// (%y %m %d) and night date (%Y %O %D, or %N for all three). A night
+	// belongs to the evening it started on, so %Y/%N/ is right for filing
+	// the archive - but inside a timestamp %Y would pair the night's year
+	// with the actual month and day, and a frame taken at 01:00 on Jan 1
+	// would be named for Jan 1 of the year before.
+	//
 	// Deliberately not %b (observatoryBasePath, "/images/"): that is the
 	// site archive, typically root-owned, so the default used to fail with
 	// "cannot create directory ... Permission denied" for anyone running
@@ -77,7 +84,7 @@ int ViewerClient::init ()
 	// really is where viewer frames belong, says so explicitly with
 	// --images or [viewer] expand_path.
 	if (imageExpandPath.empty ())
-		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%Y%m%d%H%M%S-%s.fits");
+		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%y%m%d%H%M%S-%s.fits");
 
 	return 0;
 }
