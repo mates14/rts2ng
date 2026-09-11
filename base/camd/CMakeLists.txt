@@ -1,5 +1,7 @@
 add_library(base_camd STATIC
 	src/camd.cpp
+	src/cliwheel.cpp
+	src/clifocuser.cpp
 )
 
 target_include_directories(base_camd PUBLIC

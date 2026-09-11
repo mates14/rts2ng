@@ -1520,6 +1520,37 @@ client.
 scoped effort - inventory every client/device that assumes the current
 ordering first, not as a quick fix bundled into something else.
 
+## `Camera::createOtherType()` null-dereferences `focuserDevice`
+
+`lib/rts2/camd.cpp`, `Camera::createOtherType()`:
+
+```cpp
+case DEVICE_TYPE_FOCUS:
+        if (!strcmp (focuserDevice, conn->getName ()))
+                return new ClientFocusCamera (conn);
+```
+
+`focuserDevice` is only set by `--focdev`; it is `NULL` for every camera
+started without that option, which is the common case. The wheel branch
+immediately above iterates a (possibly empty) list and so is safe, but this
+one hands `NULL` straight to `strcmp()`.
+
+**Reproduction**: start any camera without `--focdev`, then have a focuser
+device open a connection to it. `willConnect()` will not make the camera
+dial *out* to a focuser when `focuserDevice` is unset, so the practical
+trigger is an inbound connection from a focuser - which is why this has
+survived: the usual deployment either sets `--focdev` or has no focuser at
+all.
+
+**Fix** (applied in base, `base/camd/src/camd.cpp`): guard the pointer.
+
+```cpp
+if (focuserDevice != nullptr && !strcmp (focuserDevice, conn->getName ()))
+```
+
+Found 2026-09-11 while porting `ClientFilterCamera`/`ClientFocusCamera` into
+base (task 36).
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

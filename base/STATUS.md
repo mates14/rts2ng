@@ -229,6 +229,36 @@ below.
     against a nonexistent serial device (no crash); `--help` and normal
     option parsing both verified interactively.
 
+36. DONE - `ClientFilterCamera` + `ClientFocusCamera` (`base/camd/`), the
+    camera-side filter-wheel and focuser clients deferred back in task 10.
+    Un-deferred because the gap turned out to produce **wrong data, not just
+    missing features** - see the camd section below. ~180 lines across
+    `cliwheel.*`/`clifocuser.*`, plus two kernel prerequisites
+    (`rts2core::DevClientFilter` in `devclient.*`, `rts2core::CommandFilter`
+    in `command.*` - `DevClientFocus` and `CommandChangeValue` were already
+    there), `Camera::createOtherType()` wired up, and the two
+    `Camera::postEvent()` handlers that had been dropped alongside the
+    clients. **Two bugs fixed on the way**, one latent in the classic tree
+    and one introduced by this very port:
+    - classic `createOtherType()` passed `focuserDevice` straight to
+      `strcmp()` with no null check, so a camera started without `--focdev`
+      would segfault if any focuser connected to it (see `UPSTREAM_BUGS.md`);
+    - restoring the clients made `offsetForFilter()` reach code that had
+      never run before - it raises `focuserMoving` to hold exposures off
+      while the optics settle, and the handler that clears it again
+      (`EVENT_FOCUSER_END_MOVE`, with `EVENT_FILTER_MOVE_END` for the wheel)
+      had been dropped as dead code when the clients were deferred. Without
+      them the first filter change wedged the camera permanently. Caught by
+      an exposure hanging during the smoke test.
+    **Smoke-tested end to end** on a real centrald + dummy camd/filterd/
+    focusd stack with `--wheeldev W0 --focdev F0 --filter-offsets
+    0:10:20:30:40`: setting `C0.filter = 2` drove the wheel (`W0.filter=2`,
+    `FILTA=2`), pushed the offset to the focuser (`FOC_FILTEROFF=20`), the
+    focuser moved (`FOC_POS=20`), `foc_moving` cleared, a subsequent
+    exposure completed rather than hanging, and the resulting FITS header
+    recorded `FILTA = 'V'` (index 2 of `U:B:V:R:I`) with `FOC_POS = 20.` -
+    where before the port it would have said `'U'`. `ctest` 8/8.
+
 **Everything currently in the tree builds and all tests pass** (`ctest`:
 7/7 at last check - hoststring, libnova_cpp, config, value_header,
 connection_prereqs, app, block_connection). No new automated test was added
@@ -335,6 +365,25 @@ they were hard:
   `postEvent()` calls simply find no listener and return early - verified
   this is dummy's actual code path by grepping `dummy.cpp` for
   `wheelDevices`/`focuserDevice`/`createFilter` (no hits).
+
+  **Update (2026-09-11): ported, after the deferral turned out to have a
+  data-correctness consequence found live at FLORES.** Configure a camera
+  with `--wheeldev <dev>` and it creates `wheelA` and `FILTA` as designed -
+  `FILTA` being a `ValueSelection` with `write_to_fits`, so RTS2 writes the
+  filter *name* into the header, and the selection's name list does
+  propagate over the wire correctly. But the *index* never updated, because
+  `createOtherType()` fell through for `DEVICE_TYPE_FW` and no
+  `ClientFilterCamera` existed to track the wheel. An exposure taken with
+  the wheel at index 10 recorded `FILTA = 'CCD700_object_1fiber'` - index 0.
+  A header that confidently states the wrong filter is worse than one that
+  omits it, so this was not a merely-missing feature: any camera configured
+  with `--wheeldev` wrote false metadata. The same deferral also killed the
+  classic "a filter change means a refocus" arrangement outright -
+  `offsetForFilter()` posted `EVENT_FOCUSER_FILTEROFFSET` into the void, so
+  a camera's per-filter offsets never reached the focuser (reported failing
+  at SBT independently).
+
+  Both are now fixed - see task 36 below.
 - **Direct-FITS-write readout path** (`dummy.cpp`'s `fitsTransfer` option,
   `#include "rts2fits/image.h"`): pulls in the whole rts2fits/cfitsio
   image-writing subsystem, a separate frontend-adjacent library, not part

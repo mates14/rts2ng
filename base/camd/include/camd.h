@@ -42,8 +42,9 @@ typedef enum {CEIL = -1, ROUND, FLOOR} rounding_t;
 // DevClient subclasses that actually talk to the filter wheel/focuser
 // connection (classic ClientFilterCamera/ClientFocusCamera in
 // cliwheel.h/clifocuser.h). Camera uses them unconditionally, so they live
-// here even though those DevClient subclasses are themselves deferred (see
-// camd.cpp's createOtherType note) - without a wheel/focuser device
+// here rather than in those headers, because Camera uses them
+// unconditionally. The DevClient subclasses themselves were ported on
+// 2026-09-11 (cliwheel.h/clifocuser.h); without a wheel/focuser device
 // configured, postEvent() with these types simply finds no listener.
 #define EVENT_FILTER_START_MOVE RTS2_LOCAL_EVENT + 650
 #define EVENT_FILTER_MOVE_END RTS2_LOCAL_EVENT + 651

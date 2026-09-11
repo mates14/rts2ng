@@ -39,6 +39,8 @@
 #include <iomanip>
 
 #include "camd.h"
+#include "cliwheel.h"
+#include "clifocuser.h"
 #include "timestamp.h"
 
 #define OPT_WCS_MULTI         OPT_LOCAL + 400
@@ -615,10 +617,24 @@ int Camera::willConnect (rts2core::NetworkAddress * in_addr)
 
 rts2core::DevClient *Camera::createOtherType (rts2core::Connection * conn, int other_device_type)
 {
-	// base note: filter wheel / focuser DevClient subclasses
-	// (ClientFilterCamera/ClientFocusCamera) are deferred - fall through to
-	// the base implementation for DEVICE_TYPE_FW/DEVICE_TYPE_FOCUS too, same
-	// as Device::createOtherType does for every device type.
+	switch (other_device_type)
+	{
+		case DEVICE_TYPE_FW:
+			for (std::list <FilterVal>::iterator iter = camFilterVals.begin (); iter != camFilterVals.end (); iter++)
+			{
+				if (!strcmp (iter->name, conn->getName ()))
+					return new ClientFilterCamera (conn, &(*iter));
+			}
+			break;
+		case DEVICE_TYPE_FOCUS:
+			// base note: classic passed focuserDevice straight to strcmp
+			// without checking it - a camera started without --focdev
+			// leaves it nullptr, so any focuser connecting to us would
+			// have segfaulted here. See UPSTREAM_BUGS.md.
+			if (focuserDevice != nullptr && !strcmp (focuserDevice, conn->getName ()))
+				return new ClientFocusCamera (conn);
+			break;
+	}
 	return rts2core::ScriptDevice::createOtherType (conn, other_device_type);
 }
 
@@ -1550,6 +1566,26 @@ void Camera::postEvent (rts2core::Event * event)
 {
 	switch (event->getType ())
 	{
+		// base note (2026-09-11): these two came back with
+		// ClientFilterCamera/ClientFocusCamera. While those were deferred
+		// nothing ever posted either event, so the handlers were dead code
+		// and were dropped with them - but they are the *other* half of the
+		// interlock: offsetForFilter()/setFocuser() raise focuserMoving (and
+		// ClientFilterCamera raises FilterVal::moving) to hold exposures off
+		// while the optics settle, and only these clear them again. Without
+		// them the first filter change wedges the camera for good.
+		case EVENT_FILTER_MOVE_END:
+			((FilterVal *) (event->getArg ()))->moving->setValueBool (false);
+			if (!filterMoving ())
+				checkQueuedExposures ();
+			break;
+		case EVENT_FOCUSER_END_MOVE:
+			if (event->getArg () == this && focuserMoving && focuserMoving->getValueBool ())
+			{
+				focuserMoving->setValueBool (false);
+				checkQueuedExposures ();
+			}
+			break;
 		case EVENT_TEMP_CHECK:
 			temperatureCheck ();
 			addTimer (tempCCDHistoryInterval->getValueInteger (), event);
