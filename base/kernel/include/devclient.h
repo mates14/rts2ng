@@ -29,8 +29,9 @@
 // judgment call as command.h's ~45 dropped Command subclasses: only
 // DevClientCamera/DevClientTelescope/DevClientFocus/DevClientPhot are
 // ported here (execcli/scriptexec's real consumers - DevClientPhot only
-// for a virtual-signature reference, never instantiated by scriptexec).
-// The other 11 subclasses remain deferred until whichever consumer needs
+// for a virtual-signature reference, never instantiated by scriptexec),
+// plus DevClientFilter (added 2026-09-11 for rts2camd::ClientFilterCamera).
+// The other 10 subclasses remain deferred until whichever consumer needs
 // them (most likely Executor, much later). Block::createOtherType()
 // returns a plain DevClient for every other device type until then - see
 // the note in block.cpp.
@@ -271,5 +272,31 @@ class DevClientPhot:public DevClient
 		float lastExp;
 		bool integrating;
 };
+
+/**
+ * Client for a filter wheel device.
+ *
+ * Turns the wheel's FILTERD_MASK state transitions into move start/end/failed
+ * callbacks, so a consumer does not have to decode device state itself.
+ *
+ * base note: ported for rts2camd::ClientFilterCamera - without it a camera
+ * given --wheeldev creates FILTA/FILTB but can neither drive the wheel nor
+ * track its position, and writes a stale filter name into every FITS header.
+ */
+class DevClientFilter:public DevClient
+{
+	public:
+		DevClientFilter (Connection * in_connection);
+		virtual ~ DevClientFilter (void);
+		virtual void filterMoveFailed (int status);
+		virtual void stateChanged (ServerState * state);
+
+		virtual void filterOK () {}
+
+	protected:
+		virtual void filterMoveStart ();
+		virtual void filterMoveEnd ();
+};
+
 
 }

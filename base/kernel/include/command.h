@@ -31,7 +31,8 @@
 // name but actually take a Connection* (not a DevClient*) and implement the
 // core status_info/device_status protocol handshake that
 // Connection::sendCommand() itself issues, so they're core, not deferred.
-// Also added CommandChangeValue (task: rts2-mon) - it only builds a
+// Also added CommandFilter (task: ClientFilterCamera, 2026-09-11) and
+// CommandChangeValue (task: rts2-mon) - the latter only builds a
 // PROTO_SET_VALUE wire string from a value name/operator/operand(s), no
 // DevClient dependency, needed by the value-editing dialogs in
 // base/monitor/nvaluebox.cpp.
@@ -116,6 +117,7 @@ class DevClientTelescope;
 class DevClientFocus;
 class DevClientCamera;
 class DevClientPhot;
+class DevClientFilter;
 
 /**
  * Base class which represents commands send over network to other component.
@@ -297,6 +299,32 @@ class CommandMessageMask:public Command
 {
 	public:
 		CommandMessageMask (Block * _master, int _mask);
+};
+
+/**
+ * Set a filter wheel's filter number.
+ *
+ * base note (2026-09-11): ported for rts2camd::ClientFilterCamera. All three
+ * constructors are kept - DevClientCamera/DevClientPhot/DevClientFilter all
+ * exist in this tree and all three declare the filterOK/filter*Failed hooks
+ * this dispatches to, so there was nothing to trim.
+ *
+ * @ingroup RTS2Command
+ */
+class CommandFilter:public Command
+{
+	private:
+		DevClientCamera * camera;
+		DevClientPhot * phot;
+		DevClientFilter * filterCli;
+		void setCommandFilter (int filter);
+	public:
+		CommandFilter (DevClientCamera * _camera, int filter);
+		CommandFilter (DevClientPhot * _phot, int filter);
+		CommandFilter (DevClientFilter * _filter, int filter);
+
+		virtual int commandReturnOK (Connection * conn);
+		virtual int commandReturnFailed (int status, Connection * conn);
 };
 
 /**

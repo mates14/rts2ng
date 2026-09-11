@@ -432,3 +432,42 @@ void DevClientPhot::valueChanged (Value * value)
 	}
 	DevClient::valueChanged (value);
 }
+
+DevClientFilter::DevClientFilter (Connection * _connection):DevClient (_connection)
+{
+}
+
+DevClientFilter::~DevClientFilter ()
+{
+}
+
+void DevClientFilter::filterMoveStart ()
+{
+}
+
+void DevClientFilter::filterMoveEnd ()
+{
+}
+
+void DevClientFilter::filterMoveFailed (int status)
+{
+}
+
+void DevClientFilter::stateChanged (ServerState * state)
+{
+	if (state->maskValueChanged (FILTERD_MASK))
+	{
+		switch (state->getValue () & FILTERD_MASK)
+		{
+			case FILTERD_MOVE:
+				filterMoveStart ();
+				break;
+			case FILTERD_IDLE:
+				if (connection->getErrorState () == DEVICE_NO_ERROR)
+					filterMoveEnd ();
+				else
+					filterMoveFailed (connection->getErrorState ());
+				break;
+		}
+	}
+}

@@ -562,3 +562,56 @@ CommandScriptEnds::CommandScriptEnds (Block *_master):Command (_master)
 {
 	setCommand ("script_ends");
 }
+
+void CommandFilter::setCommandFilter (int filter)
+{
+	std::ostringstream _os;
+	_os << PROTO_SET_VALUE " filter = " << filter;
+	setCommand (_os);
+}
+
+CommandFilter::CommandFilter (DevClientCamera * _camera, int filter):Command (_camera->getMaster ())
+{
+	camera = _camera;
+	phot = nullptr;
+	filterCli = nullptr;
+	setCommandFilter (filter);
+}
+
+CommandFilter::CommandFilter (DevClientPhot * _phot, int filter):Command (_phot->getMaster ())
+{
+	camera = nullptr;
+	phot = _phot;
+	filterCli = nullptr;
+	setCommandFilter (filter);
+}
+
+CommandFilter::CommandFilter (DevClientFilter * _filter, int filter):Command (_filter->getMaster ())
+{
+	camera = nullptr;
+	phot = nullptr;
+	filterCli = _filter;
+	setCommandFilter (filter);
+}
+
+int CommandFilter::commandReturnOK (Connection * conn)
+{
+	if (camera)
+		camera->filterOK ();
+	if (phot)
+		phot->filterOK ();
+	if (filterCli)
+		filterCli->filterOK ();
+	return Command::commandReturnOK (conn);
+}
+
+int CommandFilter::commandReturnFailed (int status, Connection * conn)
+{
+	if (camera)
+		camera->filterFailed (status);
+	if (phot)
+		phot->filterMoveFailed (status);
+	if (filterCli)
+		filterCli->filterMoveFailed (status);
+	return Command::commandReturnFailed (status, conn);
+}
