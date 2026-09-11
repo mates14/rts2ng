@@ -26,7 +26,8 @@
 # Other things the classic script got wrong, fixed here:
 #   - daemons were looked for in @CMAKE_INSTALL_FULL_BINDIR@ only, so
 #     services installed elsewhere (the rtspy ones under /usr/local/bin)
-#     could never be started; the PATH is searched now
+#     could never be started; the PATH is searched now, and a name is
+#     resolved as rts2-* first, rtspy-* second (see resolve_bin)
 #   - a per-daemon --lock-prefix in the config was ignored when locating
 #     the lock file, so such a daemon could never be stopped or restarted
 #   - stop kill'ed whatever pid the lock file happened to contain, without
@@ -44,9 +45,9 @@ RTS2_LOCK_PREFIX=@RTS2_LOCK_PREFIX@
 RTS2_CENTRALD_PORT=@RTS2_CENTRALD_PORT@
 
 # Daemons are looked up on the PATH, with the packaged location first. Not
-# everything lives in @CMAKE_INSTALL_FULL_BINDIR@ - the rtspy services
-# (rts2-queuer, rts2-gcnkafka) install under /usr/local/bin - and a cron or
-# systemd invocation may not have that on its PATH, so make sure it is.
+# everything lives in @CMAKE_INSTALL_FULL_BINDIR@ - the rtspy-* daemons
+# install under /usr/local/bin - and a cron or systemd invocation may not
+# have that on its PATH, so make sure it is.
 PATH="$RTS2_BINDIR:$PATH"
 case ":$PATH:" in
 	*:/usr/local/bin:*) ;;
@@ -97,6 +98,32 @@ strip_comments ()
 # device and service (that is how --server ends up on all of them).
 centrald_opts=$(grep '^-' "$CENTRALD_FILE" 2>/dev/null | tr '\n' ' ')
 
+# A device or service may be implemented by C++ RTS2 or by rtspy, and the two
+# keep strictly separate command namespaces - rts2-* and rtspy-* - so that
+# neither has to dodge names the other might ship (C++ has its own
+# rts2-focusd-dummy; rtspy has a different one). The configuration files name
+# neither: a line says "focusd toptec TOPTEC", and it is resolved here, C++
+# first and rtspy second, so the C++ implementation wins wherever both exist.
+#
+# Resolving once in list_entries() rather than at each use matters: stop
+# refuses to kill unless /proc/<pid>/comm matches the program name, so start,
+# stop and status have to agree on which program a name means. (If the other
+# implementation were installed between a start and a stop, resolution could
+# name a different program than the one running - the comm check then refuses
+# to kill, which is the safe way to be wrong.)
+resolve_bin ()
+{
+	local rts2_name=$1 rtspy_name=$2
+	if command -v "$rts2_name" >/dev/null 2>&1; then
+		printf '%s' "$rts2_name"
+	elif command -v "$rtspy_name" >/dev/null 2>&1; then
+		printf '%s' "$rtspy_name"
+	else
+		# neither exists - name the C++ one, and let start_one report it
+		printf '%s' "$rts2_name"
+	fi
+}
+
 # Emit one TAB separated record per configured daemon:
 #	kind	name	lockname	binary	arguments
 list_entries ()
@@ -115,14 +142,18 @@ list_entries ()
 
 	while read -r device type name opts; do
 		[ -n "${name:-}" ] || continue
-		printf 'device\t%s\t%s\trts2-%s-%s\t%s %s\n' \
-			"$name" "$name" "$device" "$type" "$opts" "$centrald_opts"
+		printf 'device\t%s\t%s\t%s\t%s %s\n' \
+			"$name" "$name" \
+			"$(resolve_bin "rts2-$device-$type" "rtspy-$device-$type")" \
+			"$opts" "$centrald_opts"
 	done < <(strip_comments "$DEVICE_CONFIG")
 
 	while read -r service name opts; do
 		[ -n "${name:-}" ] || continue
-		printf 'service\t%s\t%s\trts2-%s\t%s %s\n' \
-			"$name" "$name" "$service" "$opts" "$centrald_opts"
+		printf 'service\t%s\t%s\t%s\t%s %s\n' \
+			"$name" "$name" \
+			"$(resolve_bin "rts2-$service" "rtspy-$service")" \
+			"$opts" "$centrald_opts"
 	done < <(strip_comments "$SERVICE_CONFIG")
 }
 
@@ -186,7 +217,7 @@ start_one ()
 	local lock dev_opt errfile rc
 
 	if ! command -v "$bin" >/dev/null 2>&1; then
-		report "$kind" "$name" "FAILED - no such program: $bin"
+		report "$kind" "$name" "FAILED - no such program: $bin (nor its rtspy- equivalent)"
 		return 1
 	fi
 
