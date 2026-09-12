@@ -45,9 +45,51 @@ namespace
 	constexpr double COMMAND_TIMEOUT_SEC = 1.0;
 	constexpr int RESYNC_ATTEMPTS = 5;
 
+	// one extra handshake + tracking-rate read every this many normal poll
+	// cycles (so ~15s at the default 1s poll interval). Cheap insurance
+	// against the mount rebooting under a running driver - which is what
+	// the whole startup-handshake machinery exists to survive - without
+	// doubling the routine datagram rate.
+	constexpr int SLOW_POLL_EVERY = 15;
+
+	// how many consecutive polls have to show the mount moving away from
+	// its target before GeminiStatus::moveWrongWay is raised
+	constexpr int WRONG_WAY_POLLS = 3;
+
+	// cap on bR#/bW#/bC# selections per boot: if the mount is still sitting
+	// in its boot menu after this many, something is wrong with the
+	// selection itself and repeating it forever helps nobody - leave the
+	// state visible instead and let the driver surface it.
+	constexpr int MAX_STARTUP_SELECTIONS = 5;
+
 	double nowSeconds ()
 	{
 		return std::chrono::duration<double> (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+	}
+
+	double angularSeparationDeg (double ra1, double dec1, double ra2, double dec2)
+	{
+		if (std::isnan (ra1) || std::isnan (dec1) || std::isnan (ra2) || std::isnan (dec2))
+			return NAN;
+		struct ln_equ_posn a, b;
+		a.ra = ra1;
+		a.dec = dec1;
+		b.ra = ra2;
+		b.dec = dec2;
+		return ln_get_angular_separation (&a, &b);
+	}
+
+	// the three boot-menu selections Gemini accepts while its handshake
+	// answers 'b', in GeminiCaringLoop::StartupMode order - same commands,
+	// same order, as base/teld/gemini/gemini.cpp's tel_gemini_reset()
+	const char *startupSelectionCommand (int mode)
+	{
+		switch (mode)
+		{
+			case GeminiCaringLoop::STARTUP_WARM: return "bW#";
+			case GeminiCaringLoop::STARTUP_COLD: return "bC#";
+			default: return "bR#";
+		}
 	}
 
 	void putLE32 (uint8_t *p, uint32_t v)
@@ -228,7 +270,10 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	hostname (_hostname), port (_port), sock (-1), stopFlag (false),
 	lastPollRa (NAN), lastPollDec (NAN), stableCount (0), moveStartedAt (0), moveDeadline (0),
 	activeMoveTargetRa (NAN), activeMoveTargetDec (NAN),
-	abortRequested (false), parkRequested (false), pollIntervalSec (1.0), nextDatagramNumber (0)
+	abortRequested (false), parkRequested (false), rebootRequested (false), rebootCold (false),
+	startupMode ((int) STARTUP_RESTART), forceColdSelection (false), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
+	moveMinSeparation (NAN), wrongWayCount (0), moveStartPierSide ('?'), movePierChangedFlag (false),
+	slowPollCounter (0), nextDatagramNumber (0)
 {
 }
 
@@ -306,6 +351,34 @@ void GeminiCaringLoop::requestPark ()
 	parkRequested = true;
 }
 
+void GeminiCaringLoop::requestReboot (bool cold)
+{
+	// drop out of "the mount is up and usable" the moment the reboot is
+	// asked for, not when the caring thread gets round to sending it: the
+	// same race requestPark() documents, with the same consequence if it's
+	// got wrong (a goto accepted into a mount that is on its way down).
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		status.startupComplete = false;
+		status.startupState = '?';
+		status.startupSelections = 0;
+		status.valid = false;
+		status.moveInProgress = false;
+		status.parking = false;
+	}
+	rebootCold = cold;
+	if (cold)
+		forceColdSelection = true;
+	rebootRequested = true;
+}
+
+void GeminiCaringLoop::setStartupMode (StartupMode mode)
+{
+	startupMode = (int) mode;
+	std::lock_guard<std::mutex> lock (mutex_);
+	status.startupSelections = 0;
+}
+
 void GeminiCaringLoop::queueNativeSet (int id, int32_t value)
 {
 	std::lock_guard<std::mutex> lock (mutex_);
@@ -371,38 +444,47 @@ bool GeminiCaringLoop::readNativeRaw (int id, std::string &value, double waitTim
 	return parseNativeGetReply (response, value);
 }
 
+namespace
+{
+	// the three commands matchTimeUtc()/matchTimeUtcInternal() send, built
+	// once here so the RTS2-thread-facing and caring-thread-facing versions
+	// can never drift apart. labels[] is only for the error messages.
+	void buildMatchTimeCommands (std::string cmds[3], const char *labels[3])
+	{
+		time_t t = time (nullptr);
+		struct tm ts;
+		gmtime_r (&t, &ts);
+
+		char buf[32];
+		// 1) zero the UTC-offset register, so Gemini's "local time" is UTC
+		cmds[0] = ":SG+00.0#";
+		labels[0] = "cannot set UTC offset (:SG+00.0#)";
+		// 2) set time
+		snprintf (buf, sizeof (buf), ":SL%02d:%02d:%02d#", ts.tm_hour, ts.tm_min, ts.tm_sec);
+		cmds[1] = buf;
+		labels[1] = "cannot set time (:SL#)";
+		// 3) set date
+		snprintf (buf, sizeof (buf), ":SC%02d/%02d/%02d#", ts.tm_mon + 1, ts.tm_mday, ts.tm_year - 100);
+		cmds[2] = buf;
+		labels[2] = "cannot set date (:SC#)";
+	}
+}
+
 bool GeminiCaringLoop::matchTimeUtc (std::string &errorMessage, double waitTimeoutSec)
 {
-	time_t t = time (nullptr);
-	struct tm ts;
-	gmtime_r (&t, &ts);
+	std::string cmds[3];
+	const char *labels[3];
+	buildMatchTimeCommands (cmds, labels);
 
 	std::string response;
-	char buf[32];
-
-	// 1) zero the UTC-offset register, so Gemini's "local time" is UTC
-	if (!sendRawSync (":SG+00.0#", response, waitTimeoutSec) || response.empty () || response[0] != '1')
+	for (int i = 0; i < 3; i++)
 	{
-		errorMessage = "cannot set UTC offset (:SG+00.0#)";
-		return false;
+		if (!sendRawSync (cmds[i], response, waitTimeoutSec) || response.empty () || response[0] != '1')
+		{
+			errorMessage = labels[i];
+			return false;
+		}
 	}
-
-	// 2) set time
-	snprintf (buf, sizeof (buf), ":SL%02d:%02d:%02d#", ts.tm_hour, ts.tm_min, ts.tm_sec);
-	if (!sendRawSync (buf, response, waitTimeoutSec) || response.empty () || response[0] != '1')
-	{
-		errorMessage = "cannot set time (:SL#)";
-		return false;
-	}
-
-	// 3) set date
-	snprintf (buf, sizeof (buf), ":SC%02d/%02d/%02d#", ts.tm_mon + 1, ts.tm_mday, ts.tm_year - 100);
-	if (!sendRawSync (buf, response, waitTimeoutSec) || response.empty () || response[0] != '1')
-	{
-		errorMessage = "cannot set date (:SC#)";
-		return false;
-	}
-
 	return true;
 }
 
@@ -513,6 +595,44 @@ bool GeminiCaringLoop::sendAndReceive (const std::string &payload, std::string &
 	return false;
 }
 
+// Copies across everything a fresh ENQ parse does not itself produce.
+// Getting this wrong is silent and annoying to chase: the field just reads
+// as its default for one poll cycle in three, or forever. (It cost a real
+// bug before this existed - requestPark() sets status.parking on the RTS2
+// thread, and a pollStatus() that happened to be blocked in recv() at that
+// moment wiped the flag on its way out, so isParking() saw "not parking"
+// and declared the park finished within milliseconds.)
+void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiStatus &to)
+{
+	to.moveInProgress = from.moveInProgress;
+	to.moveFailed = from.moveFailed;
+	to.moveFailReason = from.moveFailReason;
+	to.moveWrongWay = from.moveWrongWay;
+	to.movePierChanged = from.movePierChanged;
+
+	to.parking = from.parking;
+	to.parkFailed = from.parkFailed;
+	to.parkStatus = from.parkStatus;
+
+	// polled separately (native 226), and deliberately sticky: a single
+	// dropped datagram must not erase a tracking-limit warning that is
+	// already showing - see pollTrackingLimit()
+	to.trackingSecToWestLimit = from.trackingSecToWestLimit;
+	to.trackingRate = from.trackingRate;
+
+	to.startupState = from.startupState;
+	to.startupComplete = from.startupComplete;
+	to.startupCount = from.startupCount;
+	to.startupSelections = from.startupSelections;
+	to.clockMatched = from.clockMatched;
+
+	to.limitsValid = from.limitsValid;
+	to.limitBothRaw = from.limitBothRaw;
+	to.limitEastRaw = from.limitEastRaw;
+	to.limitWestRaw = from.limitWestRaw;
+	to.limitWestGotoRaw = from.limitWestGotoRaw;
+}
+
 void GeminiCaringLoop::pollStatus ()
 {
 	std::string response;
@@ -530,12 +650,35 @@ void GeminiCaringLoop::pollStatus ()
 	fresh.connected = true;
 	fresh.valid = true;
 	fresh.timestamp = nowSeconds ();
-	fresh.moveInProgress = status.moveInProgress;
-	fresh.moveFailed = status.moveFailed;
-	fresh.moveFailReason = status.moveFailReason;
+	carryPersistentFields (status, fresh);
 
 	if (fresh.moveInProgress)
 	{
+		// ---- is the mount actually going where it was told to? ----
+		// A real meridian flip legitimately swings the reported RA/Dec far
+		// away from both ends of the move (the mount crosses the pole with
+		// the counterweight going over), so as soon as the pier side
+		// changes mid-move this check stands down for the rest of it
+		// rather than reporting the flip itself as a fault.
+		if (fresh.pierSide != '?' && moveStartPierSide != '?' && fresh.pierSide != moveStartPierSide)
+			movePierChangedFlag = true;
+		fresh.movePierChanged = movePierChangedFlag;
+
+		fresh.moveSeparation = angularSeparationDeg (fresh.ra, fresh.dec, activeMoveTargetRa, activeMoveTargetDec);
+		if (!std::isnan (fresh.moveSeparation))
+		{
+			if (std::isnan (moveMinSeparation) || fresh.moveSeparation < moveMinSeparation)
+				moveMinSeparation = fresh.moveSeparation;
+
+			if (!movePierChangedFlag && fresh.moveSeparation > moveMinSeparation + wrongWayMarginDeg.load ())
+				wrongWayCount++;
+			else
+				wrongWayCount = 0;
+
+			if (wrongWayCount >= WRONG_WAY_POLLS)
+				fresh.moveWrongWay = true;	// sticky until the next accepted goto clears it
+		}
+
 		if (!std::isnan (lastPollRa) &&
 			fabs (ln_range_degrees (fresh.ra - lastPollRa)) < MOVE_STABLE_DEG &&
 			fabs (fresh.dec - lastPollDec) < MOVE_STABLE_DEG)
@@ -604,21 +747,220 @@ void GeminiCaringLoop::pollTrackingLimit ()
 	}
 }
 
+// native register 130 - the mount's own idea of which tracking rate it is
+// running (131 sidereal, 135 terrestrial/off, ...). Read with the slow poll
+// group rather than every cycle: nothing changes it behind our back at
+// second resolution, and it exists mostly so an operator (and the safety
+// watchdog) can see that a requested "start tracking" really landed.
+void GeminiCaringLoop::pollTrackingRate ()
+{
+	std::string value;
+	if (!readNativeInternal (130, value))
+		return;
+	try
+	{
+		int rate = std::stoi (value);
+		std::lock_guard<std::mutex> lock (mutex_);
+		status.trackingRate = rate;
+	}
+	catch (const std::exception &)
+	{
+	}
+}
+
+// The missing half of "connect to the mount" - see GeminiStatus::
+// startupState. A Gemini that has just been powered on sits in its boot
+// menu answering status queries quite normally while ignoring every single
+// motion command, which from the client side is indistinguishable from a
+// broken driver. base/teld/gemini/gemini.cpp's tel_gemini_reset() does this
+// same 0x06 handshake over RS232; this is the UDP equivalent, with two
+// differences: it runs on every poll cycle until the mount is up (rather
+// than once, blocking, at connect), and it keeps running - at
+// SLOW_POLL_EVERY - afterwards, so a mount that reboots under a running
+// driver is noticed and brought back up instead of silently going deaf.
+void GeminiCaringLoop::pollStartupState ()
+{
+	std::string response;
+	bool ok = sendAndReceive (std::string (1, '\x06'), response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+
+	if (!ok || response.empty ())
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		status.connected = ok;
+		return;
+	}
+
+	char state = response[0];
+
+	bool selectNow = false;
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		status.connected = true;
+		status.startupState = state;
+
+		switch (state)
+		{
+			case 'G':	// startup complete, German equatorial
+			case 'A':	// startup complete, Alt/Az
+				if (status.startupComplete)
+					return;	// already up and known to be up - nothing to do
+				break;
+			case 'b':	// boot menu, waiting for a startup-mode selection
+				status.startupComplete = false;
+				if (status.startupSelections < MAX_STARTUP_SELECTIONS)
+				{
+					status.startupSelections++;
+					selectNow = true;
+				}
+				break;
+			default:	// 'B' startup message on screen, 'S' cold start running, or something undocumented
+				status.startupComplete = false;
+				return;
+		}
+	}
+
+	if (selectNow)
+	{
+		// no meaningful reply to parse - a command Gemini has no response
+		// for comes back as the ACK substitution (see the protocol
+		// reference, "Commands with no serial response"). The next poll
+		// cycle re-reads the handshake and sees whether it took.
+		std::string ignored;
+		int mode = forceColdSelection.load () ? (int) STARTUP_COLD : startupMode.load ();
+		sendAndReceive (startupSelectionCommand (mode), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+		return;
+	}
+
+	// fell through the 'G'/'A' case with startupComplete still false: the
+	// mount has just finished starting up (or we have just connected to one
+	// that was already up)
+	runPostStartupSequence ();
+}
+
+// Everything that has to be said to the mount once per startup, done here
+// on the caring thread rather than from GeminiUDP::initValues() for two
+// reasons: it must also run after a *re*start (a power cycle, somebody
+// else's reboot, our own cold-start recovery), and doing it here keeps it
+// off the RTS2 thread - the four limit reads plus the three clock commands
+// are seven bounded round-trips, which is a long time to hold up an event
+// loop that is also serving rts2-mon, the executor and every camera.
+void GeminiCaringLoop::runPostStartupSequence ()
+{
+	// ":hW#" - wake up the telescope and resume tracking. Same command, at
+	// the same point, as base/teld/gemini/gemini.cpp's initHardware() and
+	// the live production driver's (~/gemini2ser.cpp): without it a mount
+	// that was put to sleep (":hN#", or its own park behaviour - see native
+	// 92) stays asleep and ignores motion commands, which looks exactly
+	// like the boot-menu failure this whole function exists to fix.
+	std::string response;
+	sendAndReceive (":hW#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+
+	// every HA/LST-derived decision this driver makes trusts the mount's
+	// own clock, and a cold start is exactly when that clock is least
+	// likely to be right
+	bool timeOk = matchTimeUtcInternal ();
+
+	std::string both, east, west, westGoto;
+	bool limitsOk = readNativeInternal (220, both)
+		&& readNativeInternal (221, east)
+		&& readNativeInternal (222, west)
+		&& readNativeInternal (223, westGoto);
+
+	int rate = 0;
+	std::string rateStr;
+	if (readNativeInternal (130, rateStr))
+	{
+		try
+		{
+			rate = std::stoi (rateStr);
+		}
+		catch (const std::exception &)
+		{
+		}
+	}
+
+	std::lock_guard<std::mutex> lock (mutex_);
+	if (limitsOk)
+	{
+		status.limitBothRaw = both;
+		status.limitEastRaw = east;
+		status.limitWestRaw = west;
+		status.limitWestGotoRaw = westGoto;
+		status.limitsValid = true;
+	}
+	if (rate != 0)
+		status.trackingRate = rate;
+	status.clockMatched = timeOk;
+	status.startupComplete = true;
+	status.startupSelections = 0;
+	status.startupCount++;
+	forceColdSelection = false;
+}
+
+bool GeminiCaringLoop::matchTimeUtcInternal ()
+{
+	std::string cmds[3];
+	const char *labels[3];
+	buildMatchTimeCommands (cmds, labels);
+
+	for (int i = 0; i < 3; i++)
+	{
+		std::string response;
+		if (!sendAndReceive (cmds[i], response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS) || response.empty () || response[0] != '1')
+			return false;
+	}
+	return true;
+}
+
+bool GeminiCaringLoop::readNativeInternal (int id, std::string &value)
+{
+	std::string response;
+	if (!sendAndReceive (buildNativeGet (id), response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
+		return false;
+	return parseNativeGetReply (response, value);
+}
+
+// 65533 "reboot enforcing a Cold Start" / 65535 "reboot" - the same pair,
+// picked the same way, as base/teld/gemini/gemini.cpp's resetMount().
+// requestReboot() has already marked the snapshot as not-started-up, so by
+// the time this returns the caring loop is back in handshake mode and will
+// walk the mount up through its boot menu on its own.
+void GeminiCaringLoop::handleReboot ()
+{
+	std::string response;
+	sendAndReceive (buildNativeSet (rebootCold.load () ? 65533 : 65535, "0"), response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+}
+
 void GeminiCaringLoop::handleGoto ()
 {
 	double ra, dec;
+	bool started;
+	char pierSideNow, startupStateNow;
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
 		gotoRequested = false;
 		ra = gotoTargetRa;
 		dec = gotoTargetDec;
+		started = status.startupComplete;
+		pierSideNow = status.pierSide;
+		startupStateNow = status.startupState;
 	}
 
 	std::string sr, sd;
 	bool accepted = false;
 	std::string message;
 
-	if (!formatTargetCommands (ra, dec, sr, sd))
+	if (!started)
+	{
+		// the failure mode this refusal exists to make visible: a Gemini
+		// still in its boot menu acks :Sr/:Sd and answers :MS# perfectly
+		// politely, and then does nothing at all. Far better to reject the
+		// move here, with a reason, than to let the framework believe a
+		// slew is under way for its full timeout.
+		message = "mount startup is not complete (handshake state '"
+			+ std::string (1, startupStateNow) + "') - not sending a slew to a mount that will ignore it";
+	}
+	else if (!formatTargetCommands (ra, dec, sr, sd))
 	{
 		message = "bad target RA/Dec";
 	}
@@ -672,6 +1014,11 @@ void GeminiCaringLoop::handleGoto ()
 		lastPollDec = NAN;
 		activeMoveTargetRa = ra;
 		activeMoveTargetDec = dec;
+
+		moveMinSeparation = NAN;
+		wrongWayCount = 0;
+		moveStartPierSide = pierSideNow;
+		movePierChangedFlag = false;
 	}
 
 	std::lock_guard<std::mutex> lock (mutex_);
@@ -683,6 +1030,9 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveInProgress = true;
 		status.moveFailed = false;
 		status.moveFailReason.clear ();
+		status.moveWrongWay = false;
+		status.movePierChanged = false;
+		status.moveSeparation = NAN;
 	}
 	cv_.notify_all ();
 }
@@ -793,6 +1143,15 @@ void GeminiCaringLoop::threadMain ()
 
 	while (!stopFlag.load ())
 	{
+		// ahead of the abort: a reboot is the heaviest thing we can ask of
+		// the mount and the recovery sequence that issues one has already
+		// stopped and parked it by this point
+		if (rebootRequested.exchange (false))
+		{
+			handleReboot ();
+			continue;
+		}
+
 		if (abortRequested.exchange (false))
 		{
 			handleAbort ();
@@ -849,22 +1208,38 @@ void GeminiCaringLoop::threadMain ()
 			continue;
 		}
 
-		bool parking;
+		bool parking, started;
 		{
 			std::lock_guard<std::mutex> lock (mutex_);
 			parking = status.parking;
+			started = status.startupComplete;
 		}
 
 		double now = nowSeconds ();
 		if (now - lastPoll >= pollIntervalSec.load ())
 		{
 			lastPoll = now;
-			if (parking)
+			if (!started)
+			{
+				// nothing else is worth asking a mount that is still
+				// booting - and while it sits in its boot menu this is
+				// what walks it out of there
+				pollStartupState ();
+			}
+			else if (parking)
+			{
 				pollParkStatus ();
+			}
 			else
 			{
 				pollStatus ();
 				pollTrackingLimit ();
+				if (++slowPollCounter >= SLOW_POLL_EVERY)
+				{
+					slowPollCounter = 0;
+					pollStartupState ();	// catches a mount that rebooted under us
+					pollTrackingRate ();
+				}
 			}
 		}
 		else

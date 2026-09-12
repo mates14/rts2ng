@@ -2808,6 +2808,144 @@ Verified against the classic binary built from `~/src/rts2`: for the same
 `-t` instant the full table + schedule output is byte-identical, as are
 `--sun-azimuth`, `-N -c` and `-d`.
 
+## Teld-gemini-udp: startup, tracking and the safety watchdog (2026-09-12)
+
+Field report from SBT (colleague at the mount, 2026-09-12) on the new
+`rts2-teld-gemini-udp` driver. Three problems, all of them real, and a
+prescription for the third that this section implements.
+
+**1. It never handled the mount's own startup.** First symptom, and the
+worst kind: the driver connected, read status perfectly, and ignored every
+command. A Gemini that has been power-cycled sits in its boot menu waiting
+for a startup mode to be chosen, and while it is there it answers status
+queries quite normally and moves for nobody. The colleague worked it out by
+starting the *old* `gemini2ser`, letting it initialize the mount, killing
+it, and then running the UDP driver - which then worked. (Even after that
+the first `altaz 45 45` went somewhere nonsensical, in *both* drivers,
+until a cold start from Gemini's own web interface; after that both were
+correct. So the mount's state was wrong, not the driver's arithmetic.)
+
+The fix is the 0x06 ACK handshake `base/teld/gemini/gemini.cpp`'s
+`tel_gemini_reset()` already does over RS232 - `B#` startup message, `b#`
+boot menu, `S#` cold start running, `G#`/`A#` up - with the boot menu
+answered by `bR#`/`bW#`/`bC#`. Two differences from the classic driver:
+
+- It lives in the caring loop (`GeminiCaringLoop::pollStartupState()`), runs
+  every poll cycle until the mount is up, and keeps running afterwards
+  every `SLOW_POLL_EVERY` (~15s) cycles. A mount that reboots under a
+  running driver is therefore noticed and brought back up, instead of
+  silently going deaf - which matters much more here than on serial, where
+  a reboot also drops the link.
+- Everything that has to be said to the mount once per startup moved into
+  `runPostStartupSequence()` on the caring thread: `:hW#` (wake up/resume
+  tracking, same as the classic driver's `initHardware()`), the clock match,
+  and the four limit registers. `initValues()` no longer does any mount I/O
+  at all - it used to do seven synchronous round-trips on the RTS2 thread,
+  which both blocked the event loop and, at a connect where the mount was
+  still booting, simply failed.
+
+`GeminiStatus::startupCount` is bumped once per completed startup;
+`GeminiUDP::checkStartup()` watches it and does the RTS2-side half (values,
+logging, re-asserting tracking). `handleGoto()` refuses outright while
+startup is incomplete, with the reason - far better than letting the
+framework believe a slew is under way for its full timeout.
+
+**2. It never started sidereal tracking.** `Telescope::setTracking()` only
+moves RTS2's own `TEL_MASK_TRACK` state and arms the tracking timer; whether
+the RA worm turns is entirely the driver's business, and this driver had no
+override. Added, as the same two native registers the production driver's
+`startWorm()`/`stopWorm()` use (131 sidereal / 135 terrestrial). Both
+non-zero `TRACKING` selections map to sidereal. `Telescope::endMove()` calls
+`startTracking()` after every completed slew, so this also re-asserts
+tracking on arrival, and `default_tracking` is 1, so an ordinary move turns
+it on without anyone having to ask.
+
+**3. Watch the mount and act.** User-specified policy: since the driver
+polls once a second anyway, it should notice the mount misbehaving, and when
+it does, stop -> park (the one operation that has proven reliable here) ->
+cold start, and leave a report behind. Implemented as `checkSafety()` plus a
+small state machine in `runSafetyRecovery()`, both on the RTS2 thread.
+
+Conditions, each confirmed over three consecutive *mount polls* (not
+`idle()` ticks - `idle()` fires whenever the event loop wakes up, many times
+a second and always on the same unchanged snapshot, so the counters are
+gated on `GeminiStatus::timestamp` changing):
+
+| condition | source | escalates to cold start |
+| --- | --- | --- |
+| slewing/centering while the driver has no move in flight | ENQ rate field | yes |
+| a move in flight backing away from its target by more than `wrong_way_margin` past its own closest approach | `GeminiStatus::moveWrongWay`, computed in the caring loop | yes |
+| a move that ended nowhere near its target | `GeminiStatus::moveFailed` (already existed; nothing acted on it) | yes |
+| pointed below `safety_alt_limit` while moving or tracking | ENQ EL field | yes |
+| pointed below `safety_alt_limit` while idle | ENQ EL field | no - park only |
+| tracking while parked | ENQ rate + native 130 | only after 3 failed attempts to stop the worm |
+| below the framework's own hard horizon | `Telescope::abortMoveTracking()` | yes |
+
+Deliberate limits on the wrong-way check, because a false positive here
+costs a parked mount and a cold-started controller in the middle of the
+night: it measures growth past the *minimum* separation seen so far in the
+move, needs three consecutive polls, and stands down entirely for the rest
+of a move in which the pier side changed - a real meridian flip legitimately
+swings the reported RA/Dec far away from both ends of the move.
+
+Known false positive with no clean fix: somebody driving the mount from the
+hand controller looks exactly like "slewing when we didn't ask". Hence
+`safety_enabled` being writable at runtime, for on-site work.
+
+Recovery is `stop (:Q#) -> Telescope::startPark(nullptr) -> native 65533`,
+one step per `idle()` tick, with the caring loop walking the mount back up
+through its boot menu afterwards. After `max_recoveries` (default 3)
+completed recoveries the mount is left blocked (`block_move`) with
+`safety_locked` set, for a human. Clearing `safety_locked`, or the `reset`
+command, releases it. Reports go to `--incident-log`
+(default `/var/log/rts2/gemini-udp-incidents.log`) as a full snapshot block
+plus a timestamped line per recovery step, *and* to RTS2's own log one line
+at a time - an unwritable report file must never be what stops a recovery.
+
+Also new here: `resetMount()` (the `reset` client command) now reboots the
+mount per `startup_mode`, mirroring the classic driver.
+
+Two bugs found and fixed on the way, both in code that predates this work:
+
+- `pollStatus()` builds a whole fresh `GeminiStatus` from one ENQ reply and
+  assigns it wholesale, so every field that does not come from that reply
+  was silently resetting to its default once a second. `parking` was the
+  live one: `requestPark()` sets it on the RTS2 thread specifically to
+  close a race, and a `pollStatus()` that happened to be blocked in `recv()`
+  at that moment wiped it on the way out - after which `isParking()` saw
+  "not parking" and declared the park finished in milliseconds, the exact
+  bug `requestPark()`'s comment says it exists to prevent.
+  `trackingSecToWestLimit` was the quiet one: `pollTrackingLimit()`'s
+  "a miss leaves the previous value in place" was not true, because
+  `pollStatus()` ran first and had already reset it to NAN.
+  `carryPersistentFields()` now does this explicitly, in one place.
+- `abortMoveTracking()` was being called once a second for the first few
+  seconds of every run, because `telRaDec` is NaN until the first poll lands
+  and `NaN > horizon` is false. Harmless before (a stop sent to a mount that
+  isn't moving, plus an error line per second); not harmless once a
+  below-horizon report can cold-start the mount. The override now returns 1,
+  the documented "abort was not called, temporarily allowed violation"
+  answer, until there is a valid position to judge.
+
+Verification: no hardware here, so a throwaway Gemini-2 UDP simulator
+(datagram framing + NACK, 0x06 handshake with a working boot menu, 0x05 ENQ,
+native get/set, the LX200 subset the driver sends, and switchable
+misbehaviour) was written and the real binary run against it. Confirmed end
+to end: boot-menu selection -> `:hW#` -> clock -> limits -> startup complete;
+a healthy slew with no incident raised; a runaway mount detected in three
+polls and taken through stop -> park -> cold start -> back up -> released,
+twice, with the third leaving it locked; and a slew redirected 120 deg off
+target caught by the wrong-way check. The simulator is scratch, not
+committed - it is a few hundred lines and easy to rewrite, and pretending a
+simulator is a test of a mount is how the arrival-check bug got in.
+
+Still unverified against real hardware, and worth watching on the first
+night: whether Gemini's UDP listener really does come back after a
+65533 reboot (the whole recovery hinges on it), and whether the boot menu is
+reachable over UDP at all on this firmware - the handshake is documented for
+the serial protocol, which the UDP layer tunnels, but nobody here has seen a
+`b#` come back over a datagram yet.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

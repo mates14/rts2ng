@@ -122,6 +122,49 @@ struct GeminiStatus
 	bool parking = false;
 	bool parkFailed = false;
 	char parkStatus = '?';
+
+	// ---- startup / boot-menu handshake (the 0x06 ACK command) ----
+	// Gemini answers 0x06 with a single character describing where it is in
+	// its own startup: 'B' initial startup message on screen, 'b' waiting
+	// for the operator (or us) to pick a startup mode, 'S' cold start
+	// running, 'G' startup finished with a German equatorial mount selected,
+	// 'A' finished with an Alt/Az mount. Until it reaches 'G'/'A' the mount
+	// answers status queries but silently ignores every motion command -
+	// see GeminiCaringLoop::pollStartupState() for what drives this.
+	char startupState = '?';	// '?' until the first handshake lands
+	bool startupComplete = false;	// 'G' or 'A' seen
+
+	// bumped once per completed startup. GeminiUDP::idle() watches it to
+	// notice both the initial connect and any later reboot of the mount
+	// (ours or somebody else's), and re-runs its own post-startup work.
+	unsigned startupCount = 0;
+	unsigned startupSelections = 0;	// bR#/bW#/bC# selections sent during the current boot, capped - see MAX_STARTUP_SELECTIONS
+	bool clockMatched = false;	// the last post-startup sequence got the mount's clock set to system UTC
+
+	// native 130, refreshed with the slow poll group: 131 sidereal, 132
+	// King, 133 lunar, 134 solar, 135 terrestrial (= tracking effectively
+	// off), 136 closed loop, 137 comet/user. 0 until first read.
+	int trackingRate = 0;
+
+	// native 220-223, read once per startup by runPostStartupSequence() -
+	// raw and unparsed, same reasoning as readNativeRaw()'s doc comment
+	bool limitsValid = false;
+	std::string limitBothRaw, limitEastRaw, limitWestRaw, limitWestGotoRaw;
+
+	// ---- in-flight move sanity, see pollStatus() ----
+	double moveSeparation = NAN;	// angular distance from the current position to the active move's target
+
+	// true once the distance to the target has grown WRONG_WAY_MARGIN_DEG
+	// past the smallest distance seen so far in this move, for several
+	// consecutive polls - i.e. the mount is confidently travelling away
+	// from where it was told to go. Sticky until the next accepted goto,
+	// like moveFailed.
+	bool moveWrongWay = false;
+
+	// pier side changed during the current move: a real meridian flip, in
+	// which the reported RA/Dec legitimately swings far away from both ends
+	// of the move. Suspends moveWrongWay detection for the rest of it.
+	bool movePierChanged = false;
 };
 
 /**
@@ -149,6 +192,39 @@ class GeminiCaringLoop
 
 		/** takes effect on the caring loop's next poll cycle check, no locking needed (std::atomic) */
 		void setPollInterval (double sec) { pollIntervalSec = sec; }
+
+		/**
+		 * Which startup mode to pick when the mount is sitting in its boot
+		 * menu (handshake answers 'b'). Same three choices, in the same
+		 * order, as base/teld/gemini/gemini.cpp's next_reset selection.
+		 */
+		enum StartupMode { STARTUP_RESTART = 0, STARTUP_WARM = 1, STARTUP_COLD = 2 };
+
+		/**
+		 * Also re-arms the per-boot selection budget (see
+		 * MAX_STARTUP_SELECTIONS): if the mount is stuck in its boot menu
+		 * because the configured mode isn't the one it will accept,
+		 * changing the mode is exactly the moment to try again.
+		 */
+		void setStartupMode (StartupMode mode);
+
+		/**
+		 * Best-effort, asynchronous: reboot the Gemini controller. cold ==
+		 * true sends native 65533 ("reboot enforcing a Cold Start"), false
+		 * sends 65535 ("reboot"), exactly as base/teld/gemini/gemini.cpp's
+		 * resetMount() picks between them. Either way the snapshot's
+		 * startupComplete goes false immediately, so the caring loop drops
+		 * back into handshake mode and drives the mount back up through
+		 * pollStatus()'s boot menu on its own.
+		 *
+		 * Note the mount is unreachable for a while afterwards (a cold
+		 * start takes ~20s on serial, and Gemini's UDP listener has to come
+		 * back too) - that shows up as a normal disconnected stretch.
+		 */
+		void requestReboot (bool cold);
+
+		/** margin, in degrees, for GeminiStatus::moveWrongWay - see there */
+		void setWrongWayMargin (double deg) { wrongWayMarginDeg = deg; }
 
 		/**
 		 * Send a goto and wait (bounded, real OS wait) for the mount to
@@ -262,13 +338,46 @@ class GeminiCaringLoop
 		bool sendAndReceive (const std::string &payload, std::string &response, double timeoutSec, int maxResyncAttempts);
 		void pollStatus ();
 		void pollTrackingLimit ();
+		void pollTrackingRate ();
 		void pollParkStatus ();
+
+		/**
+		 * Sends the 0x06 handshake, records where the mount is in its
+		 * startup, and - when it answers 'b' (boot menu) - picks the
+		 * configured startup mode for it. Without this the mount answers
+		 * every status query perfectly happily and ignores every motion
+		 * command, which is exactly what it looks like from the outside
+		 * when a driver "doesn't work" after a power cycle.
+		 */
+		void pollStartupState ();
+
+		/** run once each time the mount finishes starting up, on the caring thread */
+		void runPostStartupSequence ();
+
 		void handleGoto ();
 		void handleAbort ();
 		void handlePark ();
+		void handleReboot ();
 		void handleQueuedCommand ();
 		void handleQueuedRawCommand ();
 		void handleSyncQuery ();
+
+		// caring-thread-side twins of the public, RTS2-thread-facing
+		// matchTimeUtc()/readNativeRaw(): same wire commands, but issued
+		// with sendAndReceive() directly instead of going through
+		// sendRawSync() - which would deadlock, since the thread that has
+		// to service a sync query is this one.
+		bool matchTimeUtcInternal ();
+		bool readNativeInternal (int id, std::string &value);
+
+		/**
+		 * pollStatus() builds a whole fresh GeminiStatus out of one ENQ
+		 * reply and assigns it wholesale, so every snapshot field that does
+		 * NOT come from that reply has to be copied across explicitly or it
+		 * silently resets to its default once a second. Keep this in sync
+		 * with GeminiStatus whenever a field is added there.
+		 */
+		static void carryPersistentFields (const GeminiStatus &from, GeminiStatus &to);
 
 		std::string hostname;
 		int port;
@@ -310,7 +419,25 @@ class GeminiCaringLoop
 
 		std::atomic<bool> abortRequested;
 		std::atomic<bool> parkRequested;
+		std::atomic<bool> rebootRequested;
+		std::atomic<bool> rebootCold;
+		std::atomic<int> startupMode;
+
+		// one-shot: requestReboot(true) sets it so the boot menu gets bC#
+		// for that one boot even when startup_mode says otherwise (native
+		// 65533 is supposed to enforce a cold start without ever showing
+		// the menu, but if it does show it, a recovery's whole point is
+		// the cold start). runPostStartupSequence() clears it.
+		std::atomic<bool> forceColdSelection;
 		std::atomic<double> pollIntervalSec;
+		std::atomic<double> wrongWayMarginDeg;
+
+		// caring-thread-only, like the move-tracking members above
+		double moveMinSeparation;
+		int wrongWayCount;
+		char moveStartPierSide;
+		bool movePierChangedFlag;
+		int slowPollCounter;
 
 		struct NativeSetCommand
 		{
