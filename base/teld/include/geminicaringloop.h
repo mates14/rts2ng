@@ -127,6 +127,27 @@ struct GeminiSidePrediction
 GeminiSidePrediction predictGotoSide (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, double curRaDeg, double targetRaDeg, bool preferOther);
 
 /**
+ * Where Gemini's axis counters should read, at the telescope's current
+ * physical position, for it to be pointing at (mountRaDeg, mountDecDeg) - a
+ * mount-frame coordinate, i.e. what a goto to the true sky position would
+ * send - by the relation the firmware sets up at a cold start (counters at
+ * CWD, RA reference at sidereal time + 6h, no Gemini model; FUN_0000bd78 and
+ * FUN_00016b7c): RA axis (270 - HA) on the E side of the pier, (90 - HA) on
+ * the W side; Dec axis (270 - Dec) on E, (Dec + 90) on W. The difference from
+ * the counters read now is their zero error; stepping the axes to CWD minus
+ * that error and cold-starting there removes it.
+ */
+struct GeminiCounterError
+{
+	double raTicks = 0, decTicks = 0;	// counters wanted minus counters read, RA wrapped to +-half circle
+	double raDeg = 0, decDeg = 0;
+	int32_t rezeroRa = 0, rezeroDec = 0;	// counters to step to before the cold start (CWD minus the error)
+};
+
+GeminiCounterError computeCounterError (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, char decSide,
+	double lstDeg, double mountRaDeg, double mountDecDeg);
+
+/**
  * Plain-data snapshot of everything the caring loop knows about the mount.
  * Copied out under mutex_, then read freely - no locking needed once
  * copied. See base note above for why it has to stay plain data.
@@ -196,6 +217,19 @@ struct GeminiStatus
 	char startupState = '?';	// '?' until the first handshake lands
 	bool startupComplete = false;	// 'G' or 'A' seen
 
+	// what the last completed startup looked like, for GeminiUDP to judge
+	// whether the axis counters can still be trusted: bootObserved is false
+	// when the mount was already up the first time we asked (a driver
+	// restart), bootSelection is the boot menu answer we sent during it -
+	// 'R' restart, 'W' warm start, 'C' cold start, '?' none (the mount
+	// picked a mode itself, or 65533 skipped the menu)
+	bool bootObserved = false;
+	char bootSelection = '?';
+
+	// mount UTC minus system UTC as read after startup, before any clock
+	// setting; NAN if it could not be read
+	double clockOffsetSec = NAN;
+
 	// bumped once per completed startup. GeminiUDP::idle() watches it to
 	// notice both the initial connect and any later reboot of the mount
 	// (ours or somebody else's), and re-runs its own post-startup work.
@@ -223,6 +257,7 @@ struct GeminiStatus
 	// whenever the telescope points more than 6h from the meridian.
 	bool axisValid = false;
 	int32_t raAxisTicks = 0, decAxisTicks = 0;
+	double axisTimestamp = 0;	// nowSeconds() of the last 239 read
 	char decSide () const { return !axisValid || !geometry.valid ? '?' : (decAxisTicks >= geometry.decHalf ? 'E' : 'W'); }
 
 	// the side prediction made for the last accepted goto, and its serial
@@ -277,19 +312,27 @@ class GeminiCaringLoop
 		void setPollInterval (double sec) { pollIntervalSec = sec; }
 
 		/**
-		 * Which startup mode to pick when the mount is sitting in its boot
-		 * menu (handshake answers 'b'). Same three choices, in the same
-		 * order, as base/teld/gemini/gemini.cpp's next_reset selection.
+		 * What to answer the mount's boot menu with (handshake 'b'). Restart
+		 * keeps the stored axis counters; warm and cold start both set them
+		 * to CWD without looking (firmware FUN_0000bd78), so they are right
+		 * only if the telescope really is at CWD. STARTUP_NONE leaves the
+		 * mount waiting for a human, which is the default: nothing but a
+		 * person at the telescope knows which answer is true.
 		 */
-		enum StartupMode { STARTUP_RESTART = 0, STARTUP_WARM = 1, STARTUP_COLD = 2 };
+		enum StartupMode { STARTUP_NONE = 0, STARTUP_RESTART = 1, STARTUP_WARM = 2, STARTUP_COLD = 3 };
 
 		/**
-		 * Also re-arms the per-boot selection budget (see
-		 * MAX_STARTUP_SELECTIONS): if the mount is stuck in its boot menu
-		 * because the configured mode isn't the one it will accept,
-		 * changing the mode is exactly the moment to try again.
+		 * The standing answer. Also re-arms the per-boot selection budget
+		 * (see MAX_STARTUP_SELECTIONS).
 		 */
 		void setStartupMode (StartupMode mode);
+
+		/**
+		 * One-shot answer for the current (or next) boot, whatever the
+		 * standing mode is - how a human's "position unmoved" / "position
+		 * cwd" reaches a mount waiting in its menu.
+		 */
+		void selectStartup (StartupMode mode);
 
 		/**
 		 * Best-effort, asynchronous: reboot the Gemini controller. cold ==
@@ -303,8 +346,11 @@ class GeminiCaringLoop
 		 * Note the mount is unreachable for a while afterwards (a cold
 		 * start takes ~20s on serial, and Gemini's UDP listener has to come
 		 * back too) - that shows up as a normal disconnected stretch.
+		 *
+		 * selection is the boot menu answer for this boot, if the menu
+		 * shows; STARTUP_NONE leaves it to the standing startup mode.
 		 */
-		void requestReboot (bool cold);
+		void requestReboot (bool cold, StartupMode selection = STARTUP_NONE);
 
 		/** margin, in degrees, for GeminiStatus::moveWrongWay - see there */
 		void setWrongWayMargin (double deg) { wrongWayMarginDeg = deg; }
@@ -540,12 +586,13 @@ class GeminiCaringLoop
 		std::atomic<bool> rebootCold;
 		std::atomic<int> startupMode;
 
-		// one-shot: requestReboot(true) sets it so the boot menu gets bC#
-		// for that one boot even when startup_mode says otherwise (native
-		// 65533 is supposed to enforce a cold start without ever showing
-		// the menu, but if it does show it, a recovery's whole point is
-		// the cold start). runPostStartupSequence() clears it.
-		std::atomic<bool> forceColdSelection;
+		// one-shot boot menu answer (a StartupMode, STARTUP_NONE for none),
+		// set by selectStartup()/requestReboot(), cleared by
+		// runPostStartupSequence()
+		std::atomic<int> forcedSelection;
+
+		/** reads :GG#/:GL#/:GC#; false if any of them could not be parsed */
+		bool readClockOffsetInternal (double &offsetSec);
 		std::atomic<double> pollIntervalSec;
 		std::atomic<double> wrongWayMarginDeg;
 		std::atomic<double> flipAmbiguityMarginDeg;

@@ -57,6 +57,7 @@
 #include <fstream>
 #include <sstream>
 #include <strings.h>
+#include <vector>
 
 // native Gemini register IDs, see base/teld/gemini/gemini.cpp
 #define GEMINI_CMD_RATE_GUIDE    150
@@ -75,6 +76,7 @@
 #define OPT_NO_SAFETY            OPT_LOCAL + 4
 #define OPT_NO_COLDSTART         OPT_LOCAL + 5
 #define OPT_MAX_RECOVERIES       OPT_LOCAL + 6
+#define OPT_POSITION_STATE       OPT_LOCAL + 7
 
 namespace rts2teld
 {
@@ -132,7 +134,86 @@ class GeminiUDP:public Telescope
 		// comment for the whole scheme
 		virtual void setFullBopState (rts2_status_t new_state);
 
+		// the "position" command - see positionCommand()
+		virtual int commandAuthorized (rts2core::Connection *conn);
+
 	private:
+		// ---- position trust ----
+		// Whether the mount's axis counters - which its safety limits, its
+		// pier side decisions and every goto are measured against - can be
+		// believed. The motor encoders are relative: nothing in the mount
+		// can tell a slipped clutch, or a cold start done away from CWD,
+		// from the truth. So the driver keeps its own verdict:
+		//  CONFIRMED  a sky position (astrometry) agreed with the mount
+		//  ASSUMED    nothing suggests a problem, nothing proved it either
+		//  LOST       evidence the counters are wrong, or a startup no one
+		//             vouched for - motion, parking and tracking refused
+		//             until a human says otherwise or a re-zero from the
+		//             sky fixes it (see positionCommand())
+		// The verdict survives driver restarts (positionStatePath): a
+		// restart must neither forget a lost position nor reset a healthy
+		// mount.
+		enum PositionTrust { TRUST_UNKNOWN, TRUST_CONFIRMED, TRUST_ASSUMED, TRUST_LOST };
+		PositionTrust positionTrust;
+		rts2core::ValueSelection *positionTrustValue;
+		rts2core::ValueString *positionReasonValue;
+		const char *positionStatePath;
+		double positionStateSavedAt;
+
+		// what the state file said when the driver started
+		PositionTrust savedTrust;
+		std::string savedReason;
+		bool savedHaveAxis;
+		int32_t savedDecTicks;
+
+		// the last axis position seen while the mount was up, for telling a
+		// counter reset (a cold or warm start sets Dec to exactly half a
+		// circle) from ordinary movement
+		bool haveLastAxis;
+		int32_t lastDecTicks;
+		double lastAxisSampleTimestamp;
+		double lastMotionAt;		// getNow() when a move, park or re-zero was last in flight
+
+		// set by "position unmoved/cwd" while the mount (re)boots on a
+		// human's word: 'R' restart, 'W'/'C' warm/cold start at CWD
+		char pendingHumanStartup;
+		bool lostOnlyForBootMenu;	// LOST only because the boot menu is waiting, not for anything that happened before
+
+		void setPositionTrust (PositionTrust trust, const std::string &reason);
+		bool positionLost () const { return positionTrust == TRUST_LOST; }
+		void checkPositionEvidence (const GeminiStatus &st);
+		void judgeStartup (const GeminiStatus &st);
+		void loadPositionState ();
+		void savePositionState (const GeminiStatus *st);
+		int positionCommand (rts2core::Connection *conn);
+
+		// ---- re-zero from the sky ----
+		// No command in this firmware sets the axis counters; only a cold
+		// (or warm) start does, to CWD. So: work out from a true sky
+		// position how far the counters are off, step the axes to where the
+		// counters read CWD minus that error - physically true CWD - and
+		// cold-start there. See startRezero().
+		enum RezeroState { REZERO_IDLE, REZERO_STOPPING, REZERO_MOVING, REZERO_SETTLING, REZERO_REBOOTING };
+		RezeroState rezeroState;
+		double rezeroSince;
+		int32_t rezeroTargetRa, rezeroTargetDec;
+		int rezeroStableCount;
+		int32_t rezeroLastRa, rezeroLastDec;
+		double rezeroLastSample;
+		unsigned rezeroStartupBaseline;
+		std::string rezeroSummary;
+		std::vector<std::pair<int, int>> rezeroModelTerms;	// Gemini model terms to put back after the cold start
+
+		rts2core::ValueString *rezeroStateValue;
+		rts2core::ValueDouble *rezeroMinValue;
+		rts2core::ValueDouble *rezeroMaxValue;
+		rts2core::ValueString *lastSkyOffsetValue;
+
+		int startRezero (double raJ2000, double decJ2000, double exposureTime, std::string &err);
+		void runRezero (const GeminiStatus &st);
+		void setRezeroState (RezeroState newState);
+		void abortRezero (const std::string &why);
+
 		HostString *host;
 		GeminiCaringLoop *caring;
 
@@ -171,11 +252,6 @@ class GeminiUDP:public Telescope
 
 		void checkSidePrediction (const GeminiStatus &st);
 
-		// set by runSafetyRecovery() ahead of Telescope::startPark() when a
-		// cold start is to follow, consumed by startPark(): park at CWD, not
-		// at the configured home position
-		bool parkAtStartupPositionNext;
-
 		// ---- startup handshake (see GeminiCaringLoop::pollStartupState) ----
 		// The mount's boot menu is the whole reason "the new driver reads
 		// status fine but ignores every command" was a thing: a Gemini that
@@ -192,10 +268,13 @@ class GeminiUDP:public Telescope
 
 		// ---- safety watchdog ----
 		// The driver polls the mount once a second anyway, so it is in a
-		// position to notice the mount misbehaving; user-specified policy
-		// (SBT, 2026-09-12) is that when it does, it should stop, park -
-		// which is the one operation that has proven reliable on this mount
-		// - and then cold-start the controller, leaving a report behind.
+		// position to notice the mount misbehaving; when it does, it stops,
+		// parks - the one operation that has proven reliable on this mount
+		// - and holds the mount locked with a report behind. It used to go
+		// on to cold-start the controller; it no longer does: a cold start
+		// sets the axes to CWD wherever the telescope happens to be, and
+		// after an incident that is exactly what nobody knows. Incidents
+		// that cast doubt on the position mark it LOST instead.
 		//
 		// Conditions, all of them confirmed over several consecutive polls
 		// before they count, so a single odd datagram can't start a recovery:
@@ -208,12 +287,11 @@ class GeminiUDP:public Telescope
 		//  - the mount is pointed below safety_alt_limit
 		//  - the mount is tracking while parked - corrected in place first,
 		//    escalated only if the correction doesn't stick
-		enum SafetyState { SAFETY_OK, SAFETY_STOPPING, SAFETY_PARKING, SAFETY_COLDSTART, SAFETY_LOCKED };
+		enum SafetyState { SAFETY_OK, SAFETY_STOPPING, SAFETY_PARKING, SAFETY_LOCKED };
 		SafetyState safetyState;
 		double safetyStateSince;
 		std::string safetyReason;
-		bool safetyWantsColdStart;
-		unsigned safetyColdStartBaseline;	// startupCount when the cold start was requested - a change means the mount came back
+		bool safetyLosesPosition;	// the incident casts doubt on the axis counters - LOST once the recovery is done
 
 		rts2core::ValueBool *safetyEnabledValue;
 		rts2core::ValueBool *safetyLockedValue;		// writable: clearing it is the operator's "I've looked, carry on"
@@ -227,7 +305,6 @@ class GeminiUDP:public Telescope
 		const char *incidentLogPath;
 		bool incidentLogFailed;		// only complain about an unwritable report file once
 		int maxRecoveries;
-		bool coldStartOnIncident;
 
 		// Counters are in *mount polls*, not idle() ticks: idle() runs
 		// whenever the event loop wakes up, which on a busy night is many
@@ -383,9 +460,9 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	predictionMissesValue->setValueInteger (0);
 	verifiedGotoSerial = 0;
 	geometryLogged = false;
-	parkAtStartupPositionNext = false;
 
 	createValue (startupModeValue, "startup_mode", "startup mode picked for the mount's own boot menu, and used by the reset command", false, RTS2_VALUE_WRITABLE);
+	startupModeValue->addSelVal ("NONE");		// wait for a human ("position unmoved" / "position cwd")
 	startupModeValue->addSelVal ("RESTART");	// bR#
 	startupModeValue->addSelVal ("WARM_START");	// bW#
 	startupModeValue->addSelVal ("COLD_START");	// bC#
@@ -416,12 +493,45 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 
 	safetyState = SAFETY_OK;
 	safetyStateSince = NAN;
-	safetyWantsColdStart = false;
-	safetyColdStartBaseline = 0;
+	safetyLosesPosition = false;
 	incidentLogPath = "/var/log/rts2/gemini-udp-incidents.log";
 	incidentLogFailed = false;
 	maxRecoveries = 3;
-	coldStartOnIncident = true;
+
+	createValue (positionTrustValue, "position_trust", "can the mount's axis counters be believed: CONFIRMED by the sky, ASSUMED, or LOST (moves refused - see the position command)", false);
+	positionTrustValue->addSelVal ("UNKNOWN");
+	positionTrustValue->addSelVal ("CONFIRMED");
+	positionTrustValue->addSelVal ("ASSUMED");
+	positionTrustValue->addSelVal ("LOST");
+	positionTrustValue->setValueInteger (TRUST_UNKNOWN);
+	createValue (positionReasonValue, "position_reason", "why position_trust is what it is", false);
+	positionTrust = TRUST_UNKNOWN;
+	positionStatePath = "/var/log/rts2/gemini-udp-position.state";
+	positionStateSavedAt = 0;
+	savedTrust = TRUST_UNKNOWN;
+	savedHaveAxis = false;
+	savedDecTicks = 0;
+	haveLastAxis = false;
+	lastDecTicks = 0;
+	lastAxisSampleTimestamp = 0;
+	lastMotionAt = 0;
+	pendingHumanStartup = 0;
+	lostOnlyForBootMenu = false;
+
+	rezeroState = REZERO_IDLE;
+	rezeroSince = 0;
+	rezeroTargetRa = rezeroTargetDec = 0;
+	rezeroStableCount = 0;
+	rezeroLastRa = rezeroLastDec = 0;
+	rezeroLastSample = 0;
+	rezeroStartupBaseline = 0;
+	createValue (rezeroStateValue, "rezero_state", "re-zero from a sky position in progress: IDLE, STOPPING, MOVING, SETTLING, REBOOTING", false);
+	rezeroStateValue->setValueCharArr ("IDLE");
+	createValue (rezeroMinValue, "rezero_min", "[deg] axis counter errors from a sky position below this only confirm the position, without a re-zero", false, RTS2_VALUE_WRITABLE);
+	rezeroMinValue->setValueDouble (0.25);
+	createValue (rezeroMaxValue, "rezero_max", "[deg] axis counter errors from a sky position above this are refused as implausible", false, RTS2_VALUE_WRITABLE);
+	rezeroMaxValue->setValueDouble (30.0);
+	createValue (lastSkyOffsetValue, "last_sky_offset", "axis counter error found from the last sky position: RA axis, Dec axis [deg]", false);
 	lastSafetyPollTimestamp = NAN;
 	unexpectedMoveCount = 0;
 	belowHorizonCount = 0;
@@ -452,11 +562,12 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	addOption ('N', "dry-run", 0, "with --live-slew-test: compute and log the plan (target, altitude, exact commands) but never send :MS#/:Q# - status polling still runs normally");
 	addOption ('R', "return-to-dec", 1, "one-shot mode: slew to this declination (same RA as currently read), confirm arrival, stop tracking, done - no return leg. For restoring a known position after a test.");
 	addOption (OPT_AUTO_RECOVERY, "experimental-auto-recovery", 0, "EXPERIMENTAL, off by default: after 60s of total silence from the mount, send one native warm-reboot command. Unverified over UDP - see checkAutoRecovery()'s doc comment before enabling this unattended.");
-	addOption (OPT_STARTUP_MODE, "startup-mode", 1, "which mode to pick in the mount's boot menu: restart (default), warm or cold");
+	addOption (OPT_STARTUP_MODE, "startup-mode", 1, "what to answer the mount's boot menu with: none (default - wait for a human's position command), restart, warm or cold");
 	addOption (OPT_INCIDENT_LOG, "incident-log", 1, "file to append safety incident reports to (default /var/log/rts2/gemini-udp-incidents.log; incidents are always logged to RTS2 as well)");
 	addOption (OPT_NO_SAFETY, "no-safety-watchdog", 0, "do not watch for unexpected mount movement / wrong-way slews / below-horizon pointing (the watchdog is on by default, and can also be toggled at runtime via safety_enabled)");
-	addOption (OPT_NO_COLDSTART, "no-safety-coldstart", 0, "on a safety incident stop and park, but do not go on to cold-start the mount");
-	addOption (OPT_MAX_RECOVERIES, "max-recoveries", 1, "how many automatic incident recoveries to perform before leaving the mount locked for a human (default 3)");
+	addOption (OPT_NO_COLDSTART, "no-safety-coldstart", 0, "no longer does anything - safety incidents never cold-start the mount");
+	addOption (OPT_MAX_RECOVERIES, "max-recoveries", 1, "no longer does anything - every incident leaves the mount locked for a human");
+	addOption (OPT_POSITION_STATE, "position-state", 1, "file keeping position_trust across driver restarts (default /var/log/rts2/gemini-udp-position.state)");
 }
 
 GeminiUDP::~GeminiUDP ()
@@ -490,7 +601,9 @@ int GeminiUDP::processOption (int in_opt)
 			autoRecoveryEnabled = true;
 			break;
 		case OPT_STARTUP_MODE:
-			if (!strcasecmp (optarg, "restart"))
+			if (!strcasecmp (optarg, "none"))
+				startupModeValue->setValueInteger (GeminiCaringLoop::STARTUP_NONE);
+			else if (!strcasecmp (optarg, "restart"))
 				startupModeValue->setValueInteger (GeminiCaringLoop::STARTUP_RESTART);
 			else if (!strcasecmp (optarg, "warm"))
 				startupModeValue->setValueInteger (GeminiCaringLoop::STARTUP_WARM);
@@ -498,7 +611,7 @@ int GeminiUDP::processOption (int in_opt)
 				startupModeValue->setValueInteger (GeminiCaringLoop::STARTUP_COLD);
 			else
 			{
-				logStream (MESSAGE_ERROR) << "unknown --startup-mode \"" << optarg << "\" - expected restart, warm or cold" << sendLog;
+				logStream (MESSAGE_ERROR) << "unknown --startup-mode \"" << optarg << "\" - expected none, restart, warm or cold" << sendLog;
 				return -1;
 			}
 			break;
@@ -509,10 +622,12 @@ int GeminiUDP::processOption (int in_opt)
 			safetyEnabledValue->setValueBool (false);
 			break;
 		case OPT_NO_COLDSTART:
-			coldStartOnIncident = false;
 			break;
 		case OPT_MAX_RECOVERIES:
 			maxRecoveries = atoi (optarg);
+			break;
+		case OPT_POSITION_STATE:
+			positionStatePath = optarg;
 			break;
 		default:
 			return Telescope::processOption (in_opt);
@@ -551,6 +666,8 @@ int GeminiUDP::initValues ()
 
 	setTelLongLat (config->getObserver ()->lng, config->getObserver ()->lat);
 	setTelAltitude (config->getObservatoryAltitude ());
+
+	loadPositionState ();
 
 	if (liveSlewTest)
 	{
@@ -685,6 +802,13 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 // tracking is re-asserted on arrival and not just when a client asks.
 int GeminiUDP::setTracking (int track, bool addTrackingTimer, bool send, const char *stopMsg)
 {
+	// tracking walks the RA axis towards a western limit that is only where
+	// the counters say it is
+	if (track && (positionLost () || rezeroState != REZERO_IDLE))
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: tracking refused, " << (positionLost () ? "the mount position is LOST" : "a re-zero is in progress") << sendLog;
+		return -1;
+	}
 	if (caring)
 		caring->queueNativeSet (track ? GEMINI_CMD_TRACK_SIDEREAL : GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
 	return Telescope::setTracking (track, addTrackingTimer, send, stopMsg);
@@ -901,6 +1025,14 @@ void GeminiUDP::checkStartup (const GeminiStatus &st)
 			<< "') - it has rebooted, or is being rebooted. Motion commands are refused until it is back up." << sendLog;
 	}
 
+	// a mount waiting in its boot menu with nobody deciding the answer
+	if (st.connected && st.startupState == 'b' && pendingHumanStartup == 0 && rezeroState == REZERO_IDLE
+		&& startupModeValue->getValueInteger () == GeminiCaringLoop::STARTUP_NONE && !positionLost ())
+	{
+		setPositionTrust (TRUST_LOST, "the mount is waiting in its boot menu - \"position unmoved\" if nothing moved while it was off, \"position cwd\" if the telescope is at CWD");
+		lostOnlyForBootMenu = true;
+	}
+
 	if (st.startupCount == lastStartupCount)
 		return;
 
@@ -930,14 +1062,683 @@ void GeminiUDP::checkStartup (const GeminiStatus &st)
 
 	trackingRateValue->setValueInteger (st.trackingRate);
 
-	// a mount that has just come up is not tracking anything, whatever RTS2
-	// still believes - re-assert whichever state the framework is in rather
-	// than leaving the two out of step
-	if (isTracking ())
+	if (!std::isnan (st.clockOffsetSec) && fabs (st.clockOffsetSec) > 2.0)
+		logStream (MESSAGE_WARNING) << "GeminiUDP: the mount clock was " << st.clockOffsetSec << " s off system UTC - reset it" << sendLog;
+
+	judgeStartup (st);
+
+	// the parked flag is battery-backed, so a mount parked before a driver
+	// restart or a power cut still says so
+	if (st.parkStatus == '1' && (getState () & TEL_MASK_MOVING) != TEL_PARKED && (getState () & TEL_MASK_MOVING) != TEL_PARKING)
 	{
+		logStream (MESSAGE_INFO) << "GeminiUDP: the mount reports itself parked" << sendLog;
+		maskState (TEL_MASK_MOVING, TEL_PARKED, "mount reports parked");
+	}
+	else if (isTracking () && !positionLost ())
+	{
+		// a mount that has just come up is not tracking anything, whatever
+		// RTS2 still believes - re-assert it rather than leaving the two
+		// out of step
 		logStream (MESSAGE_INFO) << "GeminiUDP: re-asserting sidereal tracking after mount startup" << sendLog;
 		if (caring)
 			caring->queueNativeSet (GEMINI_CMD_TRACK_SIDEREAL, (int32_t) 1);
+	}
+}
+
+// ---- position trust ----
+
+void GeminiUDP::setPositionTrust (PositionTrust trust, const std::string &reason)
+{
+	if (trust == positionTrust && reason == positionReasonValue->getValue ())
+		return;
+
+	PositionTrust previous = positionTrust;
+	positionTrust = trust;
+	lostOnlyForBootMenu = false;
+	positionTrustValue->setValueInteger (trust);
+	positionReasonValue->setValueCharArr (reason.c_str ());
+	sendValueAll (positionTrustValue);
+	sendValueAll (positionReasonValue);
+
+	logStream (trust == TRUST_LOST ? MESSAGE_CRITICAL : MESSAGE_INFO) << "GeminiUDP: position " << positionTrustValue->getSelName () << " - " << reason << sendLog;
+	if (trust == TRUST_LOST && previous != TRUST_LOST)
+	{
+		logStream (MESSAGE_CRITICAL) << "GeminiUDP: moves, parking and tracking are refused until \"position ok\" (it is fine after all), "
+			<< "\"position unmoved\" / \"position cwd\" (from the boot menu), or \"position sky RA DEC\" (re-zero from a solved image)" << sendLog;
+		// stop whatever is moving, but leave a parked mount alone: :Q#
+		// clears the firmware's park flag
+		if (rezeroState == REZERO_IDLE && (getState () & TEL_MASK_MOVING) != TEL_PARKED)
+			stopTracking ("position lost");
+		appendIncidentLine (std::string ("position LOST: ") + reason);
+	}
+
+	GeminiStatus st;
+	if (caring)
+		st = caring->getStatus ();
+	savePositionState (caring ? &st : nullptr);
+}
+
+// Evidence that can turn up on any poll, not only at a startup: the Dec
+// axis counter landing on exactly half a circle while nothing of ours was
+// moving is the signature of a cold or warm start (both set it there without
+// looking) that happened behind our back - from the hand controller, the web
+// interface, or a power cycle hidden inside a communication gap.
+void GeminiUDP::checkPositionEvidence (const GeminiStatus &st)
+{
+	if (st.moveInProgress || st.parking || rezeroState != REZERO_IDLE)
+		lastMotionAt = getNow ();
+
+	if (!st.axisValid || !st.geometry.valid || st.axisTimestamp == lastAxisSampleTimestamp)
+		return;
+	lastAxisSampleTimestamp = st.axisTimestamp;
+
+	bool atCwdNow = st.decAxisTicks == st.geometry.decHalf;
+	if (haveLastAxis && atCwdNow && lastDecTicks != st.geometry.decHalf && getNow () - lastMotionAt > 10.0
+		&& pendingHumanStartup == 0 && rezeroState == REZERO_IDLE)
+	{
+		setPositionTrust (TRUST_LOST, "the Dec axis counter jumped to exactly CWD while no move was in flight - the mount was cold or warm started somewhere nobody confirmed");
+	}
+	haveLastAxis = true;
+	lastDecTicks = st.decAxisTicks;
+
+	if (getNow () - positionStateSavedAt > 60.0)
+		savePositionState (&st);
+}
+
+// Called once per completed mount startup (see checkStartup()). The rules,
+// in the order they are tried:
+//  - a human's "position unmoved" / "position cwd" is what this boot was: take
+//    their word, but check a warm/cold start really put the counters at CWD
+//  - the mount was already up when we connected (a driver restart): nothing
+//    happened to it that we know of - carry over what the state file said,
+//    unless its counters have since been reset to CWD
+//  - it booted, and we answered warm/cold from startup_mode: nobody vouched
+//    for it being at CWD - LOST
+//  - it booted into a restart (ours, or its own choice): the counters were
+//    kept, so the position is as good as before the boot - unless they came
+//    back at exactly CWD, which means a cold/warm start after all
+void GeminiUDP::judgeStartup (const GeminiStatus &st)
+{
+	if (rezeroState == REZERO_REBOOTING)
+		return;	// runRezero() judges its own cold start
+
+	bool atCwd = st.axisValid && st.geometry.valid && st.decAxisTicks == st.geometry.decHalf;
+
+	bool carriedLostAtBoot = lastStartupCount == 1 && savedTrust == TRUST_LOST;
+	if (pendingHumanStartup != 0)
+	{
+		char said = pendingHumanStartup;
+		pendingHumanStartup = 0;
+		if (said == 'R' && (carriedLostAtBoot || (positionLost () && !lostOnlyForBootMenu)))
+			setPositionTrust (TRUST_LOST, "restarted on the operator's word, but the stored counters were already lost before ("
+				+ std::string (positionReasonValue->getValue ()) + ") - \"position ok\", \"position cwd\" or \"position sky\"");
+		else if (said == 'R')
+			setPositionTrust (TRUST_ASSUMED, "operator: nothing moved while the mount was off - restarted with its stored position");
+		else if (atCwd)
+			setPositionTrust (TRUST_ASSUMED, std::string ("operator: telescope at CWD - mount ") + (said == 'W' ? "warm" : "cold") + " started there");
+		else
+			setPositionTrust (TRUST_LOST, "operator confirmed CWD, but the mount did not cold/warm start (Dec counter not at CWD) - its boot menu was skipped, check DefaultBootMode");
+		return;
+	}
+
+	// the first startup this driver sees inherits a LOST from the state file
+	bool carriedLost = carriedLostAtBoot;
+
+	if (!st.bootObserved)
+	{
+		if (lastStartupCount > 1)
+			return;	// cannot happen without a boot, but never demote on it
+		if (carriedLost)
+			setPositionTrust (TRUST_LOST, "still lost from before the driver restart: " + savedReason);
+		else if (atCwd && savedHaveAxis && savedDecTicks != st.geometry.decHalf)
+			setPositionTrust (TRUST_LOST, "since the driver last ran, the mount's counters were reset to CWD - a cold or warm start nobody confirmed");
+		else
+			setPositionTrust (TRUST_ASSUMED, std::string ("driver connected to an already running mount")
+				+ (savedTrust == TRUST_CONFIRMED ? " (confirmed by the sky before the restart)" : ""));
+		return;
+	}
+
+	if (st.bootSelection == 'W' || st.bootSelection == 'C')
+	{
+		setPositionTrust (TRUST_LOST, std::string ("the mount was ") + (st.bootSelection == 'W' ? "warm" : "cold")
+			+ " started from startup_mode, which sets the counters to CWD without anybody confirming the telescope is there");
+		return;
+	}
+
+	if (atCwd && !(haveLastAxis && lastDecTicks == st.geometry.decHalf))
+	{
+		setPositionTrust (TRUST_LOST, "the mount rebooted and came back with its counters at CWD - a cold or warm start nobody confirmed");
+		return;
+	}
+
+	if (carriedLost)
+	{
+		setPositionTrust (TRUST_LOST, "still lost from before the driver restart: " + savedReason);
+		return;
+	}
+	if (positionLost ())
+		return;	// a restart keeps the same counters, and so the same doubt
+
+	setPositionTrust (TRUST_ASSUMED, st.bootSelection == 'R' ? "the mount rebooted and restarted from startup_mode with its stored counters"
+		: "the mount rebooted by itself, counters kept");
+}
+
+// "trust <n>", "reason <text>", "dec <ticks>", "saved <unix time>" - one
+// per line, rewritten whole every time
+void GeminiUDP::loadPositionState ()
+{
+	if (positionStatePath == nullptr)
+		return;
+	std::ifstream f (positionStatePath);
+	if (!f.good ())
+		return;
+	std::string line;
+	while (std::getline (f, line))
+	{
+		size_t sp = line.find (' ');
+		if (sp == std::string::npos)
+			continue;
+		std::string key = line.substr (0, sp), val = line.substr (sp + 1);
+		if (key == "trust")
+			savedTrust = (PositionTrust) atoi (val.c_str ());
+		else if (key == "reason")
+			savedReason = val;
+		else if (key == "dec")
+		{
+			savedDecTicks = atol (val.c_str ());
+			savedHaveAxis = true;
+		}
+	}
+	if (savedTrust < TRUST_UNKNOWN || savedTrust > TRUST_LOST)
+		savedTrust = TRUST_UNKNOWN;
+	logStream (MESSAGE_INFO) << "GeminiUDP: position state from " << positionStatePath << ": " << positionTrustValue->getSelName (savedTrust)
+		<< " (" << savedReason << ")" << sendLog;
+}
+
+void GeminiUDP::savePositionState (const GeminiStatus *st)
+{
+	positionStateSavedAt = getNow ();
+	if (positionStatePath == nullptr || positionTrust == TRUST_UNKNOWN)
+		return;
+	std::string tmp = std::string (positionStatePath) + ".tmp";
+	{
+		std::ofstream f (tmp.c_str (), std::ios::trunc);
+		if (!f.good ())
+			return;
+		f << "trust " << (int) positionTrust << "\n";
+		f << "reason " << positionReasonValue->getValue () << "\n";
+		if (st && st->axisValid)
+			f << "dec " << st->decAxisTicks << "\n";
+		f << "saved " << (long) time (nullptr) << "\n";
+	}
+	rename (tmp.c_str (), positionStatePath);
+}
+
+int GeminiUDP::commandAuthorized (rts2core::Connection *conn)
+{
+	if (conn->isCommand ("position"))
+		return positionCommand (conn);
+	return Telescope::commandAuthorized (conn);
+}
+
+// One command, the first word says what the human is telling the driver:
+//
+//   position                      report
+//   position ok                   the mount's own position is fine - ASSUMED; also releases a safety lock
+//   position lost                 it is not - LOST
+//   position unmoved              (boot menu) nothing moved while it was off: restart with stored counters
+//   position cwd [warm]           the telescope is physically at CWD: cold start there (warm keeps Gemini's model);
+//                                 from the boot menu, or by rebooting a running mount
+//   position sky RA DEC [TIME]    the telescope points at J2000 RA DEC (a solved image, exposure middle at
+//                                 unix TIME, required when not tracking): confirm, or re-zero the counters
+//   position abort                abort a re-zero that has not reached its cold start yet
+int GeminiUDP::positionCommand (rts2core::Connection *conn)
+{
+	if (caring == nullptr)
+	{
+		conn->sendCommandEnd (DEVDEM_E_HW, "no mount connection");
+		return -1;
+	}
+	GeminiStatus st = caring->getStatus ();
+
+	if (conn->paramEnd ())
+	{
+		logStream (MESSAGE_INFO) << "GeminiUDP: position " << positionTrustValue->getSelName () << " - " << positionReasonValue->getValue ()
+			<< "; handshake '" << st.startupState << "', rezero " << rezeroStateValue->getValue ()
+			<< ", axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << sendLog;
+		return 0;
+	}
+
+	char *what;
+	if (conn->paramNextString (&what))
+		return DEVDEM_E_PARAMSNUM;
+
+	bool inBootMenu = st.connected && st.startupState == 'b';
+	auto refuse = [conn] (const char *why) { conn->sendCommandEnd (DEVDEM_E_PARAMSVAL, why); return -1; };
+
+	if (!strcasecmp (what, "sky"))
+	{
+		double ra, dec, exposureTime = NAN;
+		if (conn->paramNextHMS (&ra) || conn->paramNextDMS (&dec))
+			return DEVDEM_E_PARAMSNUM;
+		if (!conn->paramEnd () && (conn->paramNextDouble (&exposureTime) || !conn->paramEnd ()))
+			return DEVDEM_E_PARAMSNUM;
+		std::string err;
+		if (startRezero (ra, dec, exposureTime, err))
+		{
+			logStream (MESSAGE_ERROR) << "GeminiUDP: position sky refused: " << err << sendLog;
+			conn->sendCommandEnd (DEVDEM_E_PARAMSVAL, err.c_str ());
+			return -1;
+		}
+		return 0;
+	}
+
+	if (rezeroState != REZERO_IDLE && strcasecmp (what, "abort"))
+		return refuse ("a re-zero is in progress - \"position abort\" first");
+
+	if (!strcasecmp (what, "abort"))
+	{
+		if (!conn->paramEnd ())
+			return DEVDEM_E_PARAMSNUM;
+		if (rezeroState == REZERO_IDLE)
+			return refuse ("no re-zero in progress");
+		if (rezeroState == REZERO_REBOOTING)
+			return refuse ("the re-zero cold start has already been sent");
+		abortRezero ("aborted by operator");
+		return 0;
+	}
+
+	if (!strcasecmp (what, "ok"))
+	{
+		if (!conn->paramEnd ())
+			return DEVDEM_E_PARAMSNUM;
+		if (!st.startupComplete)
+			return refuse ("the mount is not started up - \"position unmoved\" or \"position cwd\"");
+		if (safetyState == SAFETY_STOPPING || safetyState == SAFETY_PARKING)
+			return refuse ("a safety recovery is still running");
+		if (safetyState == SAFETY_LOCKED)
+		{
+			logStream (MESSAGE_WARNING) << "GeminiUDP: safety lock released by \"position ok\"" << sendLog;
+			unBlockMove ();
+			setSafetyState (SAFETY_OK);
+		}
+		setPositionTrust (TRUST_ASSUMED, "operator: the mount's position is fine");
+		return 0;
+	}
+
+	if (!strcasecmp (what, "lost"))
+	{
+		if (!conn->paramEnd ())
+			return DEVDEM_E_PARAMSNUM;
+		setPositionTrust (TRUST_LOST, "operator: the mount's position is not to be trusted");
+		return 0;
+	}
+
+	if (!strcasecmp (what, "unmoved"))
+	{
+		if (!conn->paramEnd ())
+			return DEVDEM_E_PARAMSNUM;
+		if (!inBootMenu)
+			return refuse ("the mount is not waiting in its boot menu - \"position ok\" if it is up and fine");
+		pendingHumanStartup = 'R';
+		caring->selectStartup (GeminiCaringLoop::STARTUP_RESTART);
+		logStream (MESSAGE_INFO) << "GeminiUDP: answering the boot menu with restart (bR#) on the operator's word" << sendLog;
+		return 0;
+	}
+
+	if (!strcasecmp (what, "cwd"))
+	{
+		bool warm = false;
+		if (!conn->paramEnd ())
+		{
+			char *mode;
+			if (conn->paramNextString (&mode) || !conn->paramEnd () || strcasecmp (mode, "warm"))
+				return DEVDEM_E_PARAMSNUM;
+			warm = true;
+		}
+		GeminiCaringLoop::StartupMode mode = warm ? GeminiCaringLoop::STARTUP_WARM : GeminiCaringLoop::STARTUP_COLD;
+		pendingHumanStartup = warm ? 'W' : 'C';
+		if (inBootMenu)
+		{
+			caring->selectStartup (mode);
+			logStream (MESSAGE_INFO) << "GeminiUDP: answering the boot menu with " << (warm ? "warm (bW#)" : "cold (bC#)") << " start - telescope at CWD on the operator's word" << sendLog;
+		}
+		else
+		{
+			if (st.moveInProgress || st.parking || st.moveRate == 'S' || st.moveRate == 'C')
+			{
+				pendingHumanStartup = 0;
+				return refuse ("the mount is moving");
+			}
+			stopTracking ("position cwd");
+			caring->requestReboot (!warm, mode);
+			logStream (MESSAGE_WARNING) << "GeminiUDP: rebooting the mount into a " << (warm ? "warm" : "cold") << " start at CWD on the operator's word" << sendLog;
+		}
+		return 0;
+	}
+
+	return refuse ("expected: position [ok | lost | unmoved | cwd [warm] | sky RA DEC [TIME] | abort]");
+}
+
+// ---- re-zero from the sky ----
+//
+// Given where the telescope truly points (J2000, from a solved image), work
+// out where Gemini's axis counters should read at this physical position:
+//  1. the true position goes through the same pipeline as a goto target -
+//     precession, nutation, aberration, refraction, then this driver's
+//     pointing model for the pier side the mount is on - giving the mount
+//     frame coordinate that "points here"
+//  2. the firmware's own relation after a cold start, which sets the
+//     counters to CWD with its RA reference at sidereal time + 6h (firmware
+//     FUN_0000bd78), maps that coordinate to counters: RA axis
+//     (270deg - HA) on the E side, (90deg - HA) on the W side; Dec axis
+//     (270deg - Dec) on E, (Dec + 90deg) on W
+//  3. the difference from the counters it reads now is the counter error e
+//  4. below rezero_min: nothing to fix, the position is CONFIRMED. Above
+//     rezero_max: refused as implausible. Otherwise: stop, step both axes
+//     (:MP, absolute counters) to CWD - e, which is where true CWD is, and
+//     cold-start there. Gemini's own model terms other than the index terms
+//     (which only ever held the old zero error) are read before and put
+//     back after.
+// The hour angle comes from the mount's own LST, and nothing depends on
+// Gemini's index terms or sync offsets - it is all measured against what
+// the counters and the cold-start relation say.
+int GeminiUDP::startRezero (double raJ2000, double decJ2000, double exposureTime, std::string &err)
+{
+	if (caring == nullptr)
+	{
+		err = "no mount connection";
+		return -1;
+	}
+	GeminiStatus st = caring->getStatus ();
+	if (rezeroState != REZERO_IDLE)
+	{
+		err = "a re-zero is already in progress";
+		return -1;
+	}
+	if (!st.valid || !st.startupComplete || !st.axisValid || !st.geometry.valid)
+	{
+		err = "the mount is not up, or its axis position and geometry (native 239/238/231) have not been read";
+		return -1;
+	}
+	if (st.moveInProgress || st.parking || st.moveRate == 'S' || st.moveRate == 'C')
+	{
+		err = "the mount is moving";
+		return -1;
+	}
+	if (safetyState == SAFETY_STOPPING || safetyState == SAFETY_PARKING)
+	{
+		err = "a safety recovery is running";
+		return -1;
+	}
+	if (!std::isnan (exposureTime) && lastMotionAt > exposureTime)
+	{
+		err = "the mount has moved since that exposure";
+		return -1;
+	}
+
+	bool mountTracking = st.moveRate == 'T' || st.trackingRate == GEMINI_CMD_TRACK_SIDEREAL;
+	if (!mountTracking && std::isnan (exposureTime))
+	{
+		err = "the mount is not tracking, so the sky position needs the exposure time (unix seconds, middle of the exposure)";
+		return -1;
+	}
+
+	// 1. true position -> apparent -> mount frame
+	double jd = ln_get_julian_from_sys ();
+	struct ln_equ_posn pos;
+	pos.ra = raJ2000;
+	pos.dec = decJ2000;
+	struct ln_hrz_posn hrz;
+	applyCorrections (&pos, jd, 0, &hrz, false);
+	if (!mountTracking)
+	{
+		// the axes stood still: the same hour angle now has a larger RA
+		pos.ra = ln_range_degrees (pos.ra + (getNow () - exposureTime) * 15.04106858 / 3600.0);
+		struct ln_lnlat_posn observer;
+		observer.lng = telLongitude->getValueDouble ();
+		observer.lat = telLatitude->getValueDouble ();
+		ln_get_hrz_from_equ (&pos, &observer, jd, &hrz);
+	}
+	if (hrz.alt < 20.0)
+	{
+		err = "the sky position is below 20 deg altitude - refraction and flexure make it too uncertain for a re-zero";
+		return -1;
+	}
+
+	char side = st.decSide ();
+	double mountRa, mountDec;
+	computeModelCorrection (pos.ra, pos.dec, st.lst, side, mountRa, mountDec);
+
+	// 2./3. counters the cold-start relation gives for it, and the error
+	const GeminiAxisGeometry &g = st.geometry;
+	GeminiCounterError e = computeCounterError (g, st.raAxisTicks, st.decAxisTicks, side, st.lst, mountRa, mountDec);
+	double eRaDeg = e.raDeg, eDecDeg = e.decDeg;
+	double ha = ln_range_degrees (st.lst - mountRa);
+
+	// for comparison only: the same relation applied to where the mount
+	// believes it points - the part of the error that sits in Gemini's own
+	// index terms and sync offsets rather than in the counters
+	GeminiCounterError belief = computeCounterError (g, st.raAxisTicks, st.decAxisTicks, side, st.lst, st.ra, st.dec);
+	double beliefRaDeg = belief.raDeg, beliefDecDeg = belief.decDeg;
+
+	char buf[256];
+	snprintf (buf, sizeof (buf), "RA axis %+.3f, Dec axis %+.3f deg (mount's own offsets hold %+.3f, %+.3f; pier side %c)",
+		eRaDeg, eDecDeg, beliefRaDeg, beliefDecDeg, side);
+	lastSkyOffsetValue->setValueCharArr (buf);
+	sendValueAll (lastSkyOffsetValue);
+	rezeroSummary = buf;
+	logStream (MESSAGE_INFO) << "GeminiUDP: sky position RA=" << raJ2000 << " Dec=" << decJ2000 << " -> mount frame RA=" << mountRa
+		<< " Dec=" << mountDec << " HA=" << ha << "; counter error " << buf << sendLog;
+
+	// The relation above is read from the firmware, not from a manual. The
+	// mount's own idea of where it points goes through the same relation
+	// and can only be off by what Gemini's index terms and syncs hold -
+	// never by a quarter turn or more. If it is, the relation (or the pier
+	// side it was applied for) is wrong for this mount, and moving the axes
+	// on its say-so could be dangerous.
+	if (fabs (beliefRaDeg) > 60.0 || fabs (beliefDecDeg) > 60.0)
+	{
+		err = std::string ("the cold-start relation does not match the mount's own reported position (") + buf
+			+ ") - not re-zeroing; this needs checking against the firmware analysis";
+		return -1;
+	}
+
+	double worst = std::max (fabs (eRaDeg), fabs (eDecDeg));
+	if (worst < rezeroMinValue->getValueDouble ())
+	{
+		setPositionTrust (TRUST_CONFIRMED, std::string ("sky position agrees, counter error ") + buf);
+		return 0;
+	}
+	if (worst > rezeroMaxValue->getValueDouble ())
+	{
+		err = std::string ("counter error ") + buf + " exceeds rezero_max - check the solution; raise rezero_max to re-zero anyway";
+		return -1;
+	}
+
+	// 4. where the counters read CWD - e
+	int32_t targetRa = e.rezeroRa;
+	int32_t targetDec = e.rezeroDec;
+	if (!(g.westLimit < targetRa && targetRa < g.eastLimit) || targetDec <= 0 || targetDec >= 2 * g.decHalf)
+	{
+		err = "CWD corrected by that error lies outside the mount's safety limits";
+		return -1;
+	}
+
+	// Gemini's own model does not survive the cold start; keep what is not
+	// an index term
+	rezeroModelTerms.clear ();
+	static const int terms[] = { 201, 202, 203, 204, 207, 208, 209, 211 };
+	for (int id : terms)
+	{
+		std::string value;
+		if (!caring->readNativeRaw (id, value, 2.0))
+		{
+			err = "could not read Gemini model term " + std::to_string (id) + " to restore it after the cold start";
+			return -1;
+		}
+		int v = atoi (value.c_str ());
+		if (v != 0)
+			rezeroModelTerms.push_back ({ id, v });
+	}
+
+	logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO: stopping, stepping the axes to counters RA=" << targetRa << " Dec=" << targetDec
+		<< " (true CWD), then cold-starting the mount there; " << rezeroModelTerms.size () << " Gemini model terms to restore" << sendLog;
+	appendIncidentLine (std::string ("re-zero started: ") + buf);
+
+	stopTracking ("re-zero");	// before the state changes - stopMove() aborts a running re-zero
+	caring->requestAbort ();
+	rezeroTargetRa = targetRa;
+	rezeroTargetDec = targetDec;
+	setRezeroState (REZERO_STOPPING);
+	return 0;
+}
+
+void GeminiUDP::setRezeroState (RezeroState newState)
+{
+	static const char *names[] = { "IDLE", "STOPPING", "MOVING", "SETTLING", "REBOOTING" };
+	rezeroState = newState;
+	rezeroSince = getNow ();
+	rezeroStableCount = 0;
+	rezeroStateValue->setValueCharArr (names[newState]);
+	sendValueAll (rezeroStateValue);
+}
+
+void GeminiUDP::abortRezero (const std::string &why)
+{
+	if (caring && rezeroState != REZERO_REBOOTING)
+		caring->requestAbort ();
+	setRezeroState (REZERO_IDLE);
+	setPositionTrust (TRUST_LOST, "re-zero did not finish (" + why + ") - the axes are somewhere between the old position and CWD");
+}
+
+void GeminiUDP::runRezero (const GeminiStatus &st)
+{
+	if (rezeroState == REZERO_IDLE)
+		return;
+
+	double elapsed = getNow () - rezeroSince;
+	bool newSample = st.axisValid && st.axisTimestamp != rezeroLastSample;
+
+	switch (rezeroState)
+	{
+		case REZERO_STOPPING:
+		{
+			if (elapsed < 3.0 || st.moveRate == 'S' || st.moveRate == 'C')
+			{
+				if (elapsed > 30.0)
+					abortRezero ("the mount did not stop");
+				return;
+			}
+			char cmd[64];
+			snprintf (cmd, sizeof (cmd), ":MP%d;%d#", rezeroTargetRa, rezeroTargetDec);
+			std::string reply;
+			if (!caring->sendRawSync (cmd, reply, 3.0) || reply != "1")
+			{
+				abortRezero (std::string ("the mount refused ") + cmd + ", reply \"" + reply + "\"");
+				return;
+			}
+			logStream (MESSAGE_INFO) << "GeminiUDP: RE-ZERO: " << cmd << " accepted" << sendLog;
+			setRezeroState (REZERO_MOVING);
+			return;
+		}
+
+		case REZERO_MOVING:
+		{
+			if (elapsed > 300.0)
+			{
+				abortRezero ("the axes did not reach the target counters within 300 s");
+				return;
+			}
+			if (!newSample)
+				return;
+			rezeroLastSample = st.axisTimestamp;
+			double tolerance = std::max (4.0, 5.0 / 3600.0 * st.geometry.ticksPerDeg ());
+			bool there = fabs ((double) st.raAxisTicks - rezeroTargetRa) <= tolerance && fabs ((double) st.decAxisTicks - rezeroTargetDec) <= tolerance
+				&& st.moveRate != 'S' && st.moveRate != 'C';
+			rezeroStableCount = there ? rezeroStableCount + 1 : 0;
+			if (rezeroStableCount >= 2)
+			{
+				// a positional move may leave the worm running
+				caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
+				rezeroLastRa = st.raAxisTicks;
+				rezeroLastDec = st.decAxisTicks;
+				setRezeroState (REZERO_SETTLING);
+			}
+			return;
+		}
+
+		case REZERO_SETTLING:
+		{
+			if (elapsed > 60.0)
+			{
+				abortRezero ("the axes did not come to rest at the target counters");
+				return;
+			}
+			if (!newSample)
+				return;
+			rezeroLastSample = st.axisTimestamp;
+			bool still = abs (st.raAxisTicks - rezeroLastRa) <= 1 && abs (st.decAxisTicks - rezeroLastDec) <= 1;
+			rezeroLastRa = st.raAxisTicks;
+			rezeroLastDec = st.decAxisTicks;
+			rezeroStableCount = still ? rezeroStableCount + 1 : 0;
+			if (rezeroStableCount < 2)
+				return;
+
+			double k = st.geometry.ticksPerDeg ();
+			logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO: axes at counters RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks
+				<< " (residual " << (st.raAxisTicks - rezeroTargetRa) / k * 3600.0 << ", " << (st.decAxisTicks - rezeroTargetDec) / k * 3600.0
+				<< " arcsec) - cold-starting the mount (native 65533)" << sendLog;
+			rezeroStartupBaseline = st.startupCount;
+			caring->requestReboot (true, GeminiCaringLoop::STARTUP_COLD);
+			setRezeroState (REZERO_REBOOTING);
+			return;
+		}
+
+		case REZERO_REBOOTING:
+		{
+			// requestReboot() cleared axisValid and geometry.valid; the
+			// post-startup sequence reads both afresh
+			if (st.startupCount == rezeroStartupBaseline || !st.axisValid || !st.geometry.valid)
+			{
+				if (elapsed > 300.0)
+				{
+					setRezeroState (REZERO_IDLE);
+					setPositionTrust (TRUST_LOST, "re-zero: the mount did not come back within 300 s of its cold start");
+				}
+				return;
+			}
+
+			const GeminiAxisGeometry &g = st.geometry;
+			double allowedRa = 4.0 + (getNow () - rezeroSince) * 15.04106858 / 3600.0 * g.ticksPerDeg ();
+			bool atCwd = st.decAxisTicks == g.decHalf && fabs ((double) st.raAxisTicks - g.raHalf) <= allowedRa;
+			setRezeroState (REZERO_IDLE);
+			caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
+			if (!atCwd)
+			{
+				setPositionTrust (TRUST_LOST, "re-zero: after the cold start the counters are not at CWD (RA=" + std::to_string (st.raAxisTicks)
+					+ " Dec=" + std::to_string (st.decAxisTicks) + ") - the boot menu was skipped?");
+				return;
+			}
+			for (const auto &term : rezeroModelTerms)
+				caring->queueNativeSet (term.first, (int32_t) term.second);
+
+			// the accumulated astrometric corrections compensated the old
+			// zero error; they would now apply it twice
+			zeroCorrRaDec ();
+			if (safetyState == SAFETY_LOCKED)
+			{
+				unBlockMove ();
+				setSafetyState (SAFETY_OK);
+			}
+			appendIncidentLine ("re-zero finished: " + rezeroSummary);
+			setPositionTrust (TRUST_CONFIRMED, "re-zeroed from the sky: " + rezeroSummary);
+			logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO finished, the mount is at CWD and not tracking - re-issue the move" << sendLog;
+			return;
+		}
+
+		default:
+			return;
 	}
 }
 
@@ -970,7 +1771,7 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	lastSafetyPollTimestamp = st.timestamp;
 
 	rts2_status_t moving = getState () & TEL_MASK_MOVING;
-	bool weCommandedMovement = (moving == TEL_MOVING || moving == TEL_PARKING) || st.moveInProgress;
+	bool weCommandedMovement = (moving == TEL_MOVING || moving == TEL_PARKING) || st.moveInProgress || rezeroState != REZERO_IDLE;
 
 	// ---- the mount is slewing and we didn't ask it to ----
 	// 'S' slewing / 'C' centering only: 'T' is ordinary tracking and 'G' is
@@ -1087,7 +1888,7 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 
 void GeminiUDP::setSafetyState (SafetyState newState)
 {
-	static const char *names[] = { "OK", "STOPPING", "PARKING", "COLDSTART", "LOCKED" };
+	static const char *names[] = { "OK", "STOPPING", "PARKING", "LOCKED" };
 	safetyState = newState;
 	safetyStateSince = getNow ();
 	safetyStateValue->setValueCharArr (names[newState]);
@@ -1127,7 +1928,7 @@ void GeminiUDP::triggerIncident (const char *condition, const std::string &detai
 		return;
 
 	safetyReason = std::string (condition) + ": " + detail;
-	safetyWantsColdStart = escalate && coldStartOnIncident;
+	safetyLosesPosition = escalate;
 
 	incidentCountValue->inc ();
 	sendValueAll (incidentCountValue);
@@ -1135,10 +1936,13 @@ void GeminiUDP::triggerIncident (const char *condition, const std::string &detai
 	sendValueAll (lastIncidentValue);
 
 	logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY INCIDENT #" << incidentCountValue->getValueInteger () << " - " << safetyReason
-		<< " -> stopping, then parking" << (safetyWantsColdStart ? ", then cold-starting the mount" : "") << sendLog;
+		<< " -> stopping, parking, then holding the mount locked" << (safetyLosesPosition ? " with its position marked LOST" : "") << sendLog;
 
 	if (caring)
 		writeIncidentReport (caring->getStatus ());
+
+	if (rezeroState != REZERO_IDLE && rezeroState != REZERO_REBOOTING)
+		abortRezero ("safety incident");
 
 	// stopTracking() calls stopMove() for us, which is requestAbort() -
 	// but ask for the abort explicitly too: whatever is going on, the one
@@ -1150,18 +1954,29 @@ void GeminiUDP::triggerIncident (const char *condition, const std::string &detai
 	setSafetyState (SAFETY_STOPPING);
 }
 
-// Drives the stop -> park -> cold start sequence. Runs from idle(), one
-// step per tick, so nothing here may block.
+// Drives the stop -> park -> lock sequence. Runs from idle(), one step per
+// tick, so nothing here may block. It ends locked, always: what happens next
+// is a human's call ("position ok" releases it), and when the incident casts
+// doubt on the axis counters the position is LOST as well, which only a
+// human's word or a re-zero from the sky lifts.
 void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 {
 	constexpr double STOP_SETTLE_SEC = 2.0;
 	constexpr double PARK_TIMEOUT_SEC = 180.0;
-	constexpr double COLDSTART_TIMEOUT_SEC = 300.0;
 
 	if (safetyState == SAFETY_OK || safetyState == SAFETY_LOCKED)
 		return;
 
 	double elapsed = getNow () - safetyStateSince;
+
+	auto finish = [this] (const char *how)
+	{
+		setSafetyState (SAFETY_LOCKED);
+		if (safetyLosesPosition)
+			setPositionTrust (TRUST_LOST, std::string ("safety incident (") + how + "): " + safetyReason);
+		logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - mount held locked (" << how << "). Look at " << incidentLogPath
+			<< ", then \"position ok\" if the position is fine, or \"position sky RA DEC\" / \"position cwd\" if it is not." << sendLog;
+	};
 
 	switch (safetyState)
 	{
@@ -1174,12 +1989,7 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			if (elapsed < STOP_SETTLE_SEC)
 				return;
 
-			appendIncidentLine (safetyWantsColdStart ? "stop sent, requesting park at CWD (:hC#)" : "stop sent, requesting park");
-			// A cold start sets both axes to CWD without looking (firmware
-			// FUN_0000bd78, also behind a warm start) - so when one is to
-			// follow, park AT CWD, not at the configured home position,
-			// which is CWD only until somebody sets another one.
-			parkAtStartupPositionNext = safetyWantsColdStart;
+			appendIncidentLine ("stop sent, requesting park");
 			// Telescope::startPark(Connection*), not our own startPark()
 			// hook - the framework's entry point is what maintains
 			// TEL_PARKING/TEL_PARKED, and while TEL_PARKING is set it
@@ -1187,13 +1997,9 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			// no-argument startPark() override hides the base overload.
 			if (Telescope::startPark (nullptr) != 0)
 			{
-				parkAtStartupPositionNext = false;
-				// no cold start from here: the mount is not known to be at
-				// CWD, and a cold start would make wherever it is the new CWD
-				logStream (MESSAGE_ERROR) << "GeminiUDP: SAFETY - could not start a park; holding the mount locked"
-					<< (safetyWantsColdStart ? " without the cold start (it would take the current position for CWD)" : "") << sendLog;
-				appendIncidentLine ("park could NOT be started - locked, no cold start");
-				setSafetyState (SAFETY_LOCKED);
+				logStream (MESSAGE_ERROR) << "GeminiUDP: SAFETY - could not start a park" << sendLog;
+				appendIncidentLine ("park could NOT be started - locked");
+				finish ("park could not be started");
 				return;
 			}
 			setSafetyState (SAFETY_PARKING);
@@ -1209,73 +2015,16 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			if (parked)
 			{
 				logStream (MESSAGE_INFO) << "GeminiUDP: SAFETY - mount parked" << sendLog;
-				appendIncidentLine ("parked");
+				appendIncidentLine ("parked - locked");
+				finish ("parked");
 			}
 			else
 			{
 				logStream (MESSAGE_ERROR) << "GeminiUDP: SAFETY - park did not complete within " << PARK_TIMEOUT_SEC << "s" << sendLog;
-				appendIncidentLine ("park did NOT complete within the timeout");
-			}
-
-			// same reason as the failed park start above: only a mount
-			// that reached CWD may be cold-started
-			if (safetyWantsColdStart && !parked)
-			{
-				logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - not cold-starting a mount that did not reach CWD (it would take its current position for CWD); holding it locked" << sendLog;
-				appendIncidentLine ("cold start SKIPPED - park did not complete, locked");
-				setSafetyState (SAFETY_LOCKED);
-				return;
-			}
-
-			if (safetyWantsColdStart && caring)
-			{
-				logStream (MESSAGE_WARNING) << "GeminiUDP: SAFETY - cold-starting the mount (native 65533)" << sendLog;
-				appendIncidentLine ("cold start requested (native 65533)");
-				safetyColdStartBaseline = st.startupCount;
-				caring->requestReboot (true);
-				setSafetyState (SAFETY_COLDSTART);
-			}
-			else
-			{
-				setSafetyState (SAFETY_LOCKED);
-			}
-			return;
-		}
-
-		case SAFETY_COLDSTART:
-		{
-			// the caring loop walks the mount back up through its boot
-			// menu on its own; a bumped startupCount is it saying so
-			if (st.startupCount != safetyColdStartBaseline)
-			{
-				bool mayResume = recoveriesUsedValue->getValueInteger () < maxRecoveries;
-				recoveriesUsedValue->inc ();
-				sendValueAll (recoveriesUsedValue);
-
-				if (mayResume)
-				{
-					logStream (MESSAGE_WARNING) << "GeminiUDP: SAFETY - mount is back up after the cold start; recovery "
-						<< recoveriesUsedValue->getValueInteger () << " of " << maxRecoveries << ", releasing the mount" << sendLog;
-					appendIncidentLine ("mount back up after cold start - released");
-					setSafetyState (SAFETY_OK);
-				}
-				else
-				{
-					logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - mount is back up, but " << maxRecoveries
-						<< " automatic recoveries have already been used. Holding the mount blocked - look at " << incidentLogPath
-						<< ", then clear safety_locked (or send the reset command) to release it." << sendLog;
-					appendIncidentLine ("mount back up after cold start - HELD, recovery budget exhausted");
-					setSafetyState (SAFETY_LOCKED);
-				}
-				return;
-			}
-
-			if (elapsed > COLDSTART_TIMEOUT_SEC)
-			{
-				logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - mount did not come back within " << COLDSTART_TIMEOUT_SEC
-					<< "s of the cold start. Holding it blocked - this one needs a human." << sendLog;
-				appendIncidentLine ("mount did NOT come back after the cold start");
-				setSafetyState (SAFETY_LOCKED);
+				appendIncidentLine ("park did NOT complete within the timeout - locked");
+				// a park that never finished is itself a reason to doubt the counters
+				safetyLosesPosition = true;
+				finish ("park did not complete");
 			}
 			return;
 		}
@@ -1326,7 +2075,9 @@ void GeminiUDP::writeIncidentReport (const GeminiStatus &st)
 	std::ostringstream o;
 	o << "\n==== " << utcStamp () << "  gemini-udp incident #" << incidentCountValue->getValueInteger () << " ====\n";
 	o << "reason:      " << safetyReason << "\n";
-	o << "action:      stop -> park" << (safetyWantsColdStart ? " -> cold start" : " (cold start not requested)") << "\n";
+	o << "action:      stop -> park -> locked" << (safetyLosesPosition ? ", position LOST" : "") << "\n";
+	o << "position:    " << positionTrustValue->getSelName () << " (" << positionReasonValue->getValue () << ")"
+		<< " axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << (st.axisValid ? "" : " (not read)") << "\n";
 	o << "rts2 state:  0x" << std::hex << getState () << std::dec
 		<< " tracking=" << (isTracking () ? "yes" : "no")
 		<< " block_move=" << (getBlockMove () ? "yes" : "no") << "\n";
@@ -1455,6 +2206,17 @@ bool GeminiUDP::altitudeSafe (double raDeg, double decDeg, double marginDeg)
 
 int GeminiUDP::startResync ()
 {
+	if (positionLost ())
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, the mount position is LOST (" << positionReasonValue->getValue ()
+			<< ") - \"position ok\", \"position unmoved\", \"position cwd\" or \"position sky RA DEC\" first" << sendLog;
+		return -1;
+	}
+	if (rezeroState != REZERO_IDLE)
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, a re-zero is in progress" << sendLog;
+		return -1;
+	}
 	struct ln_equ_posn pos;
 	getTarget (&pos);
 	return doGoto (pos.ra, pos.dec, "framework-requested move") ? 0 : -1;
@@ -1464,6 +2226,11 @@ bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label, GeminiCa
 {
 	if (caring == nullptr)
 		return false;
+	if (positionLost () || rezeroState != REZERO_IDLE)
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: " << label << " refused: " << (positionLost () ? "the mount position is LOST" : "a re-zero is in progress") << sendLog;
+		return false;
+	}
 
 	std::string err;
 	GeminiSidePrediction prediction;
@@ -1627,6 +2394,8 @@ int GeminiUDP::isMoving ()
 
 int GeminiUDP::stopMove ()
 {
+	if (rezeroState != REZERO_IDLE && rezeroState != REZERO_REBOOTING)
+		abortRezero ("stop command");
 	if (caring)
 		caring->requestAbort ();
 	return 0;
@@ -1636,12 +2405,22 @@ int GeminiUDP::startPark ()
 {
 	if (caring == nullptr)
 		return -1;
+	// a park is a goto to a position measured in axis counters that are
+	// not believed - see setPositionTrust()
+	if (positionLost ())
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: park refused, the mount position is LOST (" << positionReasonValue->getValue () << ")" << sendLog;
+		return -1;
+	}
+	if (rezeroState != REZERO_IDLE)
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: park refused, a re-zero is in progress" << sendLog;
+		return -1;
+	}
 	// gemini2ser.cpp's startPark() calls stopMove() first - requestPark()
 	// does the equivalent (see GeminiCaringLoop::handlePark())
-	bool atStartupPosition = parkAtStartupPositionNext;
-	parkAtStartupPositionNext = false;
-	caring->requestPark (atStartupPosition);
-	logStream (MESSAGE_INFO) << "GeminiUDP: park requested (" << (atStartupPosition ? ":hC#, CWD" : ":hP#") << ")" << sendLog;
+	caring->requestPark ();
+	logStream (MESSAGE_INFO) << "GeminiUDP: park requested (:hP#)" << sendLog;
 	return 0;
 }
 
@@ -1908,6 +2687,8 @@ int GeminiUDP::idle ()
 	{
 		GeminiStatus st = caring->getStatus ();
 		applyStatus (st);
+		checkPositionEvidence (st);
+		runRezero (st);
 		checkMoveCorrection (st);
 		// after applyStatus(), which is where an incident gets opened -
 		// so the first step of a recovery runs on the same tick that

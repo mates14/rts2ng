@@ -80,15 +80,16 @@ namespace
 	}
 
 	// the three boot-menu selections Gemini accepts while its handshake
-	// answers 'b', in GeminiCaringLoop::StartupMode order - same commands,
-	// same order, as base/teld/gemini/gemini.cpp's tel_gemini_reset()
+	// answers 'b' - same commands as base/teld/gemini/gemini.cpp's
+	// tel_gemini_reset(); nullptr for STARTUP_NONE
 	const char *startupSelectionCommand (int mode)
 	{
 		switch (mode)
 		{
+			case GeminiCaringLoop::STARTUP_RESTART: return "bR#";
 			case GeminiCaringLoop::STARTUP_WARM: return "bW#";
 			case GeminiCaringLoop::STARTUP_COLD: return "bC#";
-			default: return "bR#";
+			default: return nullptr;
 		}
 	}
 
@@ -347,6 +348,29 @@ GeminiSidePrediction rts2teld::predictGotoSide (const GeminiAxisGeometry &geo, i
 	return p;
 }
 
+GeminiCounterError rts2teld::computeCounterError (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, char decSide,
+	double lstDeg, double mountRaDeg, double mountDecDeg)
+{
+	GeminiCounterError e;
+	double k = geo.ticksPerDeg ();
+	double kd = geo.decHalf / 180.0;
+	double ha = ln_range_degrees (lstDeg - mountRaDeg);
+	double raWant = ln_range_degrees ((decSide == 'E' ? 270.0 : 90.0) - ha) * k;
+	double decWant = (decSide == 'E' ? 270.0 - mountDecDeg : mountDecDeg + 90.0) * kd;
+
+	e.raTicks = raWant - raTicks;
+	if (e.raTicks > geo.raHalf)
+		e.raTicks -= 2.0 * geo.raHalf;
+	if (e.raTicks < -geo.raHalf)
+		e.raTicks += 2.0 * geo.raHalf;
+	e.decTicks = decWant - decTicks;
+	e.raDeg = e.raTicks / k;
+	e.decDeg = e.decTicks / kd;
+	e.rezeroRa = (int32_t) lround (geo.raHalf - e.raTicks);
+	e.rezeroDec = (int32_t) lround (geo.decHalf - e.decTicks);
+	return e;
+}
+
 bool GeminiSidePrediction::ambiguous (double threshold) const
 {
 	if (outcome == UNKNOWN)
@@ -387,7 +411,7 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	lastPollRa (NAN), lastPollDec (NAN), stableCount (0), moveStartedAt (0), moveDeadline (0),
 	activeMoveTargetRa (NAN), activeMoveTargetDec (NAN),
 	abortRequested (false), parkRequested (false), parkAtStartupPosition (false), rebootRequested (false), rebootCold (false),
-	startupMode ((int) STARTUP_RESTART), forceColdSelection (false), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
+	startupMode ((int) STARTUP_NONE), forcedSelection ((int) STARTUP_NONE), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
 	flipAmbiguityMarginDeg (0.5),
 	moveMinSeparation (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
 	slowPollCounter (0), nextDatagramNumber (0)
@@ -469,7 +493,7 @@ void GeminiCaringLoop::requestPark (bool atStartupPosition)
 	parkRequested = true;
 }
 
-void GeminiCaringLoop::requestReboot (bool cold)
+void GeminiCaringLoop::requestReboot (bool cold, StartupMode selection)
 {
 	// drop out of "the mount is up and usable" the moment the reboot is
 	// asked for, not when the caring thread gets round to sending it: the
@@ -486,16 +510,25 @@ void GeminiCaringLoop::requestReboot (bool cold)
 		// read again once it is back: a CMOS reset resets the limits too
 		status.geometry.valid = false;
 		status.axisValid = false;
+		status.bootObserved = true;
+		status.bootSelection = '?';
 	}
 	rebootCold = cold;
-	if (cold)
-		forceColdSelection = true;
+	if (selection != STARTUP_NONE)
+		forcedSelection = (int) selection;
 	rebootRequested = true;
 }
 
 void GeminiCaringLoop::setStartupMode (StartupMode mode)
 {
 	startupMode = (int) mode;
+	std::lock_guard<std::mutex> lock (mutex_);
+	status.startupSelections = 0;
+}
+
+void GeminiCaringLoop::selectStartup (StartupMode mode)
+{
+	forcedSelection = (int) mode;
 	std::lock_guard<std::mutex> lock (mutex_);
 	status.startupSelections = 0;
 }
@@ -754,6 +787,10 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.startupCount = from.startupCount;
 	to.startupSelections = from.startupSelections;
 	to.clockMatched = from.clockMatched;
+	to.bootObserved = from.bootObserved;
+	to.bootSelection = from.bootSelection;
+	to.clockOffsetSec = from.clockOffsetSec;
+	to.axisTimestamp = from.axisTimestamp;
 
 	to.limitsValid = from.limitsValid;
 	to.limitBothRaw = from.limitBothRaw;
@@ -899,6 +936,7 @@ void GeminiCaringLoop::pollAxisPosition ()
 	status.axisValid = true;
 	status.raAxisTicks = ra;
 	status.decAxisTicks = dec;
+	status.axisTimestamp = nowSeconds ();
 
 	char side = status.decSide ();
 	if (status.moveInProgress && side != '?' && moveStartDecSide != '?' && side != moveStartDecSide)
@@ -1024,7 +1062,8 @@ void GeminiCaringLoop::pollStartupState ()
 
 	char state = response[0];
 
-	bool selectNow = false;
+	const char *selection = nullptr;
+	char selectionLetter = '?';
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
 		status.connected = true;
@@ -1038,28 +1077,50 @@ void GeminiCaringLoop::pollStartupState ()
 					return;	// already up and known to be up - nothing to do
 				break;
 			case 'b':	// boot menu, waiting for a startup-mode selection
+			{
+				if (status.startupComplete || !status.bootObserved)
+					status.bootSelection = '?';	// a new boot
 				status.startupComplete = false;
-				if (status.startupSelections < MAX_STARTUP_SELECTIONS)
+				status.bootObserved = true;
+				// answered only when somebody decided the answer: the
+				// standing startup_mode (NONE by default), or a one-shot
+				// from a human's "position" command or our own reboot
+				int mode = forcedSelection.load () != (int) STARTUP_NONE ? forcedSelection.load () : startupMode.load ();
+				selection = startupSelectionCommand (mode);
+				if (selection != nullptr && status.startupSelections < MAX_STARTUP_SELECTIONS)
 				{
 					status.startupSelections++;
-					selectNow = true;
+					selectionLetter = selection[1];
+				}
+				else
+				{
+					selection = nullptr;
 				}
 				break;
+			}
 			default:	// 'B' startup message on screen, 'S' cold start running, or something undocumented
+				if (status.startupComplete || !status.bootObserved)
+					status.bootSelection = '?';
 				status.startupComplete = false;
+				status.bootObserved = true;
 				return;
 		}
 	}
 
-	if (selectNow)
+	if (state == 'b')
 	{
-		// no meaningful reply to parse - a command Gemini has no response
-		// for comes back as the ACK substitution (see the protocol
-		// reference, "Commands with no serial response"). The next poll
-		// cycle re-reads the handshake and sees whether it took.
-		std::string ignored;
-		int mode = forceColdSelection.load () ? (int) STARTUP_COLD : startupMode.load ();
-		sendAndReceive (startupSelectionCommand (mode), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+		if (selection != nullptr)
+		{
+			// no meaningful reply to parse - a command Gemini has no
+			// response for comes back as the ACK substitution (see the
+			// protocol reference, "Commands with no serial response").
+			// The next poll cycle re-reads the handshake and sees whether
+			// it took.
+			std::string ignored;
+			sendAndReceive (selection, ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+			std::lock_guard<std::mutex> lock (mutex_);
+			status.bootSelection = selectionLetter;
+		}
 		return;
 	}
 
@@ -1069,28 +1130,28 @@ void GeminiCaringLoop::pollStartupState ()
 	runPostStartupSequence ();
 }
 
-// Everything that has to be said to the mount once per startup, done here
-// on the caring thread rather than from GeminiUDP::initValues() for two
+// Everything worth reading from the mount once per startup, done here on
+// the caring thread rather than from GeminiUDP::initValues() for two
 // reasons: it must also run after a *re*start (a power cycle, somebody
-// else's reboot, our own cold-start recovery), and doing it here keeps it
-// off the RTS2 thread - the four limit reads plus the three clock commands
-// are seven bounded round-trips, which is a long time to hold up an event
-// loop that is also serving rts2-mon, the executor and every camera.
+// else's reboot, a re-zero), and doing it here keeps it off the RTS2 thread.
+//
+// Deliberately read-only apart from the clock, and the clock only when it
+// is wrong: this runs every time the driver (re)connects, including to a
+// mount that is in the middle of the night's work, and a driver restart
+// must not change anything about a mount that is fine. In particular no
+// :hW# - in this firmware it is "unpark and start tracking" (it clears the
+// park flag and starts the worm), which on a parked mount means tracking
+// away from the park position for as long as nobody notices.
 void GeminiCaringLoop::runPostStartupSequence ()
 {
-	// ":hW#" - wake up the telescope and resume tracking. Same command, at
-	// the same point, as base/teld/gemini/gemini.cpp's initHardware() and
-	// the live production driver's (~/gemini2ser.cpp): without it a mount
-	// that was put to sleep (":hN#", or its own park behaviour - see native
-	// 92) stays asleep and ignores motion commands, which looks exactly
-	// like the boot-menu failure this whole function exists to fix.
-	std::string response;
-	sendAndReceive (":hW#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
-
 	// every HA/LST-derived decision this driver makes trusts the mount's
-	// own clock, and a cold start is exactly when that clock is least
-	// likely to be right
-	bool timeOk = matchTimeUtcInternal ();
+	// own clock; set it only when it is off, since even a correct setting
+	// makes the mount's idea of the sky jump by up to a second's worth
+	double clockOffset = NAN;
+	bool clockRead = readClockOffsetInternal (clockOffset);
+	bool timeOk = clockRead && fabs (clockOffset) <= 2.0;
+	if (!timeOk)
+		timeOk = matchTimeUtcInternal ();
 
 	std::string both, east, west, westGoto;
 	bool limitsOk = readNativeInternal (220, both)
@@ -1099,8 +1160,9 @@ void GeminiCaringLoop::runPostStartupSequence ()
 		&& readNativeInternal (223, westGoto);
 
 	// failure is not fatal here - the slow poll keeps retrying it, and
-	// until it lands gotos go out unpredicted, exactly as before it existed
+	// until it lands gotos go out unpredicted
 	readGeometryInternal ();
+	pollAxisPosition ();
 
 	int rate = 0;
 	std::string rateStr;
@@ -1115,6 +1177,11 @@ void GeminiCaringLoop::runPostStartupSequence ()
 		}
 	}
 
+	// the parked flag survives power cycles (battery-backed), so this is
+	// how a restarted driver learns the mount is parked
+	std::string parkResponse;
+	bool parkRead = sendAndReceive (":h?#", parkResponse, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS) && !parkResponse.empty ();
+
 	std::lock_guard<std::mutex> lock (mutex_);
 	if (limitsOk)
 	{
@@ -1126,11 +1193,49 @@ void GeminiCaringLoop::runPostStartupSequence ()
 	}
 	if (rate != 0)
 		status.trackingRate = rate;
+	if (parkRead && !status.parking)
+		status.parkStatus = parkResponse[0];
+	status.clockOffsetSec = clockRead ? clockOffset : NAN;
 	status.clockMatched = timeOk;
 	status.startupComplete = true;
 	status.startupSelections = 0;
 	status.startupCount++;
-	forceColdSelection = false;
+	forcedSelection = (int) STARTUP_NONE;
+}
+
+// :GG# is the hours to add to the mount's local time to get UTC, :GL#/:GC#
+// its local time and date. Both of the latter are read back to back and a
+// date rollover in between just shows up as a large offset, which only
+// makes the caller set the clock - the safe direction.
+bool GeminiCaringLoop::readClockOffsetInternal (double &offsetSec)
+{
+	std::string gg, gl, gc;
+	if (!sendAndReceive (":GG#", gg, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS)
+		|| !sendAndReceive (":GL#", gl, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS)
+		|| !sendAndReceive (":GC#", gc, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
+		return false;
+	time_t now = time (nullptr);
+
+	double utcOffsetHours;
+	int hh, mm, ss, mon, day, yy;
+	if (sscanf (gg.c_str (), "%lf", &utcOffsetHours) != 1
+		|| sscanf (gl.c_str (), "%d:%d:%d", &hh, &mm, &ss) != 3
+		|| sscanf (gc.c_str (), "%d/%d/%d", &mon, &day, &yy) != 3)
+		return false;
+
+	struct tm ts;
+	memset (&ts, 0, sizeof (ts));
+	ts.tm_year = yy + 100;
+	ts.tm_mon = mon - 1;
+	ts.tm_mday = day;
+	ts.tm_hour = hh;
+	ts.tm_min = mm;
+	ts.tm_sec = ss;
+	time_t mountLocal = timegm (&ts);
+	if (mountLocal == (time_t) -1)
+		return false;
+	offsetSec = difftime (mountLocal, now) + utcOffsetHours * 3600.0;
+	return true;
 }
 
 bool GeminiCaringLoop::matchTimeUtcInternal ()

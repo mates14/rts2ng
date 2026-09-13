@@ -1555,3 +1555,48 @@ for that firmware:
   if one was ever set, otherwise at CWD; `:hC#` always parks at CWD.
 - The UDP handler (`FUN_00044150`) hands everything but ENQ (0x05) and NAK (0x15) to the same command parser
   as the serial ports, with no startup gating — `0x06` and `bR#`/`bW#`/`bC#` work over UDP.
+
+### 8.8 Position trust, the `position` command, and re-zero from the sky
+
+Firmware facts this rests on (same decompilation as §8.7):
+
+- Nothing but a startup writes the axis counters (native 239). Cold and warm start set them to CWD;
+  restart restores the saved values; the stall handler corrects them after lost steps. `:CI#`, `:CM#` and
+  `:Cm#` only write the pointing model's index terms (per pier side). There is no "set axis position"
+  command.
+- Park status (`:h?#`, ENQ field 13): `2` when a park starts, `1` when both axes finish the park move, `0` after
+  any stop — `:Q#`, a new goto, a limit/stall/servo fault, a cold start. The parked flag is battery-backed and
+  survives power cycles. `1` means the counters reached the park position, nothing more.
+- `:hW#` clears the park flag, clears sleep and starts the worm — "unpark and track". The goto path does
+  not check sleep. The driver no longer sends it on connect.
+
+The driver keeps `position_trust` (CONFIRMED / ASSUMED / LOST, saved in `--position-state`, default
+`/var/log/rts2/gemini-udp-position.state`, so a driver restart neither forgets a lost position nor disturbs a
+healthy mount). LOST refuses moves, parking and tracking. It is entered on: a Dec counter landing on exactly
+CWD while nothing was moving (a cold/warm start behind the driver's back); a boot the driver did not see
+vouched for (boot menu waiting with `startup_mode` NONE, the default; warm/cold chosen by `startup_mode`;
+counters back at CWD after a reboot); a safety incident that casts doubt on the counters (the recovery now
+ends stop → park → locked, never with a cold start); an unfinished re-zero.
+
+```
+position                      report
+position ok                   the position is fine: ASSUMED, releases a safety lock
+position lost                 it is not: LOST
+position unmoved              (boot menu) nothing moved while off: restart, stored counters (stays LOST if it was)
+position cwd [warm]           telescope physically at CWD: cold (or warm) start there
+position sky RA DEC [TIME]    true J2000 pointing from a solved image (TIME = unix mid-exposure, needed if
+                              not tracking): CONFIRMED if the counter error < rezero_min, re-zero if below
+                              rezero_max, refused above
+position abort                abort a re-zero before its cold start
+```
+
+Re-zero: the true position goes through the goto pipeline (precession/nutation/aberration/refraction as
+configured, then the RTS2 pointing model for the current pier side) to a mount-frame coordinate; the firmware's
+post-cold-start relation (`FUN_0000bd78`/`FUN_00016b7c`: RA axis 270°−HA on E / 90°−HA on W, Dec axis
+270°−Dec on E / Dec+90° on W) gives the counters it should have; the difference is the zero error e. The axes
+are stepped with `:MP` to CWD − e (physically true CWD), the mount is cold-started there (65533), Gemini model
+terms other than IH/ID are written back, RTS2's accumulated corrections are zeroed. A guard refuses when the
+same relation applied to the mount's *own* reported position is off by more than 60° — i.e. when the relation
+does not fit this mount. Checked in simulation only (`computeCounterError()` over 1M random states, and
+end-to-end against a simulator of the counter/cold-start behaviour); `:MP`'s success reply `1` is read from the
+firmware and not yet seen on the wire.
