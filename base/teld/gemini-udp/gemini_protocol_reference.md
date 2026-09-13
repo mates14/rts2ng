@@ -1584,19 +1584,36 @@ position ok                   the position is fine: ASSUMED, releases a safety l
 position lost                 it is not: LOST
 position unmoved              (boot menu) nothing moved while off: restart, stored counters (stays LOST if it was)
 position cwd [warm]           telescope physically at CWD: cold (or warm) start there
-position sky RA DEC [TIME]    true J2000 pointing from a solved image (TIME = unix mid-exposure, needed if
-                              not tracking): CONFIRMED if the counter error < rezero_min, re-zero if below
-                              rezero_max, refused above
+position rezero               re-zero now from the astrometric evidence collected so far
 position abort                abort a re-zero before its cold start
 ```
 
-Re-zero: the true position goes through the goto pipeline (precession/nutation/aberration/refraction as
-configured, then the RTS2 pointing model for the current pier side) to a mount-frame coordinate; the firmware's
-post-cold-start relation (`FUN_0000bd78`/`FUN_00016b7c`: RA axis 270°−HA on E / 90°−HA on W, Dec axis
-270°−Dec on E / Dec+90° on W) gives the counters it should have; the difference is the zero error e. The axes
-are stepped with `:MP` to CWD − e (physically true CWD), the mount is cold-started there (65533), Gemini model
-terms other than IH/ID are written back, RTS2's accumulated corrections are zeroed. A guard refuses when the
-same relation applied to the mount's *own* reported position is off by more than 60° — i.e. when the relation
-does not fit this mount. Checked in simulation only (`computeCounterError()` over 1M random states, and
-end-to-end against a simulator of the counter/cold-start behaviour); `:MP`'s success reply `1` is read from the
+Evidence comes from the ordinary closed loop, not from a human: astrometry → `corrwerr` → executor
+`correction_info` → driver `correct`. The driver looks at each `correct` before the framework handles it.
+When it is one the framework itself would trust — same `MOVE_NUM`, `CORR_IMG`, `CORR_OBS` as when the
+image was taken, no target offsets, the mount simply tracking — the telescope truly points at
+`OBJ − (ra_err, dec_err)` (J2000; the same convention the framework uses when it adds the correction to
+the next move). That pointing goes through the goto pipeline (corrections as configured, then the RTS2
+pointing model for the current pier side) to a mount-frame coordinate; the firmware's post-cold-start
+relation (`FUN_0000bd78`/`FUN_00016b7c`: RA axis 270°−HA on E / 90°−HA on W, Dec axis 270°−Dec on E /
+Dec+90° on W) gives the counters it should have; the difference is one sample of the zero error. One sample
+per target is kept (`sky_evidence`).
+
+- A sample below `rezero_min` (0.25°) confirms the position (CONFIRMED).
+- A re-zero is armed (`rezero_armed`) when the last `rezero_samples` (3) samples agree within `rezero_agree`
+  (0.1°) of their median, two of them are at least `rezero_spread` (15°) apart on the sky — a zero error is the
+  same everywhere, a model error or a bad solve is not — the median exceeds `rezero_min`, and
+  `rezero_interval` (4 h) has passed since the last one. Agreement beyond `rezero_max` (30°) makes the
+  position LOST instead.
+- With `rezero_auto` (off by default until it has been seen on the mount) an armed re-zero runs when the next
+  move to a new target starts — nothing is exposing, the field is being left anyway — and that move continues
+  afterwards; if the re-zero fails, the move fails and the position is LOST. `position rezero` runs it at once
+  from the median of whatever has been collected.
+- The re-zero itself: `:MP` to CWD − e (physically true CWD), cold start there (65533), Gemini model terms
+  other than IH/ID written back, RTS2's accumulated corrections zeroed, evidence cleared. A guard refuses a
+  sample when the same relation applied to the mount's *own* reported position is off by more than 60° —
+  i.e. when the relation does not fit this mount.
+
+Checked in simulation only (`computeCounterError()` over 1M random states, and end to end against a
+simulator of the counter/cold-start behaviour, with `correct` commands as the executor sends them); `:MP`'s success reply `1` is read from the
 firmware and not yet seen on the wire.

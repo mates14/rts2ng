@@ -1609,6 +1609,20 @@ void GeminiCaringLoop::threadMain ()
 			}
 			else
 			{
+				bool wasConnected;
+				{
+					std::lock_guard<std::mutex> lock (mutex_);
+					wasConnected = status.connected;
+				}
+				// silence is how a power cycle looks from here: ask where it
+				// is in its startup first, not up to SLOW_POLL_EVERY later
+				if (!wasConnected)
+				{
+					pollStartupState ();
+					std::lock_guard<std::mutex> lock (mutex_);
+					if (!status.startupComplete)
+						continue;
+				}
 				pollStatus ();
 				pollTrackingLimit ();
 				pollAxisPosition ();

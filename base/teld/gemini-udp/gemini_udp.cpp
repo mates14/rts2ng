@@ -58,6 +58,8 @@
 #include <sstream>
 #include <strings.h>
 #include <vector>
+#include <algorithm>
+#include <iomanip>
 
 // native Gemini register IDs, see base/teld/gemini/gemini.cpp
 #define GEMINI_CMD_RATE_GUIDE    150
@@ -189,10 +191,44 @@ class GeminiUDP:public Telescope
 
 		// ---- re-zero from the sky ----
 		// No command in this firmware sets the axis counters; only a cold
-		// (or warm) start does, to CWD. So: work out from a true sky
-		// position how far the counters are off, step the axes to where the
-		// counters read CWD minus that error - physically true CWD - and
-		// cold-start there. See startRezero().
+		// (or warm) start does, to CWD. So: learn from astrometry how far the
+		// counters are off, step the axes to where the counters read CWD
+		// minus that error - physically true CWD - and cold-start there.
+		// The evidence comes from the ordinary closed loop: every "correct"
+		// the framework would act on (same move, same correction state) says
+		// where the telescope truly points, see recordSkyEvidence(). One
+		// sample per target is kept; when the last rezero_samples of them
+		// agree, come from pointings far enough apart, and show an error
+		// above rezero_min, a re-zero is armed and runs just before the next
+		// move to a new target (rezero_auto), or on "position rezero".
+		struct SkyEvidence
+		{
+			double at;		// getNow()
+			int moveNum;
+			double raErrDeg, decErrDeg;	// counter error, degrees of axis
+			double ha, dec;			// mount frame pointing, deg
+			char side;
+			std::string summary;
+		};
+		std::vector<SkyEvidence> skyEvidence;
+		bool rezeroArmed;
+		bool rezeroThenMove;		// a framework move is waiting for the re-zero to finish
+		bool rezeroMoveFailed;		// ... and it will not happen - isMoving() reports the failure once
+		int lastResyncMoveNum;
+		double lastRezeroAt;
+		rts2core::ValueBool *rezeroAutoValue;
+		rts2core::ValueInteger *rezeroSamplesValue;
+		rts2core::ValueDouble *rezeroAgreeValue;
+		rts2core::ValueDouble *rezeroSpreadValue;
+		rts2core::ValueDouble *rezeroIntervalValue;
+		rts2core::ValueString *skyEvidenceValue;
+		rts2core::ValueBool *rezeroArmedValue;
+
+		void recordSkyEvidence (rts2core::Connection *conn);
+		bool measureCounterError (double raJ2000, double decJ2000, const GeminiStatus &st, SkyEvidence &sample, std::string &err);
+		void evaluateSkyEvidence ();
+		void clearSkyEvidence (const char *why);
+		int beginRezero (double raErrDeg, double decErrDeg, const std::string &summary, std::string &err);
 		enum RezeroState { REZERO_IDLE, REZERO_STOPPING, REZERO_MOVING, REZERO_SETTLING, REZERO_REBOOTING };
 		RezeroState rezeroState;
 		double rezeroSince;
@@ -207,9 +243,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueString *rezeroStateValue;
 		rts2core::ValueDouble *rezeroMinValue;
 		rts2core::ValueDouble *rezeroMaxValue;
-		rts2core::ValueString *lastSkyOffsetValue;
 
-		int startRezero (double raJ2000, double decJ2000, double exposureTime, std::string &err);
 		void runRezero (const GeminiStatus &st);
 		void setRezeroState (RezeroState newState);
 		void abortRezero (const std::string &why);
@@ -527,11 +561,28 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	rezeroStartupBaseline = 0;
 	createValue (rezeroStateValue, "rezero_state", "re-zero from a sky position in progress: IDLE, STOPPING, MOVING, SETTLING, REBOOTING", false);
 	rezeroStateValue->setValueCharArr ("IDLE");
-	createValue (rezeroMinValue, "rezero_min", "[deg] axis counter errors from a sky position below this only confirm the position, without a re-zero", false, RTS2_VALUE_WRITABLE);
+	createValue (rezeroMinValue, "rezero_min", "[deg] counter errors from astrometry below this only confirm the position, without a re-zero", false, RTS2_VALUE_WRITABLE);
 	rezeroMinValue->setValueDouble (0.25);
-	createValue (rezeroMaxValue, "rezero_max", "[deg] axis counter errors from a sky position above this are refused as implausible", false, RTS2_VALUE_WRITABLE);
+	createValue (rezeroMaxValue, "rezero_max", "[deg] counter errors from astrometry above this are not re-zeroed but make the position LOST", false, RTS2_VALUE_WRITABLE);
 	rezeroMaxValue->setValueDouble (30.0);
-	createValue (lastSkyOffsetValue, "last_sky_offset", "axis counter error found from the last sky position: RA axis, Dec axis [deg]", false);
+	rezeroArmed = false;
+	rezeroThenMove = false;
+	rezeroMoveFailed = false;
+	lastResyncMoveNum = -1;
+	lastRezeroAt = 0;
+	createValue (rezeroAutoValue, "rezero_auto", "re-zero on its own, before the next move to a new target, once the astrometric evidence qualifies", false, RTS2_VALUE_WRITABLE);
+	rezeroAutoValue->setValueBool (false);
+	createValue (rezeroSamplesValue, "rezero_samples", "how many targets' astrometry have to agree on the counter error before a re-zero is armed", false, RTS2_VALUE_WRITABLE);
+	rezeroSamplesValue->setValueInteger (3);
+	createValue (rezeroAgreeValue, "rezero_agree", "[deg] how closely those samples have to agree", false, RTS2_VALUE_WRITABLE);
+	rezeroAgreeValue->setValueDouble (0.1);
+	createValue (rezeroSpreadValue, "rezero_spread", "[deg] at least two of those samples have to come from pointings this far apart - a zero error is the same everywhere, a model error is not", false, RTS2_VALUE_WRITABLE);
+	rezeroSpreadValue->setValueDouble (15.0);
+	createValue (rezeroIntervalValue, "rezero_interval", "[h] minimum time between automatic re-zeros", false, RTS2_VALUE_WRITABLE);
+	rezeroIntervalValue->setValueDouble (4.0);
+	createValue (skyEvidenceValue, "sky_evidence", "astrometric counter error samples, newest last: RA axis/Dec axis deg @HA,Dec side", false);
+	createValue (rezeroArmedValue, "rezero_armed", "the evidence qualifies - a re-zero will run before the next move to a new target (with rezero_auto)", false);
+	rezeroArmedValue->setValueBool (false);
 	lastSafetyPollTimestamp = NAN;
 	unexpectedMoveCount = 0;
 	belowHorizonCount = 0;
@@ -1094,6 +1145,8 @@ void GeminiUDP::setPositionTrust (PositionTrust trust, const std::string &reason
 
 	PositionTrust previous = positionTrust;
 	positionTrust = trust;
+	if (trust == TRUST_LOST)
+		clearSkyEvidence ("position LOST");
 	lostOnlyForBootMenu = false;
 	positionTrustValue->setValueInteger (trust);
 	positionReasonValue->setValueCharArr (reason.c_str ());
@@ -1104,7 +1157,7 @@ void GeminiUDP::setPositionTrust (PositionTrust trust, const std::string &reason
 	if (trust == TRUST_LOST && previous != TRUST_LOST)
 	{
 		logStream (MESSAGE_CRITICAL) << "GeminiUDP: moves, parking and tracking are refused until \"position ok\" (it is fine after all), "
-			<< "\"position unmoved\" / \"position cwd\" (from the boot menu), or \"position sky RA DEC\" (re-zero from a solved image)" << sendLog;
+			<< "\"position unmoved\" / \"position cwd\" (from the boot menu), or \"position rezero\" (from collected astrometry)" << sendLog;
 		// stop whatever is moving, but leave a parked mount alone: :Q#
 		// clears the firmware's park flag
 		if (rezeroState == REZERO_IDLE && (getState () & TEL_MASK_MOVING) != TEL_PARKED)
@@ -1162,6 +1215,20 @@ void GeminiUDP::judgeStartup (const GeminiStatus &st)
 	if (rezeroState == REZERO_REBOOTING)
 		return;	// runRezero() judges its own cold start
 
+	// whatever the verdict, samples measured against the counters before a
+	// boot say nothing reliable about the counters after it
+	clearSkyEvidence ("the mount started up");
+
+	// the counters a startup leaves behind are the new baseline for
+	// checkPositionEvidence() - a cold start we just judged must not be
+	// taken for one behind our back on the next poll
+	if (st.axisValid)
+	{
+		haveLastAxis = true;
+		lastDecTicks = st.decAxisTicks;
+		lastAxisSampleTimestamp = st.axisTimestamp;
+	}
+
 	bool atCwd = st.axisValid && st.geometry.valid && st.decAxisTicks == st.geometry.decHalf;
 
 	bool carriedLostAtBoot = lastStartupCount == 1 && savedTrust == TRUST_LOST;
@@ -1171,7 +1238,7 @@ void GeminiUDP::judgeStartup (const GeminiStatus &st)
 		pendingHumanStartup = 0;
 		if (said == 'R' && (carriedLostAtBoot || (positionLost () && !lostOnlyForBootMenu)))
 			setPositionTrust (TRUST_LOST, "restarted on the operator's word, but the stored counters were already lost before ("
-				+ std::string (positionReasonValue->getValue ()) + ") - \"position ok\", \"position cwd\" or \"position sky\"");
+				+ std::string (positionReasonValue->getValue ()) + ") - \"position ok\" or \"position cwd\"");
 		else if (said == 'R')
 			setPositionTrust (TRUST_ASSUMED, "operator: nothing moved while the mount was off - restarted with its stored position");
 		else if (atCwd)
@@ -1278,6 +1345,8 @@ int GeminiUDP::commandAuthorized (rts2core::Connection *conn)
 {
 	if (conn->isCommand ("position"))
 		return positionCommand (conn);
+	if (conn->isCommand ("correct"))
+		recordSkyEvidence (conn);	// looks only; the framework handles the correction as always
 	return Telescope::commandAuthorized (conn);
 }
 
@@ -1289,8 +1358,8 @@ int GeminiUDP::commandAuthorized (rts2core::Connection *conn)
 //   position unmoved              (boot menu) nothing moved while it was off: restart with stored counters
 //   position cwd [warm]           the telescope is physically at CWD: cold start there (warm keeps Gemini's model);
 //                                 from the boot menu, or by rebooting a running mount
-//   position sky RA DEC [TIME]    the telescope points at J2000 RA DEC (a solved image, exposure middle at
-//                                 unix TIME, required when not tracking): confirm, or re-zero the counters
+//   position rezero               re-zero now from the astrometric evidence collected so far
+//                                 (see recordSkyEvidence()), without waiting for it to qualify
 //   position abort                abort a re-zero that has not reached its cold start yet
 int GeminiUDP::positionCommand (rts2core::Connection *conn)
 {
@@ -1316,25 +1385,37 @@ int GeminiUDP::positionCommand (rts2core::Connection *conn)
 	bool inBootMenu = st.connected && st.startupState == 'b';
 	auto refuse = [conn] (const char *why) { conn->sendCommandEnd (DEVDEM_E_PARAMSVAL, why); return -1; };
 
-	if (!strcasecmp (what, "sky"))
+	if (rezeroState != REZERO_IDLE && strcasecmp (what, "abort"))
+		return refuse ("a re-zero is in progress - \"position abort\" first");
+
+	if (!strcasecmp (what, "rezero"))
 	{
-		double ra, dec, exposureTime = NAN;
-		if (conn->paramNextHMS (&ra) || conn->paramNextDMS (&dec))
+		if (!conn->paramEnd ())
 			return DEVDEM_E_PARAMSNUM;
-		if (!conn->paramEnd () && (conn->paramNextDouble (&exposureTime) || !conn->paramEnd ()))
-			return DEVDEM_E_PARAMSNUM;
-		std::string err;
-		if (startRezero (ra, dec, exposureTime, err))
+		if (skyEvidence.empty ())
+			return refuse ("no astrometric evidence collected yet");
+		// the median of everything collected - the operator decides it is
+		// good enough, the agreement/spread rules are not applied
+		std::vector<double> ra, dec;
+		for (const auto &ev : skyEvidence)
 		{
-			logStream (MESSAGE_ERROR) << "GeminiUDP: position sky refused: " << err << sendLog;
+			ra.push_back (ev.raErrDeg);
+			dec.push_back (ev.decErrDeg);
+		}
+		std::sort (ra.begin (), ra.end ());
+		std::sort (dec.begin (), dec.end ());
+		double mRa = ra[ra.size () / 2], mDec = dec[dec.size () / 2];
+		char buf[160];
+		snprintf (buf, sizeof (buf), "operator, median of %d samples: RA axis %+.3f, Dec axis %+.3f deg", (int) skyEvidence.size (), mRa, mDec);
+		std::string err;
+		if (beginRezero (mRa, mDec, buf, err))
+		{
+			logStream (MESSAGE_ERROR) << "GeminiUDP: position rezero refused: " << err << sendLog;
 			conn->sendCommandEnd (DEVDEM_E_PARAMSVAL, err.c_str ());
 			return -1;
 		}
 		return 0;
 	}
-
-	if (rezeroState != REZERO_IDLE && strcasecmp (what, "abort"))
-		return refuse ("a re-zero is in progress - \"position abort\" first");
 
 	if (!strcasecmp (what, "abort"))
 	{
@@ -1417,33 +1498,246 @@ int GeminiUDP::positionCommand (rts2core::Connection *conn)
 		return 0;
 	}
 
-	return refuse ("expected: position [ok | lost | unmoved | cwd [warm] | sky RA DEC [TIME] | abort]");
+	return refuse ("expected: position [ok | lost | unmoved | cwd [warm] | rezero | abort]");
 }
 
 // ---- re-zero from the sky ----
 //
-// Given where the telescope truly points (J2000, from a solved image), work
-// out where Gemini's axis counters should read at this physical position:
+// The evidence. The framework's closed loop: astrometry solves an image and
+// reports ra_err/dec_err = header position (CRVAL, i.e. OBJ of the move) minus
+// the solved centre; the executor forwards that as "correct", and the
+// framework adds it to the correction the next move of the same target gets.
+// So whenever the framework would take a "correct" at face value - the same
+// move (MOVE_NUM) and the same correction state (CORR_IMG/CORR_OBS) the image
+// was taken with - the telescope truly points at OBJ - (ra_err, dec_err),
+// J2000, for as long as it keeps tracking that target. That is all a re-zero
+// needs. Nothing is changed here; the framework then handles the correction
+// exactly as before.
+void GeminiUDP::recordSkyEvidence (rts2core::Connection *conn)
+{
+	int corMark, corrImg, corrObs, imgId, obsId;
+	double raErr, decErr, posErrDeg;
+	if (sscanf (conn->getCommandFull ().c_str (), "correct %d %d %d %d %d %lf %lf %lf", &corMark, &corrImg, &corrObs, &imgId, &obsId, &raErr, &decErr, &posErrDeg) != 8)
+		return;
+	if (caring == nullptr || rezeroState != REZERO_IDLE || positionLost ())
+		return;
+
+	rts2core::Value *moveNumV = getOwnValue ("MOVE_NUM");
+	rts2core::Value *corrImgV = getOwnValue ("CORR_IMG");
+	rts2core::Value *corrObsV = getOwnValue ("CORR_OBS");
+	rts2core::ValueRaDec *obj = (rts2core::ValueRaDec *) getOwnValue ("OBJ");
+	rts2core::ValueRaDec *offs = (rts2core::ValueRaDec *) getOwnValue ("OFFS");
+	if (!moveNumV || !corrImgV || !corrObsV || !obj || !offs)
+		return;
+
+	auto skip = [this] (const std::string &why)
+	{
+		logStream (MESSAGE_DEBUG) << "GeminiUDP: astrometry not used as re-zero evidence: " << why << sendLog;
+	};
+	if (corMark != moveNumV->getValueInteger () || corrImg != corrImgV->getValueInteger () || corrObs != corrObsV->getValueInteger ())
+		return skip ("taken during another move or correction state (MOVE_NUM " + std::to_string (corMark) + " vs " + std::to_string (moveNumV->getValueInteger ()) + ")");
+	// an offset applied after the exposure would shift OBJ under the image
+	if (offs->getRa () != 0 || offs->getDec () != 0)
+		return skip ("target offsets are in use");
+
+	GeminiStatus st = caring->getStatus ();
+	if (!isTracking () || st.moveInProgress || st.parking || st.moveRate == 'S' || st.moveRate == 'C')
+		return skip ("the mount is not simply tracking its target");
+
+	SkyEvidence sample;
+	std::string err;
+	if (!measureCounterError (ln_range_degrees (obj->getRa () - raErr), obj->getDec () - decErr, st, sample, err))
+		return skip (err);
+	sample.moveNum = corMark;
+
+	// one per target: the newest replaces an older one of the same move
+	for (auto it = skyEvidence.begin (); it != skyEvidence.end (); )
+		it = it->moveNum == corMark ? skyEvidence.erase (it) : it + 1;
+	skyEvidence.push_back (sample);
+	while (skyEvidence.size () > 10)
+		skyEvidence.erase (skyEvidence.begin ());
+
+	logStream (MESSAGE_INFO) << "GeminiUDP: re-zero evidence from image " << imgId << " (move " << corMark << ", pos_err " << posErrDeg << "): " << sample.summary << sendLog;
+	evaluateSkyEvidence ();
+}
+
+// Given where the telescope truly points (J2000), work out where Gemini's
+// axis counters should read at this physical position:
 //  1. the true position goes through the same pipeline as a goto target -
-//     precession, nutation, aberration, refraction, then this driver's
-//     pointing model for the pier side the mount is on - giving the mount
-//     frame coordinate that "points here"
-//  2. the firmware's own relation after a cold start, which sets the
-//     counters to CWD with its RA reference at sidereal time + 6h (firmware
-//     FUN_0000bd78), maps that coordinate to counters: RA axis
-//     (270deg - HA) on the E side, (90deg - HA) on the W side; Dec axis
-//     (270deg - Dec) on E, (Dec + 90deg) on W
-//  3. the difference from the counters it reads now is the counter error e
-//  4. below rezero_min: nothing to fix, the position is CONFIRMED. Above
-//     rezero_max: refused as implausible. Otherwise: stop, step both axes
-//     (:MP, absolute counters) to CWD - e, which is where true CWD is, and
-//     cold-start there. Gemini's own model terms other than the index terms
-//     (which only ever held the old zero error) are read before and put
-//     back after.
-// The hour angle comes from the mount's own LST, and nothing depends on
-// Gemini's index terms or sync offsets - it is all measured against what
-// the counters and the cold-start relation say.
-int GeminiUDP::startRezero (double raJ2000, double decJ2000, double exposureTime, std::string &err)
+//     precession, nutation, aberration, refraction as configured, then this
+//     driver's pointing model for the pier side the mount is on - giving the
+//     mount frame coordinate that "points here"
+//  2. computeCounterError(): the firmware's post-cold-start relation maps it
+//     to counters; the difference from the counters now is the zero error
+// The hour angle comes from the mount's own LST; nothing depends on Gemini's
+// index terms or sync offsets.
+bool GeminiUDP::measureCounterError (double raJ2000, double decJ2000, const GeminiStatus &st, SkyEvidence &sample, std::string &err)
+{
+	if (!st.valid || !st.startupComplete || !st.axisValid || !st.geometry.valid)
+	{
+		err = "the axis position and geometry (native 239/238/231) have not been read";
+		return false;
+	}
+
+	double jd = ln_get_julian_from_sys ();
+	struct ln_equ_posn pos;
+	pos.ra = raJ2000;
+	pos.dec = decJ2000;
+	struct ln_hrz_posn hrz;
+	applyCorrections (&pos, jd, 0, &hrz, false);
+	if (hrz.alt < 20.0)
+	{
+		err = "below 20 deg altitude, refraction and flexure make it too uncertain";
+		return false;
+	}
+
+	char side = st.decSide ();
+	double mountRa, mountDec;
+	computeModelCorrection (pos.ra, pos.dec, st.lst, side, mountRa, mountDec);
+
+	const GeminiAxisGeometry &g = st.geometry;
+	GeminiCounterError e = computeCounterError (g, st.raAxisTicks, st.decAxisTicks, side, st.lst, mountRa, mountDec);
+
+	// The relation is read from the firmware, not from a manual. The mount's
+	// own idea of where it points goes through the same relation and can
+	// only be off by what Gemini's index terms and syncs hold - never by a
+	// large fraction of a turn. If it is, the relation does not fit this
+	// mount, and moving the axes on its say-so could be dangerous.
+	GeminiCounterError belief = computeCounterError (g, st.raAxisTicks, st.decAxisTicks, side, st.lst, st.ra, st.dec);
+
+	char buf[200];
+	snprintf (buf, sizeof (buf), "RA axis %+.3f, Dec axis %+.3f deg at HA %+.1f Dec %+.1f side %c (mount's own offsets %+.3f, %+.3f)",
+		e.raDeg, e.decDeg, ln_range_degrees (st.lst - mountRa + 180.0) - 180.0, mountDec, side, belief.raDeg, belief.decDeg);
+	if (fabs (belief.raDeg) > 60.0 || fabs (belief.decDeg) > 60.0)
+	{
+		err = std::string ("the cold-start relation does not fit the mount's own reported position (") + buf + ") - needs checking against the firmware analysis";
+		logStream (MESSAGE_ERROR) << "GeminiUDP: " << err << sendLog;
+		return false;
+	}
+
+	sample.at = getNow ();
+	sample.raErrDeg = e.raDeg;
+	sample.decErrDeg = e.decDeg;
+	sample.ha = ln_range_degrees (st.lst - mountRa + 180.0) - 180.0;
+	sample.dec = mountDec;
+	sample.side = side;
+	sample.summary = buf;
+	return true;
+}
+
+// When does the evidence justify spending the observing time?
+//  - a sample below rezero_min alone confirms the position
+//  - a re-zero needs the last rezero_samples samples (distinct targets) to
+//    agree within rezero_agree of their median, two of them to be at least
+//    rezero_spread apart on the sky (a zero error is the same everywhere; a
+//    pointing model error or a bad solve is not), the median error above
+//    rezero_min, and rezero_interval since the last re-zero
+//  - an agreed error above rezero_max is not something to fix automatically:
+//    LOST
+void GeminiUDP::evaluateSkyEvidence ()
+{
+	std::ostringstream all;
+	all.precision (3);
+	for (const auto &ev : skyEvidence)
+		all << std::fixed << ev.raErrDeg << "/" << ev.decErrDeg << "@" << std::setprecision (0) << ev.ha << "," << ev.dec << ev.side << std::setprecision (3) << " ";
+	skyEvidenceValue->setValueCharArr (all.str ().c_str ());
+	sendValueAll (skyEvidenceValue);
+
+	const SkyEvidence &newest = skyEvidence.back ();
+	double minErr = rezeroMinValue->getValueDouble ();
+	if (std::max (fabs (newest.raErrDeg), fabs (newest.decErrDeg)) < minErr)
+	{
+		if (rezeroArmed)
+		{
+			rezeroArmed = false;
+			rezeroArmedValue->setValueBool (false);
+			sendValueAll (rezeroArmedValue);
+			logStream (MESSAGE_INFO) << "GeminiUDP: re-zero disarmed - the newest astrometry agrees with the counters" << sendLog;
+		}
+		if (positionTrust != TRUST_CONFIRMED)
+			setPositionTrust (TRUST_CONFIRMED, "astrometry agrees with the counters: " + newest.summary);
+		return;
+	}
+
+	size_t n = (size_t) std::max (1, rezeroSamplesValue->getValueInteger ());
+	if (skyEvidence.size () < n)
+		return;
+	std::vector<SkyEvidence> last (skyEvidence.end () - n, skyEvidence.end ());
+
+	std::vector<double> ra, dec;
+	for (const auto &ev : last)
+	{
+		ra.push_back (ev.raErrDeg);
+		dec.push_back (ev.decErrDeg);
+	}
+	std::sort (ra.begin (), ra.end ());
+	std::sort (dec.begin (), dec.end ());
+	double mRa = ra[n / 2], mDec = dec[n / 2];
+
+	double agree = rezeroAgreeValue->getValueDouble ();
+	double spread = 0;
+	for (size_t i = 0; i < n; i++)
+	{
+		if (fabs (last[i].raErrDeg - mRa) > agree || fabs (last[i].decErrDeg - mDec) > agree)
+		{
+			logStream (MESSAGE_INFO) << "GeminiUDP: re-zero evidence does not agree yet (sample " << last[i].summary << " vs median "
+				<< mRa << ", " << mDec << ")" << sendLog;
+			return;
+		}
+		for (size_t j = i + 1; j < n; j++)
+		{
+			struct ln_equ_posn a, b;
+			a.ra = last[i].ha;
+			a.dec = last[i].dec;
+			b.ra = last[j].ha;
+			b.dec = last[j].dec;
+			spread = std::max (spread, ln_get_angular_separation (&a, &b));
+		}
+	}
+	if (n > 1 && spread < rezeroSpreadValue->getValueDouble ())
+	{
+		logStream (MESSAGE_INFO) << "GeminiUDP: re-zero evidence agrees, but its pointings are only " << spread << " deg apart" << sendLog;
+		return;
+	}
+
+	char buf[200];
+	snprintf (buf, sizeof (buf), "%d targets agree: RA axis %+.3f, Dec axis %+.3f deg (spread %.0f deg)", (int) n, mRa, mDec, spread);
+	if (std::max (fabs (mRa), fabs (mDec)) > rezeroMaxValue->getValueDouble ())
+	{
+		setPositionTrust (TRUST_LOST, std::string ("astrometry: ") + buf + ", beyond rezero_max");
+		return;
+	}
+	if (lastRezeroAt > 0 && getNow () - lastRezeroAt < rezeroIntervalValue->getValueDouble () * 3600.0)
+	{
+		logStream (MESSAGE_WARNING) << "GeminiUDP: " << buf << " - but the last re-zero was less than rezero_interval ago" << sendLog;
+		return;
+	}
+	if (!rezeroArmed)
+		logStream (MESSAGE_WARNING) << "GeminiUDP: re-zero ARMED - " << buf
+			<< (rezeroAutoValue->getValueBool () ? "; it runs before the next move to a new target" : "; rezero_auto is off, \"position rezero\" to run it") << sendLog;
+	rezeroArmed = true;
+	rezeroArmedValue->setValueBool (true);
+	sendValueAll (rezeroArmedValue);
+}
+
+void GeminiUDP::clearSkyEvidence (const char *why)
+{
+	if (skyEvidence.empty () && !rezeroArmed)
+		return;
+	logStream (MESSAGE_INFO) << "GeminiUDP: re-zero evidence cleared: " << why << sendLog;
+	skyEvidence.clear ();
+	rezeroArmed = false;
+	rezeroArmedValue->setValueBool (false);
+	sendValueAll (rezeroArmedValue);
+	skyEvidenceValue->setValueCharArr ("");
+	sendValueAll (skyEvidenceValue);
+}
+
+// The execution: step both axes (:MP, absolute counters) to CWD minus the
+// error - which is where true CWD is - and cold-start there. Gemini's own
+// model terms other than the index terms (which only ever held the old zero
+// error) are read before and put back after.
+int GeminiUDP::beginRezero (double raErrDeg, double decErrDeg, const std::string &summary, std::string &err)
 {
 	if (caring == nullptr)
 	{
@@ -1458,115 +1752,29 @@ int GeminiUDP::startRezero (double raJ2000, double decJ2000, double exposureTime
 	}
 	if (!st.valid || !st.startupComplete || !st.axisValid || !st.geometry.valid)
 	{
-		err = "the mount is not up, or its axis position and geometry (native 239/238/231) have not been read";
+		err = "the mount is not up, or its axis position and geometry have not been read";
 		return -1;
 	}
-	if (st.moveInProgress || st.parking || st.moveRate == 'S' || st.moveRate == 'C')
+	if (st.parking || safetyState == SAFETY_STOPPING || safetyState == SAFETY_PARKING)
 	{
-		err = "the mount is moving";
+		err = "the mount is parking or a safety recovery is running";
 		return -1;
 	}
-	if (safetyState == SAFETY_STOPPING || safetyState == SAFETY_PARKING)
+	if (std::max (fabs (raErrDeg), fabs (decErrDeg)) > rezeroMaxValue->getValueDouble ())
 	{
-		err = "a safety recovery is running";
-		return -1;
-	}
-	if (!std::isnan (exposureTime) && lastMotionAt > exposureTime)
-	{
-		err = "the mount has moved since that exposure";
+		err = "the error exceeds rezero_max";
 		return -1;
 	}
 
-	bool mountTracking = st.moveRate == 'T' || st.trackingRate == GEMINI_CMD_TRACK_SIDEREAL;
-	if (!mountTracking && std::isnan (exposureTime))
-	{
-		err = "the mount is not tracking, so the sky position needs the exposure time (unix seconds, middle of the exposure)";
-		return -1;
-	}
-
-	// 1. true position -> apparent -> mount frame
-	double jd = ln_get_julian_from_sys ();
-	struct ln_equ_posn pos;
-	pos.ra = raJ2000;
-	pos.dec = decJ2000;
-	struct ln_hrz_posn hrz;
-	applyCorrections (&pos, jd, 0, &hrz, false);
-	if (!mountTracking)
-	{
-		// the axes stood still: the same hour angle now has a larger RA
-		pos.ra = ln_range_degrees (pos.ra + (getNow () - exposureTime) * 15.04106858 / 3600.0);
-		struct ln_lnlat_posn observer;
-		observer.lng = telLongitude->getValueDouble ();
-		observer.lat = telLatitude->getValueDouble ();
-		ln_get_hrz_from_equ (&pos, &observer, jd, &hrz);
-	}
-	if (hrz.alt < 20.0)
-	{
-		err = "the sky position is below 20 deg altitude - refraction and flexure make it too uncertain for a re-zero";
-		return -1;
-	}
-
-	char side = st.decSide ();
-	double mountRa, mountDec;
-	computeModelCorrection (pos.ra, pos.dec, st.lst, side, mountRa, mountDec);
-
-	// 2./3. counters the cold-start relation gives for it, and the error
 	const GeminiAxisGeometry &g = st.geometry;
-	GeminiCounterError e = computeCounterError (g, st.raAxisTicks, st.decAxisTicks, side, st.lst, mountRa, mountDec);
-	double eRaDeg = e.raDeg, eDecDeg = e.decDeg;
-	double ha = ln_range_degrees (st.lst - mountRa);
-
-	// for comparison only: the same relation applied to where the mount
-	// believes it points - the part of the error that sits in Gemini's own
-	// index terms and sync offsets rather than in the counters
-	GeminiCounterError belief = computeCounterError (g, st.raAxisTicks, st.decAxisTicks, side, st.lst, st.ra, st.dec);
-	double beliefRaDeg = belief.raDeg, beliefDecDeg = belief.decDeg;
-
-	char buf[256];
-	snprintf (buf, sizeof (buf), "RA axis %+.3f, Dec axis %+.3f deg (mount's own offsets hold %+.3f, %+.3f; pier side %c)",
-		eRaDeg, eDecDeg, beliefRaDeg, beliefDecDeg, side);
-	lastSkyOffsetValue->setValueCharArr (buf);
-	sendValueAll (lastSkyOffsetValue);
-	rezeroSummary = buf;
-	logStream (MESSAGE_INFO) << "GeminiUDP: sky position RA=" << raJ2000 << " Dec=" << decJ2000 << " -> mount frame RA=" << mountRa
-		<< " Dec=" << mountDec << " HA=" << ha << "; counter error " << buf << sendLog;
-
-	// The relation above is read from the firmware, not from a manual. The
-	// mount's own idea of where it points goes through the same relation
-	// and can only be off by what Gemini's index terms and syncs hold -
-	// never by a quarter turn or more. If it is, the relation (or the pier
-	// side it was applied for) is wrong for this mount, and moving the axes
-	// on its say-so could be dangerous.
-	if (fabs (beliefRaDeg) > 60.0 || fabs (beliefDecDeg) > 60.0)
-	{
-		err = std::string ("the cold-start relation does not match the mount's own reported position (") + buf
-			+ ") - not re-zeroing; this needs checking against the firmware analysis";
-		return -1;
-	}
-
-	double worst = std::max (fabs (eRaDeg), fabs (eDecDeg));
-	if (worst < rezeroMinValue->getValueDouble ())
-	{
-		setPositionTrust (TRUST_CONFIRMED, std::string ("sky position agrees, counter error ") + buf);
-		return 0;
-	}
-	if (worst > rezeroMaxValue->getValueDouble ())
-	{
-		err = std::string ("counter error ") + buf + " exceeds rezero_max - check the solution; raise rezero_max to re-zero anyway";
-		return -1;
-	}
-
-	// 4. where the counters read CWD - e
-	int32_t targetRa = e.rezeroRa;
-	int32_t targetDec = e.rezeroDec;
+	int32_t targetRa = (int32_t) lround (g.raHalf - raErrDeg * g.ticksPerDeg ());
+	int32_t targetDec = (int32_t) lround (g.decHalf - decErrDeg * g.decHalf / 180.0);
 	if (!(g.westLimit < targetRa && targetRa < g.eastLimit) || targetDec <= 0 || targetDec >= 2 * g.decHalf)
 	{
 		err = "CWD corrected by that error lies outside the mount's safety limits";
 		return -1;
 	}
 
-	// Gemini's own model does not survive the cold start; keep what is not
-	// an index term
 	rezeroModelTerms.clear ();
 	static const int terms[] = { 201, 202, 203, 204, 207, 208, 209, 211 };
 	for (int id : terms)
@@ -1582,9 +1790,10 @@ int GeminiUDP::startRezero (double raJ2000, double decJ2000, double exposureTime
 			rezeroModelTerms.push_back ({ id, v });
 	}
 
-	logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO: stopping, stepping the axes to counters RA=" << targetRa << " Dec=" << targetDec
+	rezeroSummary = summary;
+	logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO (" << summary << "): stopping, stepping the axes to counters RA=" << targetRa << " Dec=" << targetDec
 		<< " (true CWD), then cold-starting the mount there; " << rezeroModelTerms.size () << " Gemini model terms to restore" << sendLog;
-	appendIncidentLine (std::string ("re-zero started: ") + buf);
+	appendIncidentLine ("re-zero started: " + summary);
 
 	stopTracking ("re-zero");	// before the state changes - stopMove() aborts a running re-zero
 	caring->requestAbort ();
@@ -1606,6 +1815,11 @@ void GeminiUDP::setRezeroState (RezeroState newState)
 
 void GeminiUDP::abortRezero (const std::string &why)
 {
+	if (rezeroThenMove)
+	{
+		rezeroThenMove = false;
+		rezeroMoveFailed = true;
+	}
 	if (caring && rezeroState != REZERO_REBOOTING)
 		caring->requestAbort ();
 	setRezeroState (REZERO_IDLE);
@@ -1704,6 +1918,11 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 				if (elapsed > 300.0)
 				{
 					setRezeroState (REZERO_IDLE);
+					if (rezeroThenMove)
+					{
+						rezeroThenMove = false;
+						rezeroMoveFailed = true;
+					}
 					setPositionTrust (TRUST_LOST, "re-zero: the mount did not come back within 300 s of its cold start");
 				}
 				return;
@@ -1716,6 +1935,11 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 			caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
 			if (!atCwd)
 			{
+				if (rezeroThenMove)
+				{
+					rezeroThenMove = false;
+					rezeroMoveFailed = true;
+				}
 				setPositionTrust (TRUST_LOST, "re-zero: after the cold start the counters are not at CWD (RA=" + std::to_string (st.raAxisTicks)
 					+ " Dec=" + std::to_string (st.decAxisTicks) + ") - the boot menu was skipped?");
 				return;
@@ -1733,7 +1957,21 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 			}
 			appendIncidentLine ("re-zero finished: " + rezeroSummary);
 			setPositionTrust (TRUST_CONFIRMED, "re-zeroed from the sky: " + rezeroSummary);
-			logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO finished, the mount is at CWD and not tracking - re-issue the move" << sendLog;
+			clearSkyEvidence ("re-zero finished");
+			lastRezeroAt = getNow ();
+			if (rezeroThenMove)
+			{
+				rezeroThenMove = false;
+				struct ln_equ_posn pos;
+				getTarget (&pos);
+				logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO finished, continuing with the move it was run before" << sendLog;
+				if (!doGoto (pos.ra, pos.dec, "move after re-zero"))
+					rezeroMoveFailed = true;
+			}
+			else
+			{
+				logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO finished, the mount is at CWD and not tracking - re-issue the move" << sendLog;
+			}
 			return;
 		}
 
@@ -1975,7 +2213,7 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 		if (safetyLosesPosition)
 			setPositionTrust (TRUST_LOST, std::string ("safety incident (") + how + "): " + safetyReason);
 		logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - mount held locked (" << how << "). Look at " << incidentLogPath
-			<< ", then \"position ok\" if the position is fine, or \"position sky RA DEC\" / \"position cwd\" if it is not." << sendLog;
+			<< ", then \"position ok\" if the position is fine, or \"position cwd\" if it is not." << sendLog;
 	};
 
 	switch (safetyState)
@@ -2209,7 +2447,7 @@ int GeminiUDP::startResync ()
 	if (positionLost ())
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, the mount position is LOST (" << positionReasonValue->getValue ()
-			<< ") - \"position ok\", \"position unmoved\", \"position cwd\" or \"position sky RA DEC\" first" << sendLog;
+			<< ") - \"position ok\", \"position unmoved\" or \"position cwd\" first" << sendLog;
 		return -1;
 	}
 	if (rezeroState != REZERO_IDLE)
@@ -2217,6 +2455,41 @@ int GeminiUDP::startResync ()
 		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, a re-zero is in progress" << sendLog;
 		return -1;
 	}
+
+	// a move to a new target (not an offset or correction of the current
+	// one) is the natural break for an armed re-zero: nothing is exposing,
+	// and the telescope is leaving its field anyway
+	rts2core::Value *moveNumV = getOwnValue ("MOVE_NUM");
+	int currentMove = moveNumV ? moveNumV->getValueInteger () : -1;
+	bool newTarget = currentMove != lastResyncMoveNum;
+	lastResyncMoveNum = currentMove;
+	if (newTarget && rezeroArmed && rezeroAutoValue->getValueBool ())
+	{
+		double mRa = 0, mDec = 0;
+		size_t n = std::min (skyEvidence.size (), (size_t) std::max (1, rezeroSamplesValue->getValueInteger ()));
+		std::vector<double> ra, dec;
+		for (size_t i = skyEvidence.size () - n; i < skyEvidence.size (); i++)
+		{
+			ra.push_back (skyEvidence[i].raErrDeg);
+			dec.push_back (skyEvidence[i].decErrDeg);
+		}
+		std::sort (ra.begin (), ra.end ());
+		std::sort (dec.begin (), dec.end ());
+		mRa = ra[n / 2];
+		mDec = dec[n / 2];
+		char buf[160];
+		snprintf (buf, sizeof (buf), "automatic, %d targets agree: RA axis %+.3f, Dec axis %+.3f deg", (int) n, mRa, mDec);
+		std::string err;
+		if (beginRezero (mRa, mDec, buf, err) == 0)
+		{
+			rezeroThenMove = true;
+			rezeroMoveFailed = false;
+			return 0;	// the framework's move is under way; isMoving() covers the re-zero, then the goto
+		}
+		logStream (MESSAGE_ERROR) << "GeminiUDP: armed re-zero could not start (" << err << ") - moving without it" << sendLog;
+		clearSkyEvidence ("armed re-zero could not start");
+	}
+
 	struct ln_equ_posn pos;
 	getTarget (&pos);
 	return doGoto (pos.ra, pos.dec, "framework-requested move") ? 0 : -1;
@@ -2381,6 +2654,14 @@ int GeminiUDP::isMoving ()
 {
 	if (caring == nullptr)
 		return -2;
+	if (rezeroMoveFailed)
+	{
+		rezeroMoveFailed = false;
+		logStream (MESSAGE_ERROR) << "GeminiUDP: move failed - the re-zero run before it did not finish" << sendLog;
+		return -1;
+	}
+	if (rezeroThenMove)
+		return USEC_SEC;
 	GeminiStatus st = caring->getStatus ();
 	if (st.moveInProgress)
 		return USEC_SEC;
