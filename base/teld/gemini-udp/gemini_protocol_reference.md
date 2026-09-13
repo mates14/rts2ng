@@ -1084,7 +1084,7 @@ to factory defaults [GeminiL4UserManual §5.3.10.2.6, §3.3.3].
 §3.3.4]: an hour-angle (from CWD) past which any GoTo forces the OTA to the east side (flipping if
 needed), independent of whether the target is technically still inside the hard safety limit.
 Default is **0**, meaning "western safety limit − 2.5°" (guarantees ≥10 min tracking margin before
-the hard limit). Setting it to **90** = the meridian itself. Worked example: western safety limit
+the hard limit). (Firmware disagrees with the next sentence — see §8.7: 223 is an offset inside the western safety limit.) Setting it to **90** = the meridian itself. Worked example: western safety limit
 122° → any GoTo target up to 29.5° west of meridian (122 − 90 − 2.5) will *not* force a flip;
 beyond that, GoTo forces an eastward flip. This maps directly to native ids `223` (Western GoTo
 limit) and `227`/`228` (explicit Flip Points, L6+) in Part 4.
@@ -1524,3 +1524,34 @@ a real flip, a real park). Worth knowing if a future change ever reintroduces pe
 instead of batching — the `:ON` omission specifically has not caused an observed problem, but
 hasn't been stress-tested against it being *required* either (e.g. under packet loss/resync, where
 Gemini's own object-name/selection state might matter more than it has in these clean-network tests).
+
+### 8.7 Pier side decision — read from the firmware, not the manuals
+
+Established by decompiling the Gemini-2 main firmware (`HGM_Gem2.bin`); addresses, pseudocode and the
+derivation are in `~/tmp/gemini/FLIP_LOGIC.md`. Not yet checked against the mount, which is what the
+driver's `side_prediction_misses` counter is for. Where this disagrees with §6.2/§6.4 or Part 4, this wins
+for that firmware:
+
+- `:MS#` and `:MM#` run the same routine; `:MM#` only sets a "flip requested" flag first. `:Mf#` is `:MM#`
+  aimed at the current position.
+- The target is first placed on the side of the pier the **Dec axis** is on now (Dec ticks vs half a circle,
+  native 239/238). It stays there if its RA axis position fits strictly inside
+  `[CWD - west limit + 223, CWD + east limit]`, otherwise the other side is tried, otherwise the reply is `6`.
+  In hour angle, `:MS#` keeps the current side for targets between `-(E - 90°)` and `W - G - 90°`
+  (defaults: -24° .. +30.5°) — whichever side the mount happens to be on. `:MM#` tries the two sides in the
+  opposite order.
+- **Native 223 is an offset inside the western safety limit**, stored as ddd:mm × 60 arcseconds (firmware
+  `FUN_0000a3bc`). "90 = the meridian itself" (§6.2) is wrong: the western goto edge is at `W - G - 90°` from the
+  meridian, so the meridian needs `G = W - 90°`. `000d00` means no margin at all, not the 2.5° default.
+- The ENQ / `:Gm#` pier side is the **RA axis** relative to CWD, not the Dec side the decision uses. They
+  disagree whenever the telescope points more than 6h from the meridian; the reported side changes during
+  tracking past 6h without any flip.
+- The check uses the target at the moment the command arrives, including Gemini's pointing model offset
+  for it. Slew time and later tracking don't enter, except through the 223 margin.
+- Native 229 flip points, when enabled, can force a flip on top of this; "Disable Flip" in `Gemini.cfg`
+  restricts it to the first candidate. Both are outside what the driver predicts.
+- A cold start **and** a warm start both set RA axis = CWD, Dec axis = pole without looking (`FUN_0000bd78`);
+  only restart (`bR#`) keeps the stored position. `:hP#` parks at the home position set by `:hH#`/native 250
+  if one was ever set, otherwise at CWD; `:hC#` always parks at CWD.
+- The UDP handler (`FUN_00044150`) hands everything but ENQ (0x05) and NAK (0x15) to the same command parser
+  as the serial ports, with no startup gating — `0x06` and `bR#`/`bW#`/`bC#` work over UDP.

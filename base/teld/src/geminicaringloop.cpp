@@ -264,15 +264,132 @@ namespace
 		st.rawExtended = raw;
 		return true;
 	}
+
+	// "<a>;<b>" as native 231/235-239 reply it
+	bool parseTickPair (const std::string &s, int32_t &a, int32_t &b)
+	{
+		long la, lb;
+		if (sscanf (s.c_str (), "%ld;%ld", &la, &lb) != 2)
+			return false;
+		a = (int32_t) la;
+		b = (int32_t) lb;
+		return true;
+	}
+
+	// "<ddd>d<mm>" as native 221-223/227/228 reply it
+	bool parseDegMin (const std::string &s, double &deg)
+	{
+		int d, m;
+		if (sscanf (s.c_str (), "%d%*[dD:]%d", &d, &m) != 2)
+			return false;
+		deg = d + m / 60.0;
+		return true;
+	}
+}
+
+// See the header, and ~/tmp/gemini/FLIP_LOGIC.md for the firmware routine
+// this mirrors. The firmware computes the target's RA axis position as
+// (RA - reference) mod full circle, where the reference follows sidereal
+// time and jumps by 12h whenever the Dec axis crosses its half circle - so
+// relative to where the RA axis is now, a target dRA further east sits dRA
+// further along the axis, on the side the Dec axis is currently on.
+GeminiSidePrediction rts2teld::predictGotoSide (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, double curRaDeg, double targetRaDeg, bool preferOther)
+{
+	GeminiSidePrediction p;
+	if (!geo.valid)
+	{
+		p.reason = "mount geometry (native 238/231/223) not read";
+		return p;
+	}
+	if (std::isnan (curRaDeg) || std::isnan (targetRaDeg))
+	{
+		p.reason = "no current or target RA";
+		return p;
+	}
+
+	double full = 2.0 * geo.raHalf;
+	double dRa = ln_range_degrees (targetRaDeg - curRaDeg);
+	if (dRa > 180.0)
+		dRa -= 360.0;
+
+	double here = fmod (raTicks + dRa * geo.ticksPerDeg (), full);
+	if (here < 0)
+		here += full;
+	double there = here < geo.raHalf ? here + geo.raHalf : here - geo.raHalf;
+
+	auto marginDeg = [&geo] (double ticks)
+	{
+		double m = ticks - geo.windowLow ();
+		if (geo.windowHigh () - ticks < m)
+			m = geo.windowHigh () - ticks;
+		return m / geo.ticksPerDeg ();
+	};
+
+	p.sideBefore = decTicks >= geo.decHalf ? 'E' : 'W';
+	char otherSide = p.sideBefore == 'E' ? 'W' : 'E';
+
+	p.firstMarginDeg = marginDeg (preferOther ? there : here);
+	p.secondMarginDeg = marginDeg (preferOther ? here : there);
+	char firstSide = preferOther ? otherSide : p.sideBefore;
+	char secondSide = preferOther ? p.sideBefore : otherSide;
+
+	if (p.firstMarginDeg > 0)
+		p.sideAfter = firstSide;
+	else if (p.secondMarginDeg > 0)
+		p.sideAfter = secondSide;
+	else
+	{
+		p.outcome = GeminiSidePrediction::REFUSE;
+		p.sideAfter = p.sideBefore;
+		return p;
+	}
+	p.outcome = p.sideAfter == p.sideBefore ? GeminiSidePrediction::STAY : GeminiSidePrediction::FLIP;
+	return p;
+}
+
+bool GeminiSidePrediction::ambiguous (double threshold) const
+{
+	if (outcome == UNKNOWN)
+		return true;
+	if (fabs (firstMarginDeg) < threshold)
+		return true;
+	// the second candidate only matters when the first one is out
+	return firstMarginDeg <= 0 && fabs (secondMarginDeg) < threshold;
+}
+
+double GeminiSidePrediction::marginDeg () const
+{
+	return firstMarginDeg > 0 ? firstMarginDeg : secondMarginDeg;
+}
+
+std::string GeminiSidePrediction::describe () const
+{
+	char buf[160];
+	switch (outcome)
+	{
+		case STAY:
+			snprintf (buf, sizeof (buf), "STAY %c (window margins %.2f / %.2f deg)", sideAfter, firstMarginDeg, secondMarginDeg);
+			break;
+		case FLIP:
+			snprintf (buf, sizeof (buf), "FLIP %c->%c (window margins %.2f / %.2f deg)", sideBefore, sideAfter, firstMarginDeg, secondMarginDeg);
+			break;
+		case REFUSE:
+			snprintf (buf, sizeof (buf), "REFUSE, fits neither side (window margins %.2f / %.2f deg)", firstMarginDeg, secondMarginDeg);
+			break;
+		default:
+			return "UNKNOWN: " + reason;
+	}
+	return buf;
 }
 
 GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	hostname (_hostname), port (_port), sock (-1), stopFlag (false),
 	lastPollRa (NAN), lastPollDec (NAN), stableCount (0), moveStartedAt (0), moveDeadline (0),
 	activeMoveTargetRa (NAN), activeMoveTargetDec (NAN),
-	abortRequested (false), parkRequested (false), rebootRequested (false), rebootCold (false),
+	abortRequested (false), parkRequested (false), parkAtStartupPosition (false), rebootRequested (false), rebootCold (false),
 	startupMode ((int) STARTUP_RESTART), forceColdSelection (false), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
-	moveMinSeparation (NAN), wrongWayCount (0), moveStartPierSide ('?'), movePierChangedFlag (false),
+	flipAmbiguityMarginDeg (0.5),
+	moveMinSeparation (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
 	slowPollCounter (0), nextDatagramNumber (0)
 {
 }
@@ -332,8 +449,9 @@ void GeminiCaringLoop::requestAbort ()
 	abortRequested = true;
 }
 
-void GeminiCaringLoop::requestPark ()
+void GeminiCaringLoop::requestPark (bool atStartupPosition)
 {
+	parkAtStartupPosition = atStartupPosition;
 	// set parking=true HERE, synchronously, before returning - not in
 	// handlePark() on the caring thread. Otherwise there's a real race:
 	// isParking() reads the registry's default parking=false until the
@@ -365,6 +483,9 @@ void GeminiCaringLoop::requestReboot (bool cold)
 		status.valid = false;
 		status.moveInProgress = false;
 		status.parking = false;
+		// read again once it is back: a CMOS reset resets the limits too
+		status.geometry.valid = false;
+		status.axisValid = false;
 	}
 	rebootCold = cold;
 	if (cold)
@@ -403,20 +524,28 @@ void GeminiCaringLoop::queuePulseGuide (char direction, unsigned int magnitude)
 	rawCommandQueue.push_back (buf);
 }
 
-bool GeminiCaringLoop::gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec)
+bool GeminiCaringLoop::gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec, GotoSideMode sideMode, GeminiSidePrediction *prediction)
 {
 	std::unique_lock<std::mutex> lock (mutex_);
 	gotoTargetRa = raDeg;
 	gotoTargetDec = decDeg;
+	gotoSideMode = sideMode;
 	gotoDone = false;
+	gotoCancelled = false;
 	gotoRequested = true;
 
 	bool signaled = cv_.wait_for (lock, std::chrono::duration<double> (waitTimeoutSec), [this] { return gotoDone; });
 	if (!signaled)
 	{
+		// handleGoto() checks this right before the slew command goes out:
+		// a goto we have already reported as failed must not start moving
+		// the mount a moment later
+		gotoCancelled = true;
 		errorMessage = "timed out waiting for the caring loop to process the goto";
 		return false;
 	}
+	if (prediction)
+		*prediction = gotoPrediction;
 	errorMessage = gotoMessage;
 	return gotoAccepted;
 }
@@ -631,6 +760,13 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.limitEastRaw = from.limitEastRaw;
 	to.limitWestRaw = from.limitWestRaw;
 	to.limitWestGotoRaw = from.limitWestGotoRaw;
+
+	to.geometry = from.geometry;
+	to.axisValid = from.axisValid;
+	to.raAxisTicks = from.raAxisTicks;
+	to.decAxisTicks = from.decAxisTicks;
+	to.gotoSerial = from.gotoSerial;
+	to.lastPrediction = from.lastPrediction;
 }
 
 void GeminiCaringLoop::pollStatus ()
@@ -745,6 +881,102 @@ void GeminiCaringLoop::pollTrackingLimit ()
 	catch (const std::exception &)
 	{
 	}
+}
+
+// native register 239 - both axes in motor ticks. The Dec axis side is the
+// flip state the firmware's own goto decision works from, so a change of it
+// during a move is the direct evidence of a flip (the ENQ pier side is the
+// RA axis relative to CWD, which also changes without any flip when the
+// telescope tracks past 6h from the meridian).
+void GeminiCaringLoop::pollAxisPosition ()
+{
+	std::string value;
+	int32_t ra, dec;
+	if (!readNativeInternal (239, value) || !parseTickPair (value, ra, dec))
+		return;
+
+	std::lock_guard<std::mutex> lock (mutex_);
+	status.axisValid = true;
+	status.raAxisTicks = ra;
+	status.decAxisTicks = dec;
+
+	char side = status.decSide ();
+	if (status.moveInProgress && side != '?' && moveStartDecSide != '?' && side != moveStartDecSide)
+	{
+		movePierChangedFlag = true;
+		status.movePierChanged = true;
+	}
+}
+
+bool GeminiCaringLoop::readGeometryInternal ()
+{
+	GeminiAxisGeometry geo;
+	std::string value;
+
+	if (!readNativeInternal (238, value) || !parseTickPair (value, geo.raHalf, geo.decHalf))
+		return false;
+	if (!readNativeInternal (231, value) || !parseTickPair (value, geo.eastLimit, geo.westLimit))
+		return false;
+	// stored as arcseconds and subtracted from the western safety limit
+	// (firmware FUN_0000a3bc) - "000d00" really means none, not a default
+	if (!readNativeInternal (223, value) || !parseDegMin (value, geo.westGotoDeg))
+		return false;
+	if (readNativeInternal (229, value))
+	{
+		try
+		{
+			geo.flipPoints = std::stoi (value);
+		}
+		catch (const std::exception &)
+		{
+		}
+	}
+
+	// sanity: CWD must lie inside both safety limits, and the goto window
+	// must not be empty - anything else means a reply was misread
+	if (geo.raHalf <= 0 || geo.decHalf <= 0 || !(geo.westLimit < geo.raHalf && geo.raHalf < geo.eastLimit)
+		|| geo.windowLow () >= geo.windowHigh ())
+		return false;
+
+	geo.valid = true;
+	std::lock_guard<std::mutex> lock (mutex_);
+	status.geometry = geo;
+	return true;
+}
+
+GeminiSidePrediction GeminiCaringLoop::predictInternal (double targetRaDeg, bool preferOther)
+{
+	GeminiAxisGeometry geo;
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		geo = status.geometry;
+	}
+
+	GeminiSidePrediction p;
+	if (!geo.valid)
+	{
+		p.reason = "mount geometry (native 238/231/223) not read";
+		return p;
+	}
+
+	// fresh, back to back: the RA axis position and the RA the mount
+	// reports have to describe the same moment, which a snapshot up to a
+	// poll interval old does not guarantee while the mount is moving
+	std::string response, value;
+	GeminiStatus enq;
+	int32_t ra, dec;
+	if (!sendAndReceive (std::string (1, '\x05'), response, COMMAND_TIMEOUT_SEC, 2) || !parseEnq (response, enq))
+	{
+		p.reason = "fresh ENQ read failed";
+		return p;
+	}
+	if (!sendAndReceive (buildNativeGet (239), response, COMMAND_TIMEOUT_SEC, 2) || !parseNativeGetReply (response, value)
+		|| !parseTickPair (value, ra, dec))
+	{
+		p.reason = "fresh native 239 read failed";
+		return p;
+	}
+	return predictGotoSide (geo, ra, dec, enq.ra, targetRaDeg, preferOther);
 }
 
 // native register 130 - the mount's own idea of which tracking rate it is
@@ -866,6 +1098,10 @@ void GeminiCaringLoop::runPostStartupSequence ()
 		&& readNativeInternal (222, west)
 		&& readNativeInternal (223, westGoto);
 
+	// failure is not fatal here - the slow poll keeps retrying it, and
+	// until it lands gotos go out unpredicted, exactly as before it existed
+	readGeometryInternal ();
+
 	int rate = 0;
 	std::string rateStr;
 	if (readNativeInternal (130, rateStr))
@@ -935,20 +1171,36 @@ void GeminiCaringLoop::handleGoto ()
 {
 	double ra, dec;
 	bool started;
-	char pierSideNow, startupStateNow;
+	char pierSideNow, decSideNow, startupStateNow;
+	GotoSideMode sideMode;
 	{
 		std::lock_guard<std::mutex> lock (mutex_);
 		gotoRequested = false;
 		ra = gotoTargetRa;
 		dec = gotoTargetDec;
+		sideMode = gotoSideMode;
 		started = status.startupComplete;
 		pierSideNow = status.pierSide;
+		decSideNow = status.decSide ();
 		startupStateNow = status.startupState;
 	}
 
 	std::string sr, sd;
 	bool accepted = false;
 	std::string message;
+	GeminiSidePrediction prediction;
+	double ambiguityMargin = flipAmbiguityMarginDeg.load ();
+	const char *slewCommand = sideMode == GOTO_FLIP ? ":MM#" : ":MS#";
+
+	bool targetOk = formatTargetCommands (ra, dec, sr, sd);
+	if (started && targetOk)
+		prediction = predictInternal (ra, sideMode == GOTO_FLIP);
+
+	bool cancelled;
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		cancelled = gotoCancelled;
+	}
 
 	if (!started)
 	{
@@ -960,28 +1212,38 @@ void GeminiCaringLoop::handleGoto ()
 		message = "mount startup is not complete (handshake state '"
 			+ std::string (1, startupStateNow) + "') - not sending a slew to a mount that will ignore it";
 	}
-	else if (!formatTargetCommands (ra, dec, sr, sd))
+	else if (!targetOk)
 	{
 		message = "bad target RA/Dec";
+	}
+	else if (sideMode == GOTO_KEEP_SIDE && (prediction.outcome != GeminiSidePrediction::STAY || prediction.ambiguous (ambiguityMargin)))
+	{
+		message = "not sent: the caller needs the mount to stay on its pier side, predicted " + prediction.describe ();
+	}
+	else if (sideMode == GOTO_FLIP && (prediction.outcome != GeminiSidePrediction::FLIP || prediction.ambiguous (ambiguityMargin)))
+	{
+		message = "not sent: the caller needs a pier flip, predicted " + prediction.describe ();
+	}
+	else if (cancelled)
+	{
+		// the prediction reads above take real round trips, long enough
+		// for gotoRaDec() to have stopped waiting and reported a failure
+		message = "not sent: the requester already gave up waiting";
 	}
 	else
 	{
 		std::string response;
-		// :MS# - despite the official docs' :MM# entry describing itself
-		// as the one "doing a meridian flip if possible" (implying by
-		// contrast that :MS# doesn't), :MS#'s own verbatim doc text says
-		// nothing about flip behavior either way, and live-hardware
-		// evidence settles it: a real Dec 80->-10 walk at fixed RA, using
-		// :MS# exclusively, crossed a real pier-side flip (W->E) with zero
-		// rejections - see STATUS.md. We briefly tried :MM# instead
-		// (reasoning that it was the "correct" flip-capable command) and
-		// hit a real stuck-mount incident on the very first attempt; :MS#
-		// has substantial successful live mileage including a real flip
-		// and :MM# has exactly one data point and it went badly, so :MS#
-		// is the better-evidenced choice, not because :MM# is proven bad.
-		if (!sendAndReceive (sr + sd + ":MS#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
+		// Both slew commands run the same firmware routine and differ in
+		// one flag (FUN_00048ed0, see ~/tmp/gemini/FLIP_LOGIC.md): :MS#
+		// keeps the pier side the Dec axis is on whenever the target fits
+		// the RA window there, :MM# tries the other side first. :MS# is
+		// the default for every ordinary move - an :MM# for all moves flips
+		// on every goto that the other side can reach, which is how the
+		// one early experiment with it ended in a stuck mount. :MM# is used
+		// only through GOTO_FLIP, where a flip is the point.
+		if (!sendAndReceive (sr + sd + slewCommand, response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
 		{
-			message = "no response to goto command (:Sr/:Sd/:MS)";
+			message = std::string ("no response to goto command (:Sr/:Sd/") + slewCommand + ")";
 		}
 		else if (response.size () < 3 || response[0] != '1' || response[1] != '1')
 		{
@@ -1018,12 +1280,20 @@ void GeminiCaringLoop::handleGoto ()
 		moveMinSeparation = NAN;
 		wrongWayCount = 0;
 		moveStartPierSide = pierSideNow;
-		movePierChangedFlag = false;
+		moveStartDecSide = prediction.sideBefore != '?' ? prediction.sideBefore : decSideNow;
+		// a flip that is expected, or can't be ruled out, suspends the
+		// wrong-way check from the start rather than from the pole
+		// crossing - by then the distance to the target has long been
+		// growing. An UNKNOWN prediction keeps the after-the-fact
+		// detection only, as before predictions existed.
+		movePierChangedFlag = prediction.outcome == GeminiSidePrediction::FLIP
+			|| (prediction.outcome != GeminiSidePrediction::UNKNOWN && prediction.ambiguous (ambiguityMargin));
 	}
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	gotoAccepted = accepted;
 	gotoMessage = message;
+	gotoPrediction = prediction;
 	gotoDone = true;
 	if (accepted)
 	{
@@ -1031,8 +1301,10 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveFailed = false;
 		status.moveFailReason.clear ();
 		status.moveWrongWay = false;
-		status.movePierChanged = false;
+		status.movePierChanged = movePierChangedFlag;
 		status.moveSeparation = NAN;
+		status.gotoSerial++;
+		status.lastPrediction = prediction;
 	}
 	cv_.notify_all ();
 }
@@ -1051,7 +1323,7 @@ void GeminiCaringLoop::handlePark ()
 	// parking/parkFailed/parkStatus are already set by requestPark() -
 	// see its comment for why that has to happen there, not here
 	std::string response;
-	sendAndReceive (":hP#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+	sendAndReceive (parkAtStartupPosition.load () ? ":hC#" : ":hP#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	status.moveInProgress = false;	// matches gemini2ser.cpp's startPark() calling stopMove() first
@@ -1234,11 +1506,20 @@ void GeminiCaringLoop::threadMain ()
 			{
 				pollStatus ();
 				pollTrackingLimit ();
+				pollAxisPosition ();
 				if (++slowPollCounter >= SLOW_POLL_EVERY)
 				{
 					slowPollCounter = 0;
 					pollStartupState ();	// catches a mount that rebooted under us
 					pollTrackingRate ();
+
+					bool haveGeometry;
+					{
+						std::lock_guard<std::mutex> lock (mutex_);
+						haveGeometry = status.geometry.valid;
+					}
+					if (!haveGeometry)
+						readGeometryInternal ();
 				}
 			}
 		}

@@ -160,6 +160,22 @@ class GeminiUDP:public Telescope
 		rts2core::ValueString *limitWestRawValue;	// native 222 - western safety limit
 		rts2core::ValueString *limitWestGotoRawValue;	// native 223 - western goto limit
 
+		// ---- pier side prediction (see GeminiSidePrediction) ----
+		rts2core::ValueString *decSideValue;		// E/W from the Dec axis (native 239 vs 238) - the real flip state
+		rts2core::ValueString *sideWindowValue;		// the RA axis window gotos have to fit, from native 231/223
+		rts2core::ValueString *gotoPredictionValue;	// what the last goto was predicted to do with the pier side
+		rts2core::ValueDouble *flipAmbiguityMarginValue;
+		rts2core::ValueInteger *predictionMissesValue;
+		unsigned verifiedGotoSerial;
+		bool geometryLogged;
+
+		void checkSidePrediction (const GeminiStatus &st);
+
+		// set by runSafetyRecovery() ahead of Telescope::startPark() when a
+		// cold start is to follow, consumed by startPark(): park at CWD, not
+		// at the configured home position
+		bool parkAtStartupPositionNext;
+
 		// ---- startup handshake (see GeminiCaringLoop::pollStartupState) ----
 		// The mount's boot menu is the whole reason "the new driver reads
 		// status fine but ignores every command" was a thing: a Gemini that
@@ -248,9 +264,11 @@ class GeminiUDP:public Telescope
 
 		// ---- tracking-limit flip-or-park decision ----
 		// User-specified policy: if the current target is still reachable
-		// (above horizon) once the tracking limit is close, nudge it (a
-		// same-target re-goto, which :MS# will flip if needed - see
-		// STATUS.md for why :MS# alone, not :MM#); if it's set, park.
+		// (above horizon) once the tracking limit is close, flip to it (a
+		// same-target :MM#, sent only when predicted to flip - a same-target
+		// :MS# at 660s does nothing, the firmware keeps the side until the
+		// target is inside the 223 goto limit, ~600s for its default 2.5
+		// deg); if it's set, or the flip isn't predicted to work, park.
 		// Either way, this MUST NOT interrupt an in-progress exposure -
 		// block new exposures (BOP_EXPOSURE) the moment the decision is
 		// armed, then wait for BOP_TEL_MOVE to clear (no camera currently
@@ -306,7 +324,7 @@ class GeminiUDP:public Telescope
 
 		void runSelfTest ();
 		bool altitudeSafe (double raDeg, double decDeg, double marginDeg);
-		bool doGoto (double raDeg, double decDeg, const char *label);
+		bool doGoto (double raDeg, double decDeg, const char *label, GeminiCaringLoop::GotoSideMode sideMode = GeminiCaringLoop::GOTO_ANY_SIDE);
 
 		// ---- pier-side-aware pointing model correction ----
 		// naive (uncorrected) target of the move currently in flight, and
@@ -355,6 +373,17 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	createValue (limitEastRawValue, "limit_east_raw", "native 221 (eastern safety limit), raw unparsed - NOT currently enforced client-side, see STATUS.md", false);
 	createValue (limitWestRawValue, "limit_west_raw", "native 222 (western safety limit), raw unparsed - NOT currently enforced client-side, see STATUS.md", false);
 	createValue (limitWestGotoRawValue, "limit_west_goto_raw", "native 223 (western goto limit), raw unparsed - NOT currently enforced client-side, see STATUS.md", false);
+
+	createValue (decSideValue, "dec_side", "pier side from the Dec axis (native 239 vs half circle): E Dec >= half, W below - what Gemini's flip decision uses", false);
+	createValue (sideWindowValue, "side_window", "RA axis window a goto target must fit on the side it ends up on: west safety limit + 223 goto limit ... east safety limit, degrees from CWD", false);
+	createValue (gotoPredictionValue, "goto_prediction", "pier side outcome predicted for the last goto from Gemini's own decision rule", false);
+	createValue (flipAmbiguityMarginValue, "flip_ambiguity_margin", "[deg] side predictions closer than this to a window edge count as too close to call (Gemini's pointing model is not predicted)", false, RTS2_VALUE_WRITABLE);
+	flipAmbiguityMarginValue->setValueDouble (0.5);
+	createValue (predictionMissesValue, "side_prediction_misses", "gotos that ended on a different pier side than predicted", false);
+	predictionMissesValue->setValueInteger (0);
+	verifiedGotoSerial = 0;
+	geometryLogged = false;
+	parkAtStartupPositionNext = false;
 
 	createValue (startupModeValue, "startup_mode", "startup mode picked for the mount's own boot menu, and used by the reset command", false, RTS2_VALUE_WRITABLE);
 	startupModeValue->addSelVal ("RESTART");	// bR#
@@ -504,6 +533,7 @@ int GeminiUDP::initHardware ()
 	caring = new GeminiCaringLoop (host->getHostname (), host->getPort ());
 	caring->setStartupMode ((GeminiCaringLoop::StartupMode) startupModeValue->getValueInteger ());
 	caring->setWrongWayMargin (wrongWayMarginValue->getValueDouble ());
+	caring->setFlipAmbiguityMargin (flipAmbiguityMarginValue->getValueDouble ());
 	if (!caring->start ())
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: failed to open UDP socket to " << host->getHostname () << ":" << host->getPort () << sendLog;
@@ -570,6 +600,12 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 	{
 		if (caring)
 			caring->setWrongWayMargin (newValue->getValueDouble ());
+		return 0;
+	}
+	if (oldValue == flipAmbiguityMarginValue)
+	{
+		if (caring)
+			caring->setFlipAmbiguityMargin (newValue->getValueDouble ());
 		return 0;
 	}
 	if (oldValue == safetyLockedValue)
@@ -741,14 +777,18 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 	setTelRaDec (st.ra, st.dec);
 	// telFlip (MNT_FLIP) drives Telescope::infoUTCLST()'s rotang +180 deg
 	// adjustment and FITS headers - gemini2ser.cpp's getFlip() derives it
-	// from encoder ticks (native 235) vs. a per-mount decFlipLimit; we
-	// already have the mount's own W/E answer from the ENQ macro (:Gm#
-	// equivalent), which is more direct - 'E' -> flipped (1), matching
-	// that driver's "decTick >= decFlipLimit -> 1" convention (east side
-	// of pier = flipped orientation)
-	if (st.pierSide == 'E' || st.pierSide == 'W')
-		telFlip->setValueInteger (st.pierSide == 'E' ? 1 : 0);
+	// from Dec encoder ticks vs. a per-mount decFlipLimit, 'E'/Dec past
+	// half -> 1. Same here, with the half circle read from the mount
+	// (native 238/239). The ENQ pier side is only the fallback: it comes
+	// from the RA axis relative to CWD, and changes on its own, without any
+	// flip, when the telescope tracks through 6h from the meridian - which
+	// circumpolar targets do.
+	char flipSide = st.decSide () != '?' ? st.decSide () : st.pierSide;
+	if (flipSide == 'E' || flipSide == 'W')
+		telFlip->setValueInteger (flipSide == 'E' ? 1 : 0);
 	pierSideValue->setValueCharArr (std::string (1, st.pierSide).c_str ());
+	decSideValue->setValueCharArr (std::string (1, st.decSide ()).c_str ());
+	checkSidePrediction (st);
 	moveRateValue->setValueCharArr (std::string (1, st.moveRate).c_str ());
 	praRawValue->setValueLong (st.praRaw);
 	pdecRawValue->setValueLong (st.pdecRaw);
@@ -784,6 +824,61 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 		<< " HA=" << st.ha << " AZ=" << st.az << " ALT=" << st.alt << " LST=" << st.lst
 		<< " pier=" << st.pierSide << " rate=" << st.moveRate
 		<< " trackingSecToLimit=" << st.trackingSecToWestLimit << sendLog;
+}
+
+// Keeps the prediction honest: once a predicted goto has finished, compare
+// the Dec axis side the mount ended up on with the one predicted. A miss
+// means either Gemini's pointing model moved the target across a window
+// edge by more than flip_ambiguity_margin, or a setting the prediction does
+// not see (native 229 flip points, "Disable Flip" in Gemini.cfg, a mount
+// design other than 0) - either way something to look at, not to act on.
+void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
+{
+	if (st.geometry.valid && !geometryLogged)
+	{
+		geometryLogged = true;
+		const GeminiAxisGeometry &g = st.geometry;
+		std::ostringstream w;
+		w.precision (2);
+		w << std::fixed << "W " << (g.raHalf - g.windowLow ()) / g.ticksPerDeg () << " .. E " << (g.eastLimit - g.raHalf) / g.ticksPerDeg ();
+		sideWindowValue->setValueCharArr (w.str ().c_str ());
+		logStream (MESSAGE_INFO) << "GeminiUDP: goto side window from CWD " << w.str () << " deg (west safety limit "
+			<< (g.raHalf - g.westLimit) / g.ticksPerDeg () << " minus 223 goto limit " << g.westGotoDeg
+			<< "): :MS# keeps the side for targets between HA " << -((g.eastLimit - g.raHalf) / g.ticksPerDeg () - 90.0)
+			<< " and " << (g.raHalf - g.windowLow ()) / g.ticksPerDeg () - 90.0 << " deg" << sendLog;
+		if (g.flipPoints > 0)
+			logStream (MESSAGE_WARNING) << "GeminiUDP: meridian flip points are enabled (native 229 = " << g.flipPoints
+				<< ") - they can force flips the side prediction does not model; set 229 to 0 to rely on it" << sendLog;
+	}
+	else if (!st.geometry.valid)
+	{
+		geometryLogged = false;
+	}
+
+	if (st.gotoSerial == verifiedGotoSerial)
+		return;
+
+	gotoPredictionValue->setValueCharArr (st.lastPrediction.describe ().c_str ());
+
+	if (st.moveInProgress)
+		return;
+	verifiedGotoSerial = st.gotoSerial;
+
+	const GeminiSidePrediction &p = st.lastPrediction;
+	if (st.moveFailed || st.decSide () == '?' || (p.outcome != GeminiSidePrediction::STAY && p.outcome != GeminiSidePrediction::FLIP))
+		return;
+
+	if (st.decSide () == p.sideAfter)
+	{
+		logStream (MESSAGE_DEBUG) << "GeminiUDP: goto ended on pier side " << st.decSide () << " as predicted (" << p.describe () << ")" << sendLog;
+		return;
+	}
+
+	predictionMissesValue->inc ();
+	sendValueAll (predictionMissesValue);
+	logStream (MESSAGE_WARNING) << "GeminiUDP: goto ended on pier side " << st.decSide () << ", predicted " << p.describe ()
+		<< (p.ambiguous (flipAmbiguityMarginValue->getValueDouble ()) ? " - was within flip_ambiguity_margin" : " - NOT within flip_ambiguity_margin, the rule or its inputs are off")
+		<< " (axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << ")" << sendLog;
 }
 
 // Reflects the caring loop's startup handshake, and does the RTS2-thread
@@ -1079,7 +1174,12 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			if (elapsed < STOP_SETTLE_SEC)
 				return;
 
-			appendIncidentLine ("stop sent, requesting park");
+			appendIncidentLine (safetyWantsColdStart ? "stop sent, requesting park at CWD (:hC#)" : "stop sent, requesting park");
+			// A cold start sets both axes to CWD without looking (firmware
+			// FUN_0000bd78, also behind a warm start) - so when one is to
+			// follow, park AT CWD, not at the configured home position,
+			// which is CWD only until somebody sets another one.
+			parkAtStartupPositionNext = safetyWantsColdStart;
 			// Telescope::startPark(Connection*), not our own startPark()
 			// hook - the framework's entry point is what maintains
 			// TEL_PARKING/TEL_PARKED, and while TEL_PARKING is set it
@@ -1087,14 +1187,13 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			// no-argument startPark() override hides the base overload.
 			if (Telescope::startPark (nullptr) != 0)
 			{
-				logStream (MESSAGE_ERROR) << "GeminiUDP: SAFETY - could not start a park; going straight to " << (safetyWantsColdStart ? "the cold start" : "the safety lock") << sendLog;
-				appendIncidentLine ("park could NOT be started");
-				setSafetyState (safetyWantsColdStart ? SAFETY_COLDSTART : SAFETY_LOCKED);
-				if (safetyState == SAFETY_COLDSTART && caring)
-				{
-					safetyColdStartBaseline = st.startupCount;
-					caring->requestReboot (true);
-				}
+				parkAtStartupPositionNext = false;
+				// no cold start from here: the mount is not known to be at
+				// CWD, and a cold start would make wherever it is the new CWD
+				logStream (MESSAGE_ERROR) << "GeminiUDP: SAFETY - could not start a park; holding the mount locked"
+					<< (safetyWantsColdStart ? " without the cold start (it would take the current position for CWD)" : "") << sendLog;
+				appendIncidentLine ("park could NOT be started - locked, no cold start");
+				setSafetyState (SAFETY_LOCKED);
 				return;
 			}
 			setSafetyState (SAFETY_PARKING);
@@ -1116,6 +1215,16 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			{
 				logStream (MESSAGE_ERROR) << "GeminiUDP: SAFETY - park did not complete within " << PARK_TIMEOUT_SEC << "s" << sendLog;
 				appendIncidentLine ("park did NOT complete within the timeout");
+			}
+
+			// same reason as the failed park start above: only a mount
+			// that reached CWD may be cold-started
+			if (safetyWantsColdStart && !parked)
+			{
+				logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - not cold-starting a mount that did not reach CWD (it would take its current position for CWD); holding it locked" << sendLog;
+				appendIncidentLine ("cold start SKIPPED - park did not complete, locked");
+				setSafetyState (SAFETY_LOCKED);
+				return;
 			}
 
 			if (safetyWantsColdStart && caring)
@@ -1351,19 +1460,23 @@ int GeminiUDP::startResync ()
 	return doGoto (pos.ra, pos.dec, "framework-requested move") ? 0 : -1;
 }
 
-bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label)
+bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label, GeminiCaringLoop::GotoSideMode sideMode)
 {
 	if (caring == nullptr)
 		return false;
 
 	std::string err;
-	bool ok = caring->gotoRaDec (raDeg, decDeg, err, 3.0);
+	GeminiSidePrediction prediction;
+	bool ok = caring->gotoRaDec (raDeg, decDeg, err, 3.0, sideMode, &prediction);
 	if (!ok)
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: " << label << " refused: " << err << sendLog;
 		return false;
 	}
-	logStream (MESSAGE_INFO) << "GeminiUDP: " << label << " accepted, RA=" << raDeg << " Dec=" << decDeg << sendLog;
+	logStream (MESSAGE_INFO) << "GeminiUDP: " << label << " accepted, RA=" << raDeg << " Dec=" << decDeg
+		<< ", pier side " << prediction.describe ()
+		<< (prediction.outcome != GeminiSidePrediction::UNKNOWN && prediction.ambiguous (flipAmbiguityMarginValue->getValueDouble ()) ? " - too close to call" : "")
+		<< sendLog;
 
 	// arm the near-arrival model correction (checkMoveCorrection(), called
 	// from idle()) for this new move - see its doc comment
@@ -1432,8 +1545,12 @@ void GeminiUDP::computeModelCorrection (double raDeg, double decDeg, double lstD
 // Sends the model-corrected retarget once a move is close enough to its
 // naive destination that the pier side Gemini committed to is trustworthy
 // (see the computeModelCorrection() doc comment for why "close enough"
-// substitutes for "the flip has already happened, if any" - we don't have
-// a way to know that more directly). Relies on the mid-slew retarget
+// substitutes for "the flip has already happened, if any"). The retarget
+// is itself a goto, and Gemini decides the pier side again for it - with
+// the target now shifted by the correction and by however long the slew
+// took, so a first goto that just fit the window can be followed by a flip
+// on arrival. Hence GOTO_KEEP_SIDE: a retarget predicted to flip, or too
+// close to call, is not sent at all. Relies on the mid-slew retarget
 // behavior verified live against real hardware (see STATUS.md): sending a
 // new :Sr/:Sd/:MM# while already slewing makes Gemini smoothly redirect,
 // no need to wait for arrival or stop first. Reuses
@@ -1454,7 +1571,7 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 	moveCorrectionApplied = true;	// never retry, even if nothing to correct or the correction below fails
 
 	double corrRa, corrDec;
-	computeModelCorrection (pendingMoveNaiveRa, pendingMoveNaiveDec, st.lst, st.pierSide, corrRa, corrDec);
+	computeModelCorrection (pendingMoveNaiveRa, pendingMoveNaiveDec, st.lst, st.decSide () != '?' ? st.decSide () : st.pierSide, corrRa, corrDec);
 
 	// model is private on Telescope, not reachable from here - but
 	// computeModel() itself already no-ops to a zero correction when no
@@ -1467,8 +1584,8 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 		<< " -> corrected RA=" << corrRa << " Dec=" << corrDec << sendLog;
 
 	std::string err;
-	if (!caring->gotoRaDec (corrRa, corrDec, err, 3.0))
-		logStream (MESSAGE_ERROR) << "GeminiUDP: model-corrected retarget was refused: " << err << sendLog;
+	if (!caring->gotoRaDec (corrRa, corrDec, err, 3.0, GeminiCaringLoop::GOTO_KEEP_SIDE))
+		logStream (MESSAGE_WARNING) << "GeminiUDP: model-corrected retarget skipped, pointing stays uncorrected: " << err << sendLog;
 }
 
 int GeminiUDP::setTo (double set_ra, double set_dec)
@@ -1521,8 +1638,10 @@ int GeminiUDP::startPark ()
 		return -1;
 	// gemini2ser.cpp's startPark() calls stopMove() first - requestPark()
 	// does the equivalent (see GeminiCaringLoop::handlePark())
-	caring->requestPark ();
-	logStream (MESSAGE_INFO) << "GeminiUDP: park requested (:hP#)" << sendLog;
+	bool atStartupPosition = parkAtStartupPositionNext;
+	parkAtStartupPositionNext = false;
+	caring->requestPark (atStartupPosition);
+	logStream (MESSAGE_INFO) << "GeminiUDP: park requested (" << (atStartupPosition ? ":hC#, CWD" : ":hP#") << ")" << sendLog;
 	return 0;
 }
 
@@ -1572,7 +1691,7 @@ int GeminiUDP::endMove ()
 	{
 		limitActionInFlight = false;
 		clearExposure ();
-		logStream (MESSAGE_INFO) << "GeminiUDP: tracking-limit flip nudge finished, exposures unblocked" << sendLog;
+		logStream (MESSAGE_INFO) << "GeminiUDP: tracking-limit flip finished, exposures unblocked" << sendLog;
 	}
 	return ret;
 }
@@ -1594,7 +1713,7 @@ void GeminiUDP::armLimitAction ()
 
 	logStream (MESSAGE_WARNING) << "GeminiUDP: tracking limit approaching ("
 		<< trackingSecToLimitValue->getValueDouble () << "s left) - target RA=" << tar.ra << " Dec=" << tar.dec
-		<< (stillUp ? " still above horizon, will nudge for a flip" : " has set, will park")
+		<< (stillUp ? " still above horizon, will flip to it (:MM#)" : " has set, will park")
 		<< " as soon as no camera is mid-exposure" << sendLog;
 
 	blockExposure ();
@@ -1608,15 +1727,15 @@ void GeminiUDP::executeLimitAction (LimitAction action)
 	{
 		struct ln_equ_posn tar;
 		getTelTargetRaDec (&tar);
-		logStream (MESSAGE_INFO) << "GeminiUDP: tracking-limit flip nudge, re-sending RA=" << tar.ra << " Dec=" << tar.dec << sendLog;
+		logStream (MESSAGE_INFO) << "GeminiUDP: tracking-limit flip, re-sending RA=" << tar.ra << " Dec=" << tar.dec << " with :MM#" << sendLog;
 		limitActionInFlight = true;
-		if (doGoto (tar.ra, tar.dec, "tracking-limit flip nudge"))
+		if (doGoto (tar.ra, tar.dec, "tracking-limit flip", GeminiCaringLoop::GOTO_FLIP))
 		{
 			started = true;
 		}
 		else
 		{
-			logStream (MESSAGE_ERROR) << "GeminiUDP: flip nudge was refused, falling back to park" << sendLog;
+			logStream (MESSAGE_ERROR) << "GeminiUDP: tracking-limit flip was refused or not predicted to flip, falling back to park" << sendLog;
 			action = LIMIT_ACTION_PARK;
 		}
 	}

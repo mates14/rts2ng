@@ -65,6 +65,68 @@ namespace rts2teld
 {
 
 /**
+ * The mount geometry Gemini's own goto side decision works with, read once
+ * per startup. All ticks are RA/Dec motor encoder ticks as native 239
+ * reports them; see ~/tmp/gemini/FLIP_LOGIC.md (firmware HGM_Gem2.bin,
+ * FUN_00048ed0 and FUN_0000a3bc) for where every number here comes from.
+ */
+struct GeminiAxisGeometry
+{
+	bool valid = false;
+	int32_t raHalf = 0, decHalf = 0;	// native 238: half a circle, i.e. the CWD position of each axis
+	int32_t eastLimit = 0;			// native 231 first value: CWD + eastern safety limit
+	int32_t westLimit = 0;			// native 231 second value: CWD - western safety limit
+	double westGotoDeg = 0;			// native 223, degrees INSIDE the western safety limit (not from the meridian)
+	int flipPoints = -1;			// native 229: flip points in use, 0 none; -1 unread
+
+	double ticksPerDeg () const { return raHalf / 180.0; }
+	int32_t westGotoTicks () const { return (int32_t) (westGotoDeg * ticksPerDeg ()); }
+
+	// the RA axis window a goto target has to land strictly inside
+	int32_t windowLow () const { return westLimit + westGotoTicks (); }
+	int32_t windowHigh () const { return eastLimit; }
+};
+
+/**
+ * What Gemini's :MS# / :MM# will do with a target, worked out the same way
+ * the firmware does it (FUN_00048ed0): put the target on the side of the
+ * pier the Dec axis is on now, check its RA axis position against
+ * [westLimit + westGoto, eastLimit], and only if that fails try the other
+ * side - :MM# tries the two in the opposite order. Done relative to the
+ * current axis position, so the only thing not modelled is how much
+ * Gemini's own pointing model shifts the RA axis between here and the
+ * target: hence the margins, and GeminiUDP's flip_ambiguity_margin.
+ */
+struct GeminiSidePrediction
+{
+	enum Outcome { UNKNOWN, STAY, FLIP, REFUSE };
+	Outcome outcome = UNKNOWN;
+	char sideBefore = '?';		// Dec axis side, 'E' (Dec ticks >= half) or 'W'
+	char sideAfter = '?';
+
+	// RA axis distance of each candidate inside the window, in degrees,
+	// negative when outside - in the order the firmware tries them
+	double firstMarginDeg = NAN;
+	double secondMarginDeg = NAN;
+	std::string reason;		// why UNKNOWN
+
+	/** the margin of the candidate the mount ends up on */
+	double marginDeg () const;
+
+	/** could the pointing-model slack the prediction doesn't see change the answer? */
+	bool ambiguous (double threshold) const;
+
+	std::string describe () const;
+};
+
+/**
+ * @param raTicks, decTicks  current axis position, native 239
+ * @param curRaDeg           current RA the mount reports (ENQ), same frame as targetRaDeg
+ * @param preferOther        true for :MM# (other side first), false for :MS#
+ */
+GeminiSidePrediction predictGotoSide (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, double curRaDeg, double targetRaDeg, bool preferOther);
+
+/**
  * Plain-data snapshot of everything the caring loop knows about the mount.
  * Copied out under mutex_, then read freely - no locking needed once
  * copied. See base note above for why it has to stay plain data.
@@ -151,6 +213,23 @@ struct GeminiStatus
 	bool limitsValid = false;
 	std::string limitBothRaw, limitEastRaw, limitWestRaw, limitWestGotoRaw;
 
+	// native 238/231/223/229, read after startup and retried on the slow
+	// poll until they land - see GeminiAxisGeometry
+	GeminiAxisGeometry geometry;
+
+	// native 239, polled every cycle. The Dec axis side is the mount's real
+	// flip state: pierSide above comes from the RA axis (the ENQ macro and
+	// :Gm# say W when the RA axis is short of CWD), and the two disagree
+	// whenever the telescope points more than 6h from the meridian.
+	bool axisValid = false;
+	int32_t raAxisTicks = 0, decAxisTicks = 0;
+	char decSide () const { return !axisValid || !geometry.valid ? '?' : (decAxisTicks >= geometry.decHalf ? 'E' : 'W'); }
+
+	// the side prediction made for the last accepted goto, and its serial
+	// number so the RTS2 side can check it against where the mount ended up
+	unsigned gotoSerial = 0;
+	GeminiSidePrediction lastPrediction;
+
 	// ---- in-flight move sanity, see pollStatus() ----
 	double moveSeparation = NAN;	// angular distance from the current position to the active move's target
 
@@ -164,6 +243,10 @@ struct GeminiStatus
 	// pier side changed during the current move: a real meridian flip, in
 	// which the reported RA/Dec legitimately swings far away from both ends
 	// of the move. Suspends moveWrongWay detection for the rest of it.
+	// Also set up front when the goto was predicted to flip (or too close
+	// to call): the distance to the target grows long before either axis
+	// crosses its half circle, so noticing the flip after the fact is too
+	// late to keep the wrong-way check from firing on it.
 	bool movePierChanged = false;
 };
 
@@ -227,12 +310,29 @@ class GeminiCaringLoop
 		void setWrongWayMargin (double deg) { wrongWayMarginDeg = deg; }
 
 		/**
+		 * How a goto may treat the pier side. The prediction is made on the
+		 * caring thread from a fresh ENQ + native 239 read right before the
+		 * slew command goes out, so the refusals below act on the same data
+		 * the mount is about to decide with.
+		 */
+		enum GotoSideMode
+		{
+			GOTO_ANY_SIDE,		// :MS#, whatever Gemini decides
+			GOTO_KEEP_SIDE,		// :MS#, but not sent unless it is predicted to stay on this side with margin to spare
+			GOTO_FLIP		// :MM#, but not sent unless it is predicted to flip with margin to spare
+		};
+
+		/**
 		 * Send a goto and wait (bounded, real OS wait) for the mount to
 		 * accept or reject it - satisfies Telescope::startResync()'s
 		 * synchronous contract. See base note at top of file for why this
 		 * is safe where the previous design's fake-blocking wasn't.
 		 */
-		bool gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec = 3.0);
+		bool gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec = 3.0,
+			GotoSideMode sideMode = GOTO_ANY_SIDE, GeminiSidePrediction *prediction = nullptr);
+
+		/** degrees; below this a side prediction counts as too close to call - see GeminiSidePrediction::ambiguous() */
+		void setFlipAmbiguityMargin (double deg) { flipAmbiguityMarginDeg = deg; }
 
 		/** best-effort, asynchronous: caring loop sends :Q# at its next opportunity, ahead of routine polling */
 		void requestAbort ();
@@ -244,8 +344,14 @@ class GeminiCaringLoop
 		 * base/teld/gemini/gemini.cpp's startPark()/isParking() (this
 		 * exact command pair, ported from the live production driver at
 		 * ~/gemini2ser.cpp, not the classic tree copy).
+		 *
+		 * atStartupPosition sends :hC# instead: park at CWD. That is the
+		 * park to use ahead of a cold or warm start, both of which set the
+		 * axes to CWD without looking (firmware FUN_0000bd78) - :hP# goes to
+		 * the configured home position, which is CWD only until somebody
+		 * sets another one (:hH#, native 250).
 		 */
-		void requestPark ();
+		void requestPark (bool atStartupPosition = false);
 
 		/**
 		 * Fire-and-forget native Gemini command (checksummed >ID:VAL#
@@ -340,6 +446,13 @@ class GeminiCaringLoop
 		void pollTrackingLimit ();
 		void pollTrackingRate ();
 		void pollParkStatus ();
+		void pollAxisPosition ();
+
+		/** native 238/231/223/229 into status.geometry; false if any of the required ones failed */
+		bool readGeometryInternal ();
+
+		/** fresh ENQ + native 239, then predictGotoSide() - nothing is written to status */
+		GeminiSidePrediction predictInternal (double targetRaDeg, bool preferOther);
 
 		/**
 		 * Sends the 0x06 handshake, records where the mount is in its
@@ -405,6 +518,9 @@ class GeminiCaringLoop
 		// synchronous goto request/result, protected by mutex_
 		bool gotoRequested = false;
 		double gotoTargetRa = 0, gotoTargetDec = 0;
+		GotoSideMode gotoSideMode = GOTO_ANY_SIDE;
+		GeminiSidePrediction gotoPrediction;
+		bool gotoCancelled = false;	// the requester timed out waiting - see gotoRaDec()
 		bool gotoDone = false;
 		bool gotoAccepted = false;
 		std::string gotoMessage;
@@ -419,6 +535,7 @@ class GeminiCaringLoop
 
 		std::atomic<bool> abortRequested;
 		std::atomic<bool> parkRequested;
+		std::atomic<bool> parkAtStartupPosition;
 		std::atomic<bool> rebootRequested;
 		std::atomic<bool> rebootCold;
 		std::atomic<int> startupMode;
@@ -431,11 +548,13 @@ class GeminiCaringLoop
 		std::atomic<bool> forceColdSelection;
 		std::atomic<double> pollIntervalSec;
 		std::atomic<double> wrongWayMarginDeg;
+		std::atomic<double> flipAmbiguityMarginDeg;
 
 		// caring-thread-only, like the move-tracking members above
 		double moveMinSeparation;
 		int wrongWayCount;
 		char moveStartPierSide;
+		char moveStartDecSide;
 		bool movePierChangedFlag;
 		int slowPollCounter;
 
