@@ -250,6 +250,12 @@ struct GeminiStatus
 	// accepted goto. See GeminiUDP::isMoving().
 	bool moveAborted = false;
 
+	// how the last move ended, for the log: "arrived / stopped moving / timed
+	// out / stopped by :Q# after N s, X deg from target, mount rate 'R'" -
+	// and which goto (gotoSerial) it belongs to
+	std::string moveEndReason;
+	unsigned moveEndSerial = 0;
+
 	// set by requestPark(); cleared once :h?# reports '1' (done) or '0'
 	// (production driver's gemini2ser.cpp logs this as "isParking called
 	// without park command" - treated the same way here: parkFailed).
@@ -431,6 +437,16 @@ class GeminiCaringLoop
 
 		/** degrees; below this a side prediction counts as too close to call - see GeminiSidePrediction::ambiguous() */
 		void setFlipAmbiguityMargin (double deg) { flipAmbiguityMarginDeg = deg; }
+
+		/**
+		 * What to send ahead of every goto. On SBT two meridian flips sent
+		 * to a tracking mount moved the RA axis at ~21x sidereal for the
+		 * whole move, while gotos from a stopped mount slewed normally; the
+		 * production driver always stops first. Which of these the mount
+		 * actually needs is still to be established on the sky.
+		 */
+		enum GotoPrestop { PRESTOP_NONE = 0, PRESTOP_STOP = 1, PRESTOP_STOP_TRACKING = 2 };
+		void setGotoPrestop (GotoPrestop mode) { gotoPrestop = (int) mode; }
 
 		/** best-effort, asynchronous: caring loop sends :Q# at its next opportunity, ahead of routine polling */
 		void requestAbort ();
@@ -648,6 +664,7 @@ class GeminiCaringLoop
 		std::atomic<double> pollIntervalSec;
 		std::atomic<double> wrongWayMarginDeg;
 		std::atomic<double> flipAmbiguityMarginDeg;
+		std::atomic<int> gotoPrestop;
 
 		// caring-thread-only, like the move-tracking members above
 		double moveMinSeparation;

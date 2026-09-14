@@ -438,7 +438,7 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	activeMoveTargetRa (NAN), activeMoveTargetDec (NAN),
 	abortRequested (false), parkRequested (false), parkAtStartupPosition (false), rebootRequested (false), rebootCold (false),
 	startupMode ((int) STARTUP_NONE), forcedSelection ((int) STARTUP_NONE), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
-	flipAmbiguityMarginDeg (0.5),
+	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP),
 	moveMinSeparation (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
 	slowPollCounter (0), nextDatagramNumber (0)
 {
@@ -796,6 +796,9 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveFailed = from.moveFailed;
 	to.moveFailReason = from.moveFailReason;
 	to.moveWrongWay = from.moveWrongWay;
+	to.moveAborted = from.moveAborted;
+	to.moveEndReason = from.moveEndReason;
+	to.moveEndSerial = from.moveEndSerial;
 	to.movePierChanged = from.movePierChanged;
 
 	to.parking = from.parking;
@@ -919,6 +922,14 @@ void GeminiCaringLoop::pollStatus ()
 			double miss = std::isnan (fresh.moveSeparation) ? (dRa > dDec ? dRa : dDec) : fresh.moveSeparation;
 
 			fresh.moveInProgress = false;
+			{
+				char end[200];
+				snprintf (end, sizeof (end), "%s after %.0f s, %.3f deg from target (dRA=%.3f dDec=%.3f), mount rate '%c'",
+					miss < ARRIVAL_TOLERANCE_DEG ? "arrived" : (timedOut ? "timed out" : "stopped moving"),
+					fresh.timestamp - moveStartedAt, miss, dRa, dDec, fresh.moveRate);
+				fresh.moveEndReason = end;
+				fresh.moveEndSerial = status.gotoSerial;
+			}
 			if (miss < ARRIVAL_TOLERANCE_DEG)
 			{
 				fresh.moveFailed = false;
@@ -1390,6 +1401,22 @@ void GeminiCaringLoop::handleGoto ()
 		// on every goto that the other side can reach, which is how the
 		// one early experiment with it ended in a stuck mount. :MM# is used
 		// only through GOTO_FLIP, where a flip is the point.
+		// See GotoPrestop. The production driver (gemini2ser.cpp) always
+		// sends :Q# ahead of a goto; on SBT (2026-09-14) two meridian flips
+		// sent to a tracking mount without it ran the RA axis at ~21x
+		// sidereal for the whole move instead of slewing.
+		int prestop = gotoPrestop.load ();
+		if (prestop == PRESTOP_STOP_TRACKING)
+		{
+			std::string ignored;
+			sendAndReceive (buildNativeSet (135, "1"), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+		}
+		if (prestop != PRESTOP_NONE)
+		{
+			std::string ignored;
+			sendAndReceive (":Q#", ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+			std::this_thread::sleep_for (std::chrono::milliseconds (300));
+		}
 		if (!sendAndReceive (sr + sd + slewCommand, response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
 		{
 			message = std::string ("no response to goto command (:Sr/:Sd/") + slewCommand + ")";
@@ -1466,6 +1493,15 @@ void GeminiCaringLoop::handleAbort ()
 	sendAndReceive (":Q#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 
 	std::lock_guard<std::mutex> lock (mutex_);
+	if (status.moveInProgress)
+	{
+		status.moveAborted = true;
+		char end[160];
+		snprintf (end, sizeof (end), "stopped by :Q# after %.0f s, %.3f deg from target, mount rate '%c'",
+			nowSeconds () - moveStartedAt, status.moveSeparation, status.moveRate);
+		status.moveEndReason = end;
+		status.moveEndSerial = status.gotoSerial;
+	}
 	status.moveInProgress = false;
 }
 

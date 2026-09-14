@@ -166,6 +166,18 @@ At startup the driver logs what that means:
   framework's hard-horizon hook) now apply only while no move, park or re-zero of the driver's is in flight;
   a slew that stays wrong is caught by the wrong-way, arrival and timeout checks. The move timeout is 300 s,
   and a move is never declared stopped while the mount still reports slewing.
+- **The RA axis crawls on flips sent to a tracking mount.** In both flip tests (udp2, udp3) the RA axis
+  moved at a constant ~0.089°/s (about 21× sidereal, centering speed) for the whole move instead of slewing:
+  Dec reached its target, then the mount sat at rate `C` creeping west and was still 25° short after
+  2.5 minutes. Gotos started from the parked (not tracking) mount slewed normally. Gemini's goto code stops
+  an axis that has to reverse its current motion before slewing it, and a tracking RA axis reversing
+  direction is exactly the flip case — the leading suspect, not yet proven. The production driver
+  (`gemini2ser.cpp`) always sends `:Q#` before a goto. The new value `goto_prestop` selects what is sent ahead
+  of every goto: `NONE` (as in those tests), `STOP` (`:Q#`, like the production driver — the default) or
+  `STOP_TRACKING` (worm off, then `:Q#`). See dry-run step H.
+- **A stuck goto takes up to 5 minutes to be declared failed** (the move timeout, 300 s, sized for sequenced
+  flips). Every move now logs one line saying how it ended: "move ended: arrived / stopped moving / timed
+  out / stopped by :Q# after N s, X deg from target, mount rate 'R'".
 - **`/var/log/rts2` must exist and be writable** by the user running the driver (it was not; the incident
   report went only to the RTS2 log and the position state was not saved). Create it, or pass
   `--incident-log` and `--position-state`.
@@ -255,6 +267,7 @@ corrections are off by the same factor. Check which one `/etc/rts2/img_process` 
 | `mount_ready`, `startup_state`, `clock_matched` | no | handshake state |
 | `dec_side`, `pier_side`, `side_window`, `goto_prediction`, `side_prediction_misses` | no | section 4 |
 | `flip_ambiguity_margin` | yes | 0.5° |
+| `goto_prestop` | yes | NONE / STOP / STOP_TRACKING, sent ahead of every goto (section 4, SBT) |
 | `sky_evidence`, `rezero_armed`, `rezero_state` | no | section 5 |
 | `rezero_auto`, `rezero_min`, `rezero_max`, `rezero_samples`, `rezero_agree`, `rezero_spread`, `rezero_interval` | yes | section 5 |
 | `safety_enabled`, `safety_locked`, `safety_alt_limit`, `wrong_way_margin` | yes | as before |
@@ -327,6 +340,20 @@ This one deliberately corrupts the counters; do it last, and be ready to recover
    park refused.
 3. Recover: bring the telescope back to CWD with the hand controller, checking visually, then
    `position cwd`.
+
+### H. Why does the RA axis crawl on flips?
+
+Rebuild first and check `git log -1` on the machine running the driver: one earlier test ran a binary that
+predated the fixes it was meant to test.
+
+1. With the mount tracking a target on the W side, set `goto_prestop` to `NONE` and goto a target that
+   needs a flip (e.g. 60–90° west of the meridian). Note whether the RA axis slews or crawls at rate `C`
+   (RA changing ~0.09°/s in the polls). Stop it if it crawls.
+2. Repeat with `goto_prestop` = `STOP`, then with `STOP_TRACKING`.
+3. Separate "flip" from "RA axis reversing": from the same tracking W-side start, goto a target further
+   **east** on the same side (no flip, but the RA axis moves against its tracking direction), with
+   `NONE`. If that crawls too, the reversal is the cause, not the flip.
+4. For each: the "move ended" line and the RA values from the polls.
 
 ### G. Re-zero mechanics, without sky (optional)
 

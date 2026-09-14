@@ -281,8 +281,10 @@ class GeminiUDP:public Telescope
 		rts2core::ValueString *sideWindowValue;		// the RA axis window gotos have to fit, from native 231/223
 		rts2core::ValueString *gotoPredictionValue;	// what the last goto was predicted to do with the pier side
 		rts2core::ValueDouble *flipAmbiguityMarginValue;
+		rts2core::ValueSelection *gotoPrestopValue;
 		rts2core::ValueInteger *predictionMissesValue;
 		unsigned verifiedGotoSerial;
+		unsigned loggedMoveEndSerial;
 		bool geometryLogged;
 
 		void checkSidePrediction (const GeminiStatus &st);
@@ -492,9 +494,15 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	createValue (gotoPredictionValue, "goto_prediction", "pier side outcome predicted for the last goto from Gemini's own decision rule", false);
 	createValue (flipAmbiguityMarginValue, "flip_ambiguity_margin", "[deg] side predictions closer than this to a window edge count as too close to call (Gemini's pointing model is not predicted)", false, RTS2_VALUE_WRITABLE);
 	flipAmbiguityMarginValue->setValueDouble (0.5);
+	createValue (gotoPrestopValue, "goto_prestop", "sent ahead of every goto: NONE, STOP (:Q#, as gemini2ser.cpp), STOP_TRACKING (worm off, then :Q#)", false, RTS2_VALUE_WRITABLE);
+	gotoPrestopValue->addSelVal ("NONE");
+	gotoPrestopValue->addSelVal ("STOP");
+	gotoPrestopValue->addSelVal ("STOP_TRACKING");
+	gotoPrestopValue->setValueInteger (GeminiCaringLoop::PRESTOP_STOP);
 	createValue (predictionMissesValue, "side_prediction_misses", "gotos that ended on a different pier side than predicted", false);
 	predictionMissesValue->setValueInteger (0);
 	verifiedGotoSerial = 0;
+	loggedMoveEndSerial = 0;
 	geometryLogged = false;
 
 	createValue (startupModeValue, "startup_mode", "startup mode picked for the mount's own boot menu, and used by the reset command", false, RTS2_VALUE_WRITABLE);
@@ -704,6 +712,7 @@ int GeminiUDP::initHardware ()
 	caring->setStartupMode ((GeminiCaringLoop::StartupMode) startupModeValue->getValueInteger ());
 	caring->setWrongWayMargin (wrongWayMarginValue->getValueDouble ());
 	caring->setFlipAmbiguityMargin (flipAmbiguityMarginValue->getValueDouble ());
+	caring->setGotoPrestop ((GeminiCaringLoop::GotoPrestop) gotoPrestopValue->getValueInteger ());
 	if (!caring->start ())
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: failed to open UDP socket to " << host->getHostname () << ":" << host->getPort () << sendLog;
@@ -772,6 +781,12 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 	{
 		if (caring)
 			caring->setWrongWayMargin (newValue->getValueDouble ());
+		return 0;
+	}
+	if (oldValue == gotoPrestopValue)
+	{
+		if (caring)
+			caring->setGotoPrestop ((GeminiCaringLoop::GotoPrestop) newValue->getValueInteger ());
 		return 0;
 	}
 	if (oldValue == flipAmbiguityMarginValue)
@@ -1069,6 +1084,12 @@ void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
 		geometryLogged = false;
 	}
 
+	if (st.moveEndSerial != loggedMoveEndSerial && !st.moveEndReason.empty ())
+	{
+		loggedMoveEndSerial = st.moveEndSerial;
+		logStream (st.moveFailed || st.moveAborted ? MESSAGE_WARNING : MESSAGE_INFO) << "GeminiUDP: move ended: " << st.moveEndReason << sendLog;
+	}
+
 	if (st.gotoSerial == verifiedGotoSerial)
 		return;
 
@@ -1085,14 +1106,15 @@ void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
 	// Checked on failed moves too - a move that ended somewhere unexpected is
 	// exactly where a wrong prediction matters. It is not counted as a miss,
 	// though: a move stopped part way can legitimately sit on either side.
-	const char *failedNote = st.moveFailed ? " (the move was reported failed - it may have stopped part way)" : "";
+	const char *failedNote = st.moveAborted ? " (the move was stopped before arriving)"
+		: (st.moveFailed ? " (the move was reported failed - it may have stopped part way)" : "");
 	if (st.decSide () == p.sideAfter)
 	{
 		logStream (MESSAGE_INFO) << "GeminiUDP: goto ended on pier side " << st.decSide () << " as predicted (" << p.describe () << ")" << failedNote << sendLog;
 		return;
 	}
 
-	if (!st.moveFailed)
+	if (!st.moveFailed && !st.moveAborted)
 	{
 		predictionMissesValue->inc ();
 		sendValueAll (predictionMissesValue);
