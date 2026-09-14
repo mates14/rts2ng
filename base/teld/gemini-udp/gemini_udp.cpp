@@ -1110,8 +1110,9 @@ void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
 // running.
 void GeminiUDP::checkStartup (const GeminiStatus &st)
 {
-	char state[2] = { st.startupState, 0 };
-	startupStateValue->setValueCharArr (state);
+	// not "state": Daemon has a member of that name, and -Wshadow is on
+	char startupChar[2] = { st.startupState, 0 };
+	startupStateValue->setValueCharArr (startupChar);
 
 	bool wasReady = mountReadyValue->getValueBool ();
 	mountReadyValue->setValueBool (st.startupComplete);
@@ -2728,6 +2729,16 @@ int GeminiUDP::isMoving ()
 	if (st.moveFailed)
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: " << st.moveFailReason << sendLog;
+		return -1;
+	}
+	// An aborted move is not an arrival. -1 rather than -2 so the framework
+	// records a failed move instead of logging "moved to X requested Y" for
+	// a target the mount never reached and then tracking there. Not routed
+	// through the safety watchdog: stopping a slew is an operator action
+	// (or our own recovery), not the mount misbehaving.
+	if (st.moveAborted)
+	{
+		logStream (MESSAGE_WARNING) << "GeminiUDP: move was stopped before it reached its target - the mount is wherever it got to, not at the requested position" << sendLog;
 		return -1;
 	}
 	return -2;

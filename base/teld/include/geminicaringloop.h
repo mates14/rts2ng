@@ -241,6 +241,15 @@ struct GeminiStatus
 	bool moveFailed = false;
 	std::string moveFailReason;
 
+	// Set when a move in progress is cut short by :Q# - an operator
+	// pressing stop, or a safety recovery. Distinct from moveFailed on
+	// purpose: an aborted move is NOT an arrival (the framework must not
+	// log it as one, nor resume tracking on a target the mount never
+	// reached), but it is also not evidence of a misbehaving mount, so it
+	// deliberately does not feed the safety watchdog. Cleared by the next
+	// accepted goto. See GeminiUDP::isMoving().
+	bool moveAborted = false;
+
 	// set by requestPark(); cleared once :h?# reports '1' (done) or '0'
 	// (production driver's gemini2ser.cpp logs this as "isParking called
 	// without park command" - treated the same way here: parkFailed).

@@ -1450,6 +1450,7 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveFailed = false;
 		status.moveFailReason.clear ();
 		status.moveWrongWay = false;
+		status.moveAborted = false;
 		status.movePierChanged = movePierChangedFlag;
 		status.moveSeparation = NAN;
 		status.parkStatus = '0';	// the firmware clears its park status on every goto
