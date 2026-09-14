@@ -257,6 +257,11 @@ Everything except the astrometric evidence can be checked with the dome closed. 
 the telescope, keep a hand on the hand controller's stop, and watch `position_trust`, `position_reason`,
 `dec_side`, `pier_side` and `goto_prediction` in `rts2-mon`. Tail the driver log and the incident log.
 
+Run the driver with `--debug` and keep its output (e.g. `rts2-teld-gemini-udp … --debug 2>&1 | tee teld-udp.log`),
+and bring the log back with the notes: every goto's prediction ("pier side STAY/FLIP … window margins") and its
+check ("goto ended on pier side … as predicted", or a warning when not) are what tell whether the firmware
+rule holds on this mount.
+
 ### A. Driver restart does not touch the mount
 
 1. Mount up and parked. Restart `rts2-teld-gemini-udp`.

@@ -855,7 +855,12 @@ void GeminiCaringLoop::pollStatus ()
 		// the counterweight going over), so as soon as the pier side
 		// changes mid-move this check stands down for the rest of it
 		// rather than reporting the flip itself as a fault.
-		if (fresh.pierSide != '?' && moveStartPierSide != '?' && fresh.pierSide != moveStartPierSide)
+		// Only as a fallback when the Dec axis side is unknown: the ENQ pier
+		// side is the RA axis relative to CWD, which changes without any flip
+		// - out of the park position at the pole, every goto flips it - and
+		// would switch the wrong-way check off for the whole move. With the
+		// axes read, pollAxisPosition() watches the real flip state.
+		if (status.decSide () == '?' && fresh.pierSide != '?' && moveStartPierSide != '?' && fresh.pierSide != moveStartPierSide)
 			movePierChangedFlag = true;
 		fresh.movePierChanged = movePierChangedFlag;
 

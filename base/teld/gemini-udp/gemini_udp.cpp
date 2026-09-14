@@ -1071,20 +1071,27 @@ void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
 	verifiedGotoSerial = st.gotoSerial;
 
 	const GeminiSidePrediction &p = st.lastPrediction;
-	if (st.moveFailed || st.decSide () == '?' || (p.outcome != GeminiSidePrediction::STAY && p.outcome != GeminiSidePrediction::FLIP))
+	if (st.decSide () == '?' || (p.outcome != GeminiSidePrediction::STAY && p.outcome != GeminiSidePrediction::FLIP))
 		return;
 
+	// Checked on failed moves too - a move that ended somewhere unexpected is
+	// exactly where a wrong prediction matters. It is not counted as a miss,
+	// though: a move stopped part way can legitimately sit on either side.
+	const char *failedNote = st.moveFailed ? " (the move was reported failed - it may have stopped part way)" : "";
 	if (st.decSide () == p.sideAfter)
 	{
-		logStream (MESSAGE_DEBUG) << "GeminiUDP: goto ended on pier side " << st.decSide () << " as predicted (" << p.describe () << ")" << sendLog;
+		logStream (MESSAGE_INFO) << "GeminiUDP: goto ended on pier side " << st.decSide () << " as predicted (" << p.describe () << ")" << failedNote << sendLog;
 		return;
 	}
 
-	predictionMissesValue->inc ();
-	sendValueAll (predictionMissesValue);
+	if (!st.moveFailed)
+	{
+		predictionMissesValue->inc ();
+		sendValueAll (predictionMissesValue);
+	}
 	logStream (MESSAGE_WARNING) << "GeminiUDP: goto ended on pier side " << st.decSide () << ", predicted " << p.describe ()
 		<< (p.ambiguous (flipAmbiguityMarginValue->getValueDouble ()) ? " - was within flip_ambiguity_margin" : " - NOT within flip_ambiguity_margin, the rule or its inputs are off")
-		<< " (axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << ")" << sendLog;
+		<< " (axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << ")" << failedNote << sendLog;
 }
 
 // Reflects the caring loop's startup handshake, and does the RTS2-thread
