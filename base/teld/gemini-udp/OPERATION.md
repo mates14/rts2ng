@@ -131,8 +131,10 @@ What the driver does with it:
 - **Checks itself.** After each move the driver compares the side the mount ended on with the prediction.
   Mismatches count in `side_prediction_misses` and are logged. A mismatch *outside* the ambiguity margin
   means the rule or its inputs are wrong — please report those.
-- **The tracking-limit flip** (at 660 s before the western limit) is an `:MM#`, sent only if it is
-  predicted to flip; otherwise the mount parks. The old same-target `:MS#` never flipped at that point.
+- **The tracking-limit flip** is an `:MM#` to the same target. It is sent at most 660 s before the western
+  limit, and **not before it is predicted to flip**: the other side of the pier accepts the target only once
+  it is east of `−(E − 90°)`, and the tracking side stops at `W − 90°`. If the limits leave no such moment,
+  the mount parks instead. The old same-target `:MS#` never flipped at that point.
 - **The near-arrival model retarget** is skipped if it would flip the mount (logged as a warning), instead
   of flipping on arrival.
 - **Wrong-way safety check:** during a predicted flip it is suspended from the start of the move.
@@ -142,6 +144,23 @@ What the driver does with it:
   enabled in the mount (native 229 ≠ 0) the driver warns: they can force flips it does not predict.
 
 Values: `dec_side`, `side_window`, `goto_prediction`, `flip_ambiguity_margin`, `side_prediction_misses`.
+
+### The SBT mount as configured (seen 2026-09-14)
+
+221 east = 91°, 222 west = 91°, 223 goto limit = 7°, 229 flip points = 2 (western flip point enabled).
+At startup the driver logs what that means:
+
+- **E side** (tube east, looking west) accepts gotos to HA > −1°.
+- **W side** accepts gotos to HA < −6°; tracking stops at HA +1°.
+- **Dead zone:** targets between HA −6° and −1° (about 20 minutes of sky just east of the meridian) are
+  refused from **both** sides — Gemini answers `6`. This is the mount's configuration, not a driver fault.
+  Reducing 223 below 2°, or widening a safety limit if the mechanics allow it, would close it.
+- **A W-side target crossing the meridian** can be flipped only in the last 2° (about 8 minutes) before the
+  tracking stop; the driver flips at HA −0.5°, about 6 minutes before it. An exposure still running then
+  blocks the flip until it ends, and the mount may reach the limit and stop tracking in the meantime; the flip
+  follows once the exposure ends.
+- **Flip points:** 229 = 2 enables Gemini's western flip point, which can force flips the prediction does not
+  model. Either set 229 to 0, or treat `side_prediction_misses` on the W side with that in mind.
 
 ---
 
@@ -247,14 +266,17 @@ the telescope, keep a hand on the hand controller's stop, and watch `position_tr
 
 ### B. Geometry and the flip rule
 
-1. After startup the log shows the goto window ("goto side window from CWD W … E … deg … :MS# keeps the
-   side for targets between HA … and …"). *Expect* the limits you know the mount has.
+1. After startup the log shows the goto windows ("goto windows (hour angle, deg): E side of the pier accepts
+   HA > …, W side HA < …", then either the range where `:MS#` keeps the side or a dead-zone warning, and when
+   a tracking-limit flip is possible). *Expect* the limits you know the mount has (for SBT, section 4).
 2. `dec_side` should match where the tube physically is, and `pier_side` should agree with it for
    ordinary targets.
-3. Take the two HA limits from that log line (defaults −24° and +30.5°). From the **E** side (tube east,
-   looking west), goto a target ~5° inside the eastern limit: *expect* `goto_prediction` STAY, no flip.
-   Then ~5° beyond it: *expect* FLIP.
-4. From the **W** side, the same around the western limit: STAY inside, FLIP beyond.
+3. Take the HA limits from those log lines. From the **E** side (tube east, looking west), goto a target
+   a few degrees inside the E-side limit: *expect* `goto_prediction` STAY, no flip. Then a few degrees beyond
+   it, outside any dead zone: *expect* FLIP.
+4. From the **W** side, the same around the W-side limit: STAY inside, FLIP beyond.
+4a. If there is a dead zone (SBT: HA −6° … −1°), goto a target inside it: *expect* REFUSE predicted and
+   Gemini's refusal (`6`).
 5. After each: the log says "ended on pier side … as predicted"; `side_prediction_misses` stays 0.
    Note any "too close to call" cases and what the mount actually did.
 

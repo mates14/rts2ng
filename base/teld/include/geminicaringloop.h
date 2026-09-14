@@ -150,6 +150,26 @@ struct GeminiSidePrediction
 GeminiSidePrediction predictGotoSide (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, double curRaDeg, double targetRaDeg, bool preferOther);
 
 /**
+ * Tracking towards the western safety limit (native 226 counting down): is
+ * this the moment for the flip (an :MM# to the same target), too early, or
+ * will a flip never work before the mount stops at the limit?
+ *
+ * The other side of the pier only accepts the target once it has moved east
+ * of CWD + east limit - 90 deg in hour angle; the tracking side stops at CWD -
+ * west limit + 90 deg. Whether those overlap, and by how much, is the mount's
+ * configuration: with SBT's 91/91 deg limits there are only 2 deg (8 min)
+ * between them, so a fixed "flip at 660 s" lands before the flip is possible.
+ *
+ * @return FLIP when secToLimit < earliestSec and an :MM# is predicted to flip
+ *         with marginDeg to spare; PARK when the limits leave no such moment
+ *         (or it has not come by the last 30 s); WAIT otherwise
+ */
+enum GeminiLimitDecision { LIMIT_WAIT, LIMIT_FLIP, LIMIT_PARK };
+
+GeminiLimitDecision decideTrackingLimit (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, double curRaDeg,
+	double secToLimit, double marginDeg, double earliestSec = 660.0);
+
+/**
  * Where Gemini's axis counters should read, at the telescope's current
  * physical position, for it to be pointing at (mountRaDeg, mountDecDeg) - a
  * mount-frame coordinate, i.e. what a goto to the true sky position would

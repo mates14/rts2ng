@@ -348,6 +348,28 @@ GeminiSidePrediction rts2teld::predictGotoSide (const GeminiAxisGeometry &geo, i
 	return p;
 }
 
+GeminiLimitDecision rts2teld::decideTrackingLimit (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, double curRaDeg,
+	double secToLimit, double marginDeg, double earliestSec)
+{
+	if (std::isnan (secToLimit) || secToLimit >= earliestSec)
+		return LIMIT_WAIT;
+	if (!geo.valid)
+		return LIMIT_FLIP;	// no geometry: try the guarded :MM#, which falls back to a park
+
+	// the other side's goto window and the tracking side's hard limit
+	// overlap by (east + west - 180) deg of hour angle
+	double overlapDeg = (geo.eastLimit - geo.westLimit) / geo.ticksPerDeg () - 180.0;
+	if (overlapDeg <= marginDeg)
+		return LIMIT_PARK;
+
+	GeminiSidePrediction p = predictGotoSide (geo, raTicks, decTicks, curRaDeg, curRaDeg, true);
+	if (p.outcome == GeminiSidePrediction::FLIP && !p.ambiguous (marginDeg))
+		return LIMIT_FLIP;
+	if (secToLimit < 30.0)
+		return LIMIT_PARK;
+	return LIMIT_WAIT;
+}
+
 GeminiCounterError rts2teld::computeCounterError (const GeminiAxisGeometry &geo, int32_t raTicks, int32_t decTicks, char decSide,
 	double lstDeg, double mountRaDeg, double mountDecDeg)
 {

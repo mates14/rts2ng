@@ -389,7 +389,8 @@ class GeminiUDP:public Telescope
 		enum LimitAction { LIMIT_ACTION_NONE, LIMIT_ACTION_FLIP, LIMIT_ACTION_PARK } pendingLimitAction;
 		bool limitActionInFlight;	// true from the moment the goto/park actually starts until endMove()/endPark() sees it through - keeps the exposure block up for the whole move, not just until it's accepted
 
-		void armLimitAction ();
+		void armLimitAction (LimitAction wanted);
+		bool trackingLimitWaitLogged;
 		void executeLimitAction (LimitAction action);
 
 		// writable mount parameters, native-command backed - see
@@ -592,6 +593,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	wrongWayReported = false;
 	createValue (trackingSecToLimitValue, "tracking_sec_to_limit", "native 226: seconds of tracking left before Gemini's own firmware hits the western limit and stops - triggers armLimitAction() below 660s", false);
 	trackingLimitWarned = false;
+	trackingLimitWaitLogged = false;
 	pendingLimitAction = LIMIT_ACTION_NONE;
 	limitActionInFlight = false;
 
@@ -973,23 +975,38 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 	trackingSecToLimitValue->setValueDouble (st.trackingSecToWestLimit);
 	trackingRateValue->setValueInteger (st.trackingRate);
 
-	// same 660s (11 min) proactive threshold as gemini2ser.cpp's info().
-	// Hysteresis (only re-arms above 900s) so this doesn't re-trigger
-	// once a second while sitting under the threshold - armLimitAction()
-	// itself only ever fires once per approach (pendingLimitAction /
-	// limitActionInFlight guard against re-arming mid-flight too).
+	// The tracking-limit flip: at most 660 s (11 min, gemini2ser.cpp's
+	// threshold) before the western limit, and not before an :MM# to the
+	// same target is predicted to flip - on a mount whose limits leave only
+	// a few minutes in which the other side accepts the target, 660 s is too
+	// early and the flip would be refused. See decideTrackingLimit().
+	// Hysteresis (only re-arms above 900 s) keeps it to one decision per
+	// approach; pendingLimitAction / limitActionInFlight guard against
+	// re-arming mid-flight.
 	if (!std::isnan (st.trackingSecToWestLimit))
 	{
-		if (st.trackingSecToWestLimit < 660.0 && !trackingLimitWarned
-			&& pendingLimitAction == LIMIT_ACTION_NONE && !limitActionInFlight
-			&& isTracking () && (getState () & TEL_MASK_MOVING) != TEL_MOVING)
+		if (!trackingLimitWarned && pendingLimitAction == LIMIT_ACTION_NONE && !limitActionInFlight
+			&& isTracking () && (getState () & TEL_MASK_MOVING) != TEL_MOVING && !positionLost () && rezeroState == REZERO_IDLE)
 		{
-			trackingLimitWarned = true;
-			armLimitAction ();
+			GeminiLimitDecision decision = decideTrackingLimit (st.geometry, st.raAxisTicks, st.decAxisTicks, st.ra,
+				st.trackingSecToWestLimit, flipAmbiguityMarginValue->getValueDouble ());
+			if (decision != LIMIT_WAIT)
+			{
+				trackingLimitWarned = true;
+				trackingLimitWaitLogged = false;
+				armLimitAction (decision == LIMIT_FLIP ? LIMIT_ACTION_FLIP : LIMIT_ACTION_PARK);
+			}
+			else if (st.trackingSecToWestLimit < 660.0 && !trackingLimitWaitLogged)
+			{
+				trackingLimitWaitLogged = true;
+				logStream (MESSAGE_INFO) << "GeminiUDP: tracking limit " << st.trackingSecToWestLimit
+					<< " s away, but the other side of the pier does not accept the target yet - flipping once it does" << sendLog;
+			}
 		}
 		else if (st.trackingSecToWestLimit > 900.0)
 		{
 			trackingLimitWarned = false;
+			trackingLimitWaitLogged = false;
 		}
 	}
 
@@ -1013,14 +1030,28 @@ void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
 	{
 		geometryLogged = true;
 		const GeminiAxisGeometry &g = st.geometry;
+		double k = g.ticksPerDeg ();
+		double eastReach = -((g.eastLimit - g.raHalf) / k - 90.0);	// E side accepts gotos east of meridian down to this HA
+		double westGoto = (g.raHalf - g.windowLow ()) / k - 90.0;	// W side accepts gotos up to this HA
+		double westStop = (g.raHalf - g.westLimit) / k - 90.0;		// W side tracking stops here
 		std::ostringstream w;
 		w.precision (2);
-		w << std::fixed << "W " << (g.raHalf - g.windowLow ()) / g.ticksPerDeg () << " .. E " << (g.eastLimit - g.raHalf) / g.ticksPerDeg ();
+		w << std::fixed << "E side HA > " << eastReach << ", W side HA < " << westGoto << " (tracking to " << westStop << ")";
 		sideWindowValue->setValueCharArr (w.str ().c_str ());
-		logStream (MESSAGE_INFO) << "GeminiUDP: goto side window from CWD " << w.str () << " deg (west safety limit "
-			<< (g.raHalf - g.westLimit) / g.ticksPerDeg () << " minus 223 goto limit " << g.westGotoDeg
-			<< "): :MS# keeps the side for targets between HA " << -((g.eastLimit - g.raHalf) / g.ticksPerDeg () - 90.0)
-			<< " and " << (g.raHalf - g.windowLow ()) / g.ticksPerDeg () - 90.0 << " deg" << sendLog;
+		logStream (MESSAGE_INFO) << "GeminiUDP: goto windows (hour angle, deg): E side of the pier accepts HA > " << eastReach
+			<< ", W side HA < " << westGoto << " (west safety limit " << (g.raHalf - g.westLimit) / k << " minus 223 goto limit "
+			<< g.westGotoDeg << "), W side tracking stops at HA " << westStop << "; east safety limit " << (g.eastLimit - g.raHalf) / k << sendLog;
+		if (westGoto > eastReach)
+			logStream (MESSAGE_INFO) << "GeminiUDP: :MS# keeps whichever pier side the mount is on for targets between HA "
+				<< eastReach << " and " << westGoto << sendLog;
+		else
+			logStream (MESSAGE_WARNING) << "GeminiUDP: the limits leave a dead zone: gotos to HA between " << westGoto << " and " << eastReach
+				<< " are refused from both sides of the pier" << sendLog;
+		if (westStop - eastReach > flipAmbiguityMarginValue->getValueDouble ())
+			logStream (MESSAGE_INFO) << "GeminiUDP: a tracking-limit flip is possible from HA " << eastReach << " until the stop at "
+				<< westStop << " (" << (westStop - eastReach) * 239.345 << " s)" << sendLog;
+		else
+			logStream (MESSAGE_WARNING) << "GeminiUDP: the limits leave no time for a tracking-limit flip - targets reaching the western limit get parked" << sendLog;
 		if (g.flipPoints > 0)
 			logStream (MESSAGE_WARNING) << "GeminiUDP: meridian flip points are enabled (native 229 = " << g.flipPoints
 				<< ") - they can force flips the side prediction does not model; set 229 to 0 to rely on it" << sendLog;
@@ -2763,17 +2794,18 @@ int GeminiUDP::endMove ()
 // keeps the "is the target still up" check anchored to the moment the
 // warning fired, matching this driver's usual "check once, act once"
 // discipline rather than re-evaluating repeatedly while waiting.
-void GeminiUDP::armLimitAction ()
+void GeminiUDP::armLimitAction (LimitAction wanted)
 {
 	struct ln_equ_posn tar;
 	getTelTargetRaDec (&tar);
 
 	bool stillUp = altitudeSafe (tar.ra, tar.dec, 20.0);
-	pendingLimitAction = stillUp ? LIMIT_ACTION_FLIP : LIMIT_ACTION_PARK;
+	pendingLimitAction = stillUp && wanted == LIMIT_ACTION_FLIP ? LIMIT_ACTION_FLIP : LIMIT_ACTION_PARK;
 
 	logStream (MESSAGE_WARNING) << "GeminiUDP: tracking limit approaching ("
 		<< trackingSecToLimitValue->getValueDouble () << "s left) - target RA=" << tar.ra << " Dec=" << tar.dec
-		<< (stillUp ? " still above horizon, will flip to it (:MM#)" : " has set, will park")
+		<< (pendingLimitAction == LIMIT_ACTION_FLIP ? " still above horizon, will flip to it (:MM#)"
+			: (stillUp ? " - the mount's limits leave no moment the other side accepts it, will park" : " has set, will park"))
 		<< " as soon as no camera is mid-exposure" << sendLog;
 
 	blockExposure ();
