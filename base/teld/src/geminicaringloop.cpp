@@ -853,7 +853,7 @@ void GeminiCaringLoop::pollStatus ()
 		}
 
 		if (!std::isnan (lastPollRa) &&
-			fabs (ln_range_degrees (fresh.ra - lastPollRa)) < MOVE_STABLE_DEG &&
+			raDistanceDeg (fresh.ra, lastPollRa) < MOVE_STABLE_DEG &&
 			fabs (fresh.dec - lastPollDec) < MOVE_STABLE_DEG)
 			stableCount++;
 		else
@@ -871,11 +871,21 @@ void GeminiCaringLoop::pollStatus ()
 		// reported as a successful move because nothing checked).
 		if (stoppedChanging || timedOut)
 		{
-			double dRa = fabs (ln_range_degrees (fresh.ra - activeMoveTargetRa));
+			// Judge arrival on the true angular distance to the target,
+			// not on per-axis differences. Two reasons, both of them real
+			// on this mount: RA differences do not mean what they look
+			// like near the pole (the park position is AT the pole, where
+			// any RA whatsoever is the same point on the sky), and a
+			// per-axis RA test has to get the 0/360 wrap right, which is
+			// exactly what went wrong before - see raDistanceDeg()'s
+			// comment. moveSeparation is already computed above, from
+			// this same snapshot, by the wrong-way check.
+			double dRa = raDistanceDeg (fresh.ra, activeMoveTargetRa);
 			double dDec = fabs (fresh.dec - activeMoveTargetDec);
+			double miss = std::isnan (fresh.moveSeparation) ? (dRa > dDec ? dRa : dDec) : fresh.moveSeparation;
 
 			fresh.moveInProgress = false;
-			if (dRa < ARRIVAL_TOLERANCE_DEG && dDec < ARRIVAL_TOLERANCE_DEG)
+			if (miss < ARRIVAL_TOLERANCE_DEG)
 			{
 				fresh.moveFailed = false;
 			}
@@ -884,7 +894,7 @@ void GeminiCaringLoop::pollStatus ()
 				fresh.moveFailed = true;
 				char buf[256];
 				snprintf (buf, sizeof (buf), "%s %.3f deg from target (dRA=%.3f dDec=%.3f) - possible mount-side limit, obstruction, or another client sending conflicting commands",
-					timedOut ? "move timed out" : "move stopped", dRa > dDec ? dRa : dDec, dRa, dDec);
+					timedOut ? "move timed out" : "move stopped", miss, dRa, dDec);
 				fresh.moveFailReason = buf;
 			}
 		}

@@ -65,6 +65,29 @@ namespace rts2teld
 {
 
 /**
+ * Shortest angular distance between two right ascensions, in degrees,
+ * always 0..180. NaN in, NaN out.
+ *
+ * Exists because `fabs (ln_range_degrees (a - b))` reads as if it did this
+ * and does not: ln_range_degrees() normalizes into 0..360, so two RAs a
+ * hair apart come back as ~0 or ~360 depending purely on which way round
+ * the subtraction went, and fabs() cannot undo it. That mistake was in
+ * four places here and it cost a real incident on the mount at SBT
+ * (2026-09-14): a slew that arrived dead on target - true angular
+ * separation 2e-5 deg - was reported as "move stopped 360.000 deg from
+ * target", which parked the mount and marked its position LOST. Use this,
+ * or compare true angular separations; never fabs() a wrapped difference.
+ */
+inline double raDistanceDeg (double ra1, double ra2)
+{
+	double d = fmod (ra1 - ra2, 360.0);
+	if (d < 0)
+		d += 360.0;
+	return d > 180.0 ? 360.0 - d : d;
+}
+
+
+/**
  * The mount geometry Gemini's own goto side decision works with, read once
  * per startup. All ticks are RA/Dec motor encoder ticks as native 239
  * reports them; see ~/tmp/gemini/FLIP_LOGIC.md (firmware HGM_Gem2.bin,

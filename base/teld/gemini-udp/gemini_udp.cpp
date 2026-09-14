@@ -2603,7 +2603,7 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 	if (!st.valid || !st.moveInProgress || moveCorrectionApplied || caring == nullptr)
 		return;
 
-	double dRa = fabs (ln_range_degrees (st.ra - pendingMoveNaiveRa));
+	double dRa = raDistanceDeg (st.ra, pendingMoveNaiveRa);
 	double dDec = fabs (st.dec - pendingMoveNaiveDec);
 	if (dRa > 1.0 || dDec > 1.0)
 		return;
@@ -2617,7 +2617,7 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 	// computeModel() itself already no-ops to a zero correction when no
 	// model is loaded, so check the result instead of the pointer: skip a
 	// pointless identical retarget rather than guess at "is one loaded".
-	if (fabs (ln_range_degrees (corrRa - pendingMoveNaiveRa)) < (1.0 / 3600.0) && fabs (corrDec - pendingMoveNaiveDec) < (1.0 / 3600.0))
+	if (raDistanceDeg (corrRa, pendingMoveNaiveRa) < (1.0 / 3600.0) && fabs (corrDec - pendingMoveNaiveDec) < (1.0 / 3600.0))
 		return;
 
 	logStream (MESSAGE_INFO) << "GeminiUDP: near arrival (dRA=" << dRa << " dDec=" << dDec << "), applying model correction: naive RA=" << pendingMoveNaiveRa << " Dec=" << pendingMoveNaiveDec
@@ -2907,7 +2907,7 @@ void GeminiUDP::runSelfTest ()
 
 		case TEST_CONFIRM_ARRIVAL:
 		{
-			double dRa = fabs (ln_range_degrees (getTelRa () - testTargetRa));
+			double dRa = raDistanceDeg (getTelRa (), testTargetRa);
 			double dDec = fabs (getTelDec () - testTargetDec);
 			logStream (MESSAGE_INFO) << "GeminiUDP self-test: arrival error dRA=" << dRa << " dDec=" << dDec << " deg" << sendLog;
 
@@ -2949,7 +2949,7 @@ void GeminiUDP::runSelfTest ()
 
 		case TEST_CONFIRM_RETURN:
 		{
-			double dRa = fabs (ln_range_degrees (getTelRa () - testStartRa));
+			double dRa = raDistanceDeg (getTelRa (), testStartRa);
 			double dDec = fabs (getTelDec () - testStartDec);
 			logStream (MESSAGE_INFO) << "GeminiUDP self-test: return error dRA=" << dRa << " dDec=" << dDec << " deg" << sendLog;
 			stopTracking (nullptr);

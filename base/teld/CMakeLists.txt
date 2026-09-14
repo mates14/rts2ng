@@ -22,6 +22,8 @@ find_package(Threads REQUIRED)
 
 target_link_libraries(base_teld PUBLIC base_kernel Threads::Threads)
 
+add_subdirectory(tests)
+
 add_subdirectory(dummy)
 add_subdirectory(d50)
 add_subdirectory(gemini)
