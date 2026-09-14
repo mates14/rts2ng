@@ -251,6 +251,11 @@ struct GeminiStatus
 	// accepted goto. See GeminiUDP::isMoving().
 	bool moveAborted = false;
 
+	// the driver, not an operator, decided this move failed to execute (RA
+	// axis crawl, stall, arrival miss) while the axis counters stayed sound -
+	// the case GeminiUDP retries from CWD. An operator stop does NOT set it.
+	bool moveExecutionFault = false;
+
 	// how the last move ended, for the log: "arrived / stopped moving / timed
 	// out / stopped by :Q# after N s, X deg from target, mount rate 'R'" -
 	// and which goto (gotoSerial) it belongs to

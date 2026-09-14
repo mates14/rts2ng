@@ -292,6 +292,32 @@ class GeminiUDP:public Telescope
 
 		void checkSidePrediction (const GeminiStatus &st);
 
+		// ---- move recovery (execution failures) ----
+		// When the mount fails to *execute* a move - the RA axis crawls, an
+		// axis stalls, it ends nowhere near the target - but its counters are
+		// still sound, the driver recovers on its own: stop, park to CWD (the
+		// division of the two sky halves, the pose parks reach reliably and
+		// the best place to start any move from), and re-send the target,
+		// through goto_prestop so the worm is off first. Up to move_retries
+		// times per target; then it leaves the mount parked at CWD and fails
+		// the move to the framework (no lock, no lost position - the counters
+		// are fine, the scheduler simply moves on). Position-integrity faults
+		// (a cold start behind our back, the boot menu) are NOT this: they
+		// keep going through setPositionTrust(LOST). All of it is invisible to
+		// the framework, which sees one move that stays in flight until it
+		// arrives or the retries run out (isMoving()).
+		enum MoveRecoveryState { RECOVER_IDLE, RECOVER_STOPPING, RECOVER_PARKING };
+		MoveRecoveryState recoverState;
+		double recoverSince;
+		double recoverTargetRa, recoverTargetDec;
+		int moveRetries;			// used so far for the framework's current target
+		bool recoverGiveUp;			// budget spent - isMoving() fails the move once
+		rts2core::ValueString *moveRecoveryValue;
+		rts2core::ValueInteger *moveRetriesValue;
+
+		bool tryStartMoveRecovery (const std::string &reason);
+		void runMoveRecovery (const GeminiStatus &st);
+
 		// ---- startup handshake (see GeminiCaringLoop::pollStartupState) ----
 		// The mount's boot menu is the whole reason "the new driver reads
 		// status fine but ignores every command" was a thing: a Gemini that
@@ -568,6 +594,16 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	lastMotionAt = 0;
 	pendingHumanStartup = 0;
 	lostOnlyForBootMenu = false;
+
+	recoverState = RECOVER_IDLE;
+	recoverSince = 0;
+	recoverTargetRa = recoverTargetDec = NAN;
+	recoverGiveUp = false;
+	createValue (moveRecoveryValue, "move_recovery", "auto-recovery of a move the mount failed to execute: IDLE, STOPPING, PARKING", false);
+	moveRecoveryValue->setValueCharArr ("IDLE");
+	createValue (moveRetriesValue, "move_retries", "how many times a move the mount fails to execute is retried from CWD before the mount is left parked for a look", false, RTS2_VALUE_WRITABLE);
+	moveRetriesValue->setValueInteger (3);
+	moveRetries = 0;
 
 	rezeroState = REZERO_IDLE;
 	rezeroSince = 0;
@@ -2123,6 +2159,14 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 		return;
 	lastSafetyPollTimestamp = st.timestamp;
 
+	// a move recovery owns the mount (it is deliberately parking to CWD) -
+	// leave every check to it, and start from clean counts afterwards
+	if (recoverState != RECOVER_IDLE)
+	{
+		unexpectedMoveCount = belowHorizonCount = 0;
+		return;
+	}
+
 	rts2_status_t moving = getState () & TEL_MASK_MOVING;
 	bool weCommandedMovement = (moving == TEL_MOVING || moving == TEL_PARKING) || st.moveInProgress || rezeroState != REZERO_IDLE;
 
@@ -2203,8 +2247,14 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 		std::ostringstream detail;
 		detail << "mount reports alt=" << st.alt << " az=" << st.az << " deg, below the " << safetyAltLimitValue->getValueDouble ()
 			<< " deg safety limit, for " << belowHorizonCount << " consecutive polls";
-		bool active = weCommandedMovement || isTracking () || st.moveRate != 'N';
 		belowHorizonCount = 0;
+		// low while a move of ours is in flight is a move that failed to
+		// execute (a flip whose RA axis did not slew, so one axis alone drove
+		// the tube down), not a controller we distrust: recover it from CWD,
+		// don't lock the mount. The counters are still sound.
+		if ((moving == TEL_MOVING || st.moveInProgress) && !positionLost () && tryStartMoveRecovery ("pointed below the horizon during a move (" + detail.str () + ")"))
+			return;
+		bool active = weCommandedMovement || isTracking () || st.moveRate != 'N';
 		// A mount that is simply sitting somewhere low is a bad position,
 		// not evidence of a controller fault: park it and leave its
 		// alignment alone. One that got there while moving or tracking is
@@ -2564,8 +2614,93 @@ bool GeminiUDP::altitudeSafe (double raDeg, double decDeg, double marginDeg)
 	return hrz.alt > marginDeg;
 }
 
+// Starts a recovery if this failure is worth one: the position is trusted, a
+// re-zero is not already running, and the retry budget is not spent. Captures
+// the framework's target to re-send after the CWD park.
+bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
+{
+	if (caring == nullptr || positionLost () || rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE)
+		return false;
+	if (moveRetries >= moveRetriesValue->getValueInteger ())
+	{
+		logStream (MESSAGE_CRITICAL) << "GeminiUDP: move failed to execute (" << reason << ") - retry budget of "
+			<< moveRetriesValue->getValueInteger () << " spent; leaving the mount to park at CWD" << sendLog;
+		return false;
+	}
+
+	struct ln_equ_posn tar;
+	getTarget (&tar);
+	recoverTargetRa = tar.ra;
+	recoverTargetDec = tar.dec;
+	moveRetries++;
+	logStream (MESSAGE_WARNING) << "GeminiUDP: move failed to execute (" << reason << ") - recovery " << moveRetries
+		<< " of " << moveRetriesValue->getValueInteger () << ": stop, park to CWD, then retry RA=" << tar.ra << " Dec=" << tar.dec << sendLog;
+	appendIncidentLine ("move execution failure, recovery " + std::to_string (moveRetries) + ": " + reason);
+
+	caring->requestAbort ();
+	recoverState = RECOVER_STOPPING;
+	recoverSince = getNow ();
+	moveRecoveryValue->setValueCharArr ("STOPPING");
+	sendValueAll (moveRecoveryValue);
+	return true;
+}
+
+// One step per idle() tick. Uses the caring-loop park (:hC#) directly, not
+// the framework's park hook, so the framework's move state is untouched and
+// the whole stop/park/retry looks like one continuous move to it.
+void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
+{
+	constexpr double STOP_SETTLE_SEC = 2.5;
+	constexpr double PARK_TIMEOUT_SEC = 180.0;
+
+	auto giveUp = [this] (const char *why)
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: move recovery gave up (" << why << ") - mount left parked at CWD, position still trusted" << sendLog;
+		appendIncidentLine (std::string ("move recovery gave up: ") + why);
+		recoverState = RECOVER_IDLE;
+		recoverGiveUp = true;
+		moveRecoveryValue->setValueCharArr ("IDLE");
+		sendValueAll (moveRecoveryValue);
+	};
+
+	switch (recoverState)
+	{
+		case RECOVER_IDLE:
+			return;
+		case RECOVER_STOPPING:
+			if (getNow () - recoverSince < STOP_SETTLE_SEC)
+				return;
+			caring->requestPark (true);	// :hC#, park at CWD
+			recoverState = RECOVER_PARKING;
+			recoverSince = getNow ();
+			moveRecoveryValue->setValueCharArr ("PARKING");
+			sendValueAll (moveRecoveryValue);
+			return;
+		case RECOVER_PARKING:
+			if (st.parkFailed)
+			{
+				giveUp ("the CWD park failed");
+				return;
+			}
+			if (!st.parking && st.parkStatus == '1')	// parked at CWD
+			{
+				recoverState = RECOVER_IDLE;
+				moveRecoveryValue->setValueCharArr ("IDLE");
+				sendValueAll (moveRecoveryValue);
+				logStream (MESSAGE_INFO) << "GeminiUDP: move recovery parked at CWD, re-sending the target" << sendLog;
+				if (!doGoto (recoverTargetRa, recoverTargetDec, "move recovery: retry from CWD"))
+					giveUp ("the retry goto was refused");
+				return;
+			}
+			if (getNow () - recoverSince > PARK_TIMEOUT_SEC)
+				giveUp ("the CWD park did not complete in time");
+			return;
+	}
+}
+
 int GeminiUDP::startResync ()
 {
+	moveRetries = 0;	// a fresh framework target starts with a full retry budget
 	if (positionLost ())
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, the mount position is LOST (" << positionReasonValue->getValue ()
@@ -2784,25 +2919,35 @@ int GeminiUDP::isMoving ()
 	}
 	if (rezeroThenMove)
 		return USEC_SEC;
+	// a recovery in flight keeps the framework's move "in progress" - it sees
+	// one move that ends when the retry arrives or the budget runs out
+	if (recoverState != RECOVER_IDLE)
+		return USEC_SEC;
+	if (recoverGiveUp)
+	{
+		recoverGiveUp = false;
+		logStream (MESSAGE_ERROR) << "GeminiUDP: move failed after " << moveRetries << " recovery attempts - the mount is parked at CWD, its position still trusted; the next move will try again from there" << sendLog;
+		return -1;
+	}
 	GeminiStatus st = caring->getStatus ();
 	if (st.moveInProgress)
 		return USEC_SEC;
+	if (!st.moveFailed && !st.moveAborted)
+	{
+		moveRetries = 0;	// a clean arrival ends the retry budget for this target
+		return -2;
+	}
+	// The mount failed to execute the move but its counters are sound (the RA
+	// axis crawled, an axis stalled, it stopped short): stop, park CWD, retry.
+	// An operator's stop sets moveAborted without moveExecutionFault and is
+	// never retried.
+	if (st.moveExecutionFault && tryStartMoveRecovery (st.moveEndReason.empty () ? st.moveFailReason : st.moveEndReason))
+		return USEC_SEC;
 	if (st.moveFailed)
-	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: " << st.moveFailReason << sendLog;
-		return -1;
-	}
-	// An aborted move is not an arrival. -1 rather than -2 so the framework
-	// records a failed move instead of logging "moved to X requested Y" for
-	// a target the mount never reached and then tracking there. Not routed
-	// through the safety watchdog: stopping a slew is an operator action
-	// (or our own recovery), not the mount misbehaving.
-	if (st.moveAborted)
-	{
+	else
 		logStream (MESSAGE_WARNING) << "GeminiUDP: move was stopped before it reached its target - the mount is wherever it got to, not at the requested position" << sendLog;
-		return -1;
-	}
-	return -2;
+	return -1;
 }
 
 int GeminiUDP::stopMove ()
@@ -3111,6 +3256,7 @@ int GeminiUDP::idle ()
 		applyStatus (st);
 		checkPositionEvidence (st);
 		runRezero (st);
+		runMoveRecovery (st);
 		checkMoveCorrection (st);
 		// after applyStatus(), which is where an incident gets opened -
 		// so the first step of a recovery runs on the same tick that

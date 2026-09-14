@@ -104,6 +104,24 @@ knows where the telescope is, and a cold start would make wherever it is the new
 doubt on the counters, including a park that did not complete, also make the position `LOST`.
 `position ok` releases the lock once you have looked (`safety_locked` can still be cleared as before).
 
+### Move execution failures recover themselves
+
+The failures above (crawl, stall, a move ending short) are the mount failing to *do* a move while its
+counters stay sound — distinct from the mount losing track of *where* it is. The driver treats them
+differently: it does **not** call a human and does **not** lose trust. It stops, parks to CWD (`:hC#` — the
+division of the two sky halves, the pose parks reach reliably, and the best place to start any move from),
+and re-sends the target, up to `move_retries` times (default 3). All of it is invisible to the framework,
+which sees one move that stays in flight until it arrives or the retries run out (`move_recovery` shows
+IDLE / STOPPING / PARKING). If the budget is spent, the mount is left parked at CWD with its position still
+trusted and the move fails — the scheduler simply moves on and its next target tries again from CWD. A cold
+start behind the driver's back, or the boot menu, is *not* this: those still go to LOST and wait for a human,
+because parking "to CWD" would drive somewhere wrong when the counters can't be believed.
+
+Every goto — and every park — now stops the worm and waits for the RA axis to come to rest before it moves
+(`goto_prestop`, default STOP_TRACKING), because a move whose RA axis has to run against a turning worm is
+exactly what crawls. So on a healthy mount the recovery should rarely fire; it is the safety net for when the
+worm-off measure is not enough.
+
 ---
 
 ## 4. Meridian flips: the driver now knows in advance
@@ -280,6 +298,7 @@ corrections are off by the same factor. Check which one `/etc/rts2/img_process` 
 | `flip_ambiguity_margin` | yes | 0.5° |
 | `goto_prestop` | yes | NONE / STOP / STOP_TRACKING, sent ahead of every goto (section 4, SBT) |
 | `sky_evidence`, `rezero_armed`, `rezero_state` | no | section 5 |
+| `move_recovery`, `move_retries` | (retries writable) | move execution-failure recovery (section 3) |
 | `rezero_auto`, `rezero_min`, `rezero_max`, `rezero_samples`, `rezero_agree`, `rezero_spread`, `rezero_interval` | yes | section 5 |
 | `safety_enabled`, `safety_locked`, `safety_alt_limit`, `wrong_way_margin` | yes | as before |
 

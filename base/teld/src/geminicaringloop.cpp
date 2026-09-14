@@ -810,6 +810,7 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveFailReason = from.moveFailReason;
 	to.moveWrongWay = from.moveWrongWay;
 	to.moveAborted = from.moveAborted;
+	to.moveExecutionFault = from.moveExecutionFault;
 	to.lastMoveSeparation = from.lastMoveSeparation;
 	to.moveEndReason = from.moveEndReason;
 	to.moveEndSerial = from.moveEndSerial;
@@ -930,6 +931,7 @@ void GeminiCaringLoop::pollStatus ()
 				fresh.moveEndSerial = status.gotoSerial;
 				fresh.moveInProgress = false;
 				fresh.moveAborted = true;
+				fresh.moveExecutionFault = true;
 				abortRequested = true;
 				crawlSince = NAN;
 				lastPollRa = fresh.ra;
@@ -985,6 +987,7 @@ void GeminiCaringLoop::pollStatus ()
 			else
 			{
 				fresh.moveFailed = true;
+				fresh.moveExecutionFault = true;
 				char buf[256];
 				snprintf (buf, sizeof (buf), "%s %.3f deg from target (dRA=%.3f dDec=%.3f) - possible mount-side limit, obstruction, or another client sending conflicting commands",
 					timedOut ? "move timed out" : "move stopped", miss, dRa, dDec);
@@ -1099,6 +1102,7 @@ void GeminiCaringLoop::pollAxisPosition ()
 	status.moveEndSerial = status.gotoSerial;
 	status.moveInProgress = false;
 	status.moveAborted = true;
+	status.moveExecutionFault = true;
 	abortRequested = true;
 	raAxisHistory.clear ();
 }
@@ -1519,6 +1523,24 @@ void GeminiCaringLoop::handleGoto ()
 		// sends :Q# ahead of a goto; on SBT (2026-09-14) two meridian flips
 		// sent to a tracking mount without it ran the RA axis at ~21x
 		// sidereal for the whole move instead of slewing.
+		// Drain any queued native sets first (e.g. the setTracking(131) the
+		// framework's endMove() queues after the previous move): otherwise
+		// one could drain right after this goto's worm-stop and turn the worm
+		// back on mid-slew, which on SBT restarts the RA-axis crawl.
+		for (;;)
+		{
+			NativeSetCommand queued;
+			{
+				std::lock_guard<std::mutex> lock (mutex_);
+				if (commandQueue.empty ())
+					break;
+				queued = commandQueue.front ();
+				commandQueue.pop_front ();
+			}
+			std::string ignored;
+			sendAndReceive (buildNativeSet (queued.id, queued.valueStr), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+		}
+
 		int prestop = gotoPrestop.load ();
 		bool alreadySlewing;
 		{
@@ -1631,6 +1653,7 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveFailReason.clear ();
 		status.moveWrongWay = false;
 		status.moveAborted = false;
+		status.moveExecutionFault = false;
 		status.movePierChanged = movePierChangedFlag;
 		status.moveSeparation = NAN;
 		status.parkStatus = '0';	// the firmware clears its park status on every goto
@@ -1661,8 +1684,15 @@ void GeminiCaringLoop::handleAbort ()
 void GeminiCaringLoop::handlePark ()
 {
 	// parking/parkFailed/parkStatus are already set by requestPark() -
-	// see its comment for why that has to happen there, not here
+	// see its comment for why that has to happen there, not here.
+	// Stop the worm first: a park is a goto to CWD, and on SBT a goto whose
+	// RA axis has to run against the worm never slews (see handleGoto's
+	// prestop). gemini2ser.cpp's startPark() stops the mount first too.
+	std::string ignored;
+	sendAndReceive (buildNativeSet (135, "1"), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 	std::string response;
+	sendAndReceive (":Q#", ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+	std::this_thread::sleep_for (std::chrono::milliseconds (300));
 	sendAndReceive (parkAtStartupPosition.load () ? ":hC#" : ":hP#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 
 	std::lock_guard<std::mutex> lock (mutex_);
