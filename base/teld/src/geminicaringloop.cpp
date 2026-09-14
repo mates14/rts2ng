@@ -797,6 +797,7 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveFailReason = from.moveFailReason;
 	to.moveWrongWay = from.moveWrongWay;
 	to.moveAborted = from.moveAborted;
+	to.lastMoveSeparation = from.lastMoveSeparation;
 	to.moveEndReason = from.moveEndReason;
 	to.moveEndSerial = from.moveEndSerial;
 	to.movePierChanged = from.movePierChanged;
@@ -872,6 +873,7 @@ void GeminiCaringLoop::pollStatus ()
 		fresh.movePierChanged = movePierChangedFlag;
 
 		fresh.moveSeparation = angularSeparationDeg (fresh.ra, fresh.dec, activeMoveTargetRa, activeMoveTargetDec);
+		fresh.lastMoveSeparation = fresh.moveSeparation;
 		if (!std::isnan (fresh.moveSeparation))
 		{
 			if (std::isnan (moveMinSeparation) || fresh.moveSeparation < moveMinSeparation)

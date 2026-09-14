@@ -935,12 +935,6 @@ int GeminiUDP::abortMoveTracking ()
 	if (caring == nullptr || !caring->getStatus ().valid || std::isnan (hrz.alt))
 		return 1;
 
-	// the same reason as checkSafety()'s below-horizon check: a slew of ours
-	// legitimately passes low (Dec-first meridian flips)
-	rts2_status_t moving = getState () & TEL_MASK_MOVING;
-	if (moving == TEL_MOVING || moving == TEL_PARKING || caring->getStatus ().moveInProgress || rezeroState != REZERO_IDLE)
-		return 1;
-
 	int ret = Telescope::abortMoveTracking ();
 
 	std::ostringstream detail;
@@ -2148,13 +2142,14 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// Skipped while parked or parking: the park position is wherever the
 	// operator configured it, and a driver that responds to "you asked me
 	// to park and now I am parked" by parking again would never stop.
-	// Only while nothing of ours is moving the mount. In flight, pointing low
-	// is part of the path: Gemini sequences a meridian flip Dec axis first,
-	// and until the RA axis follows the telescope points at the same
-	// declination 12h away - on SBT (2026-09-14) Dec +40 went to alt 3.8 deg
-	// in the north for several seconds of a perfectly healthy flip. A move
-	// that stays wrong is caught by the wrong-way, arrival and timeout checks.
-	if (!weCommandedMovement && moving != TEL_PARKED && st.alt < safetyAltLimitValue->getValueDouble ())
+	// Also while a move of ours is in flight - especially then. On SBT
+	// (2026-09-14) W->E meridian flips swung the Dec axis to the other side
+	// while the RA axis did not slew; the telescope went to alt 3.8 deg in one
+	// test and to alt -49 deg (tube down, counterweight up) in another. That
+	// is not a flip path: done with both axes, a flip passes near the pole.
+	// (For one build this check was skipped during slews on the mistaken
+	// reading that the low pass was normal. It is not.)
+	if (moving != TEL_PARKED && st.alt < safetyAltLimitValue->getValueDouble ())
 		belowHorizonCount++;
 	else
 		belowHorizonCount = 0;
@@ -2409,7 +2404,7 @@ void GeminiUDP::writeIncidentReport (const GeminiStatus &st)
 		<< " park_status=" << st.parkStatus << " connected=" << (st.connected ? "yes" : "no") << "\n";
 	o << "             move_in_progress=" << st.moveInProgress << " move_failed=" << st.moveFailed
 		<< " move_wrong_way=" << st.moveWrongWay << " pier_changed_in_move=" << st.movePierChanged
-		<< " move_separation=" << st.moveSeparation << "\n";
+		<< " move_separation=" << st.moveSeparation << " last_move_separation=" << st.lastMoveSeparation << "\n";
 	if (st.moveFailed)
 		o << "             move_fail_reason: " << st.moveFailReason << "\n";
 	o << "             tracking_sec_to_limit=" << st.trackingSecToWestLimit << "\n";
@@ -2768,6 +2763,14 @@ int GeminiUDP::isMoving ()
 
 int GeminiUDP::stopMove ()
 {
+	// the framework's stop (an operator's "stop", a new move replacing one in
+	// flight, stopTracking()) - logged, so a log tells an operator's stop from
+	// the mount stopping by itself
+	{
+		GeminiStatus st = caring ? caring->getStatus () : GeminiStatus ();
+		logStream (st.moveInProgress ? MESSAGE_WARNING : MESSAGE_DEBUG) << "GeminiUDP: stop (:Q#) sent"
+			<< (st.moveInProgress ? " while a move was in flight" : "") << sendLog;
+	}
 	if (rezeroState != REZERO_IDLE && rezeroState != REZERO_REBOOTING)
 		abortRezero ("stop command");
 	if (caring)

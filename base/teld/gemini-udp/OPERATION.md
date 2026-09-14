@@ -159,24 +159,22 @@ At startup the driver logs what that means:
   tracking stop; the driver flips at HA −0.5°, about 6 minutes before it. An exposure still running then
   blocks the flip until it ends, and the mount may reach the limit and stop tracking in the meantime; the flip
   follows once the exposure ends.
-- **Flips are sequenced, Dec axis first.** In the 2026-09-14 test a W→E flip swung Dec from +40° over the
-  pole and back down to +40° on the other side in about 30 s while the RA axis waited. Until the RA axis
-  follows, the telescope really points at the same declination 12 h away: low in the north, alt 3.8° at
-  az 337° for Dec +40°. This is the mount's own path, not a fault. The below-horizon watchdog (and the
-  framework's hard-horizon hook) now apply only while no move, park or re-zero of the driver's is in flight;
-  a slew that stays wrong is caught by the wrong-way, arrival and timeout checks. The move timeout is 300 s,
-  and a move is never declared stopped while the mount still reports slewing.
-- **The RA axis crawls on flips sent to a tracking mount.** In both flip tests (udp2, udp3) the RA axis
-  moved at a constant ~0.089°/s (about 21× sidereal, centering speed) for the whole move instead of slewing:
-  Dec reached its target, then the mount sat at rate `C` creeping west and was still 25° short after
-  2.5 minutes. Gotos started from the parked (not tracking) mount slewed normally. Gemini's goto code stops
-  an axis that has to reverse its current motion before slewing it, and a tracking RA axis reversing
-  direction is exactly the flip case — the leading suspect, not yet proven. The production driver
-  (`gemini2ser.cpp`) always sends `:Q#` before a goto. The new value `goto_prestop` selects what is sent ahead
-  of every goto: `NONE` (as in those tests), `STOP` (`:Q#`, like the production driver — the default) or
-  `STOP_TRACKING` (worm off, then `:Q#`). See dry-run step H.
-- **A stuck goto takes up to 5 minutes to be declared failed** (the move timeout, 300 s, sized for sequenced
-  flips). Every move now logs one line saying how it ended: "move ended: arrived / stopped moving / timed
+- **W→E flips fail, E→W flips work** (tests udp3–udp5, 4 of 4 each way). On every W→E flip the Dec axis slewed
+  to the other side while the RA axis did not slew: it stood still or crept at ~0.089°/s (about 21× sidereal).
+  The telescope then points at the target's declination 12 h away from where it should be: alt 3.8° in the
+  north for a northern target, **alt −49° (tube down, counterweight up)** for a target at Dec −20°. E→W flips
+  and same-side moves arrived normally. On this mount a W→E flip is exactly the move whose RA axis has to run
+  against the tracking direction (towards CWD and past it), so the leading suspect is Gemini's "stop an axis
+  that must reverse before slewing it" step in its goto routine, run while the worm is tracking. The
+  production driver (`gemini2ser.cpp`) always sends `:Q#` before a goto.
+  - `goto_prestop` selects what is sent ahead of every goto: `NONE` (as in those tests), `STOP` (`:Q#`, like
+    the production driver — the default) or `STOP_TRACKING` (worm off, then `:Q#`). If the suspicion is right,
+    `STOP` fixes W→E flips and changes nothing for E→W. See dry-run step H.
+  - An earlier build skipped the below-horizon watchdog during slews, on the mistaken reading that the low pass
+    was the firmware's normal flip path. It is not: with both axes moving a flip passes near the pole. The
+    watchdog applies during slews again, and it is what stops this failure (3 polls below `safety_alt_limit`).
+- **A stuck goto takes up to 5 minutes to be declared failed** (the move timeout, 300 s; the below-horizon watchdog
+  stops a flip that goes wrong long before that). Every move now logs one line saying how it ended: "move ended: arrived / stopped moving / timed
   out / stopped by :Q# after N s, X deg from target, mount rate 'R'".
 - **`/var/log/rts2` must exist and be writable** by the user running the driver (it was not; the incident
   report went only to the RTS2 log and the position state was not saved). Create it, or pass
@@ -341,19 +339,22 @@ This one deliberately corrupts the counters; do it last, and be ready to recover
 3. Recover: bring the telescope back to CWD with the hand controller, checking visually, then
    `position cwd`.
 
-### H. Why does the RA axis crawl on flips?
+### H. Why do W→E flips fail?
 
-Rebuild first and check `git log -1` on the machine running the driver: one earlier test ran a binary that
-predated the fixes it was meant to test.
+The log names the build at startup once the build-id line is in; until then note `git log -1` on the machine
+running the driver. Keep a hand on stop: a failing W→E flip can point the tube below the horizon before the
+watchdog's three polls are up — prefer northern targets (Dec ≥ +40°) for this test, where the failure stays
+above the horizon.
 
-1. With the mount tracking a target on the W side, set `goto_prestop` to `NONE` and goto a target that
-   needs a flip (e.g. 60–90° west of the meridian). Note whether the RA axis slews or crawls at rate `C`
-   (RA changing ~0.09°/s in the polls). Stop it if it crawls.
-2. Repeat with `goto_prestop` = `STOP`, then with `STOP_TRACKING`.
-3. Separate "flip" from "RA axis reversing": from the same tracking W-side start, goto a target further
-   **east** on the same side (no flip, but the RA axis moves against its tracking direction), with
-   `NONE`. If that crawls too, the reversal is the cause, not the flip.
-4. For each: the "move ended" line and the RA values from the polls.
+1. Track a target on the W side. With `goto_prestop` = `NONE`, goto a target that needs a W→E flip. *Expect*
+   (as before) the RA axis not to slew. Stop it.
+2. Same start, `goto_prestop` = `STOP`. If the suspicion is right, the flip now works.
+3. If not, `goto_prestop` = `STOP_TRACKING`.
+4. Separate "flip" from "RA axis reversing": from a tracking W-side start, goto a target further **east on
+   the same side** (no flip, the RA axis runs against tracking) with `NONE`. If that fails too, the reversal
+   is the cause.
+5. An E→W flip with each setting should work throughout.
+6. For each: the "move ended" line, "stop (:Q#) sent" lines, and the RA values from the polls.
 
 ### G. Re-zero mechanics, without sky (optional)
 

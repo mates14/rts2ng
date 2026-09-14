@@ -325,6 +325,7 @@ struct GeminiStatus
 
 	// ---- in-flight move sanity, see pollStatus() ----
 	double moveSeparation = NAN;	// angular distance from the current position to the active move's target
+	double lastMoveSeparation = NAN;	// the same, as last seen during the most recent move - kept after it ends
 
 	// true once the distance to the target has grown WRONG_WAY_MARGIN_DEG
 	// past the smallest distance seen so far in this move, for several
