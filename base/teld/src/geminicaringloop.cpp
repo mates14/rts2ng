@@ -451,7 +451,7 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	activeMoveTargetRa (NAN), activeMoveTargetDec (NAN),
 	abortRequested (false), parkRequested (false), parkAtStartupPosition (false), rebootRequested (false), rebootCold (false),
 	startupMode ((int) STARTUP_NONE), forcedSelection ((int) STARTUP_NONE), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
-	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP),
+	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP_TRACKING),
 	moveMinSeparation (NAN), crawlSince (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
 	slowPollCounter (0), nextDatagramNumber (0)
 {
@@ -1493,6 +1493,11 @@ void GeminiCaringLoop::handleGoto ()
 	{
 		message = "not sent: the caller needs a pier flip, predicted " + prediction.describe ();
 	}
+	else if (prediction.outcome == GeminiSidePrediction::REFUSE && !prediction.ambiguous (ambiguityMargin))
+	{
+		// Gemini would answer 6 - there is no point asking it
+		message = "not sent: the target fits neither side of the pier (" + prediction.describe () + ")";
+	}
 	else if (cancelled)
 	{
 		// the prediction reads above take real round trips, long enough
@@ -1515,6 +1520,12 @@ void GeminiCaringLoop::handleGoto ()
 		// sent to a tracking mount without it ran the RA axis at ~21x
 		// sidereal for the whole move instead of slewing.
 		int prestop = gotoPrestop.load ();
+		bool alreadySlewing;
+		{
+			std::lock_guard<std::mutex> lock (mutex_);
+			alreadySlewing = status.moveInProgress;
+		}
+		std::string prestopProblem;
 		if (prestop == PRESTOP_STOP_TRACKING)
 		{
 			std::string ignored;
@@ -1526,7 +1537,38 @@ void GeminiCaringLoop::handleGoto ()
 			sendAndReceive (":Q#", ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 			std::this_thread::sleep_for (std::chrono::milliseconds (300));
 		}
-		if (!sendAndReceive (sr + sd + slewCommand, response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
+		// With the worm off, do not send the goto until the RA axis is really
+		// at rest: on SBT every goto whose RA axis had to run towards CWD
+		// failed while the worm was running, and every park doing the same
+		// from a stopped worm slewed normally. A tracking axis moves ~160
+		// ticks per 0.5 s there, so 3 ticks is "still". Not while a slew of
+		// ours is already in flight (a retarget) - the worm is not what
+		// moves the axis then.
+		if (prestop == PRESTOP_STOP_TRACKING && !alreadySlewing)
+		{
+			std::string value;
+			int32_t lastRa = 0, axisRa, axisDec;
+			bool haveLast = false, still = false;
+			for (int i = 0; i < 16 && !still; i++)
+			{
+				if (readNativeInternal (239, value) && parseTickPair (value, axisRa, axisDec))
+				{
+					if (haveLast && abs (axisRa - lastRa) <= 3)
+						still = true;
+					lastRa = axisRa;
+					haveLast = true;
+				}
+				if (!still)
+					std::this_thread::sleep_for (std::chrono::milliseconds (500));
+			}
+			if (!still)
+				prestopProblem = "the RA axis did not come to rest within 8 s of stopping tracking";
+		}
+		if (!prestopProblem.empty ())
+		{
+			message = "not sent: " + prestopProblem;
+		}
+		else if (!sendAndReceive (sr + sd + slewCommand, response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS))
 		{
 			message = std::string ("no response to goto command (:Sr/:Sd/") + slewCommand + ")";
 		}
@@ -1798,6 +1840,10 @@ void GeminiCaringLoop::threadMain ()
 			}
 			else if (parking)
 			{
+				// keep watching where the mount is while it parks - the
+				// watchdog and the log would otherwise be blind for a minute
+				pollStatus ();
+				pollAxisPosition ();
 				pollParkStatus ();
 			}
 			else
