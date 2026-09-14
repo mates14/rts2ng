@@ -42,6 +42,10 @@ namespace
 	constexpr double MOVE_MIN_SETTLE_SEC = 3.0;
 	constexpr double CRAWL_MIN_SEPARATION_DEG = 2.0;	// centering this far from the target is not centering
 	constexpr double CRAWL_MAX_SEC = 15.0;
+	// RA axis speed band that is neither a slew nor a wait - see pollAxisPosition()
+	constexpr double RA_CRAWL_WINDOW_SEC = 15.0;
+	constexpr double RA_CRAWL_MIN_DEG_SEC = 0.04;
+	constexpr double RA_CRAWL_MAX_DEG_SEC = 0.2;
 	// forces a stop-and-check past this even if nobody called requestAbort().
 	// Not a slew duration estimate: Gemini sequences the axes of some moves
 	// (on SBT, a meridian flip swung Dec over the pole for 30 s before the
@@ -341,9 +345,15 @@ GeminiSidePrediction rts2teld::predictGotoSide (const GeminiAxisGeometry &geo, i
 	char secondSide = preferOther ? p.sideBefore : otherSide;
 
 	if (p.firstMarginDeg > 0)
+	{
 		p.sideAfter = firstSide;
+		p.targetRaTicks = preferOther ? there : here;
+	}
 	else if (p.secondMarginDeg > 0)
+	{
 		p.sideAfter = secondSide;
+		p.targetRaTicks = preferOther ? here : there;
+	}
 	else
 	{
 		p.outcome = GeminiSidePrediction::REFUSE;
@@ -1035,6 +1045,41 @@ void GeminiCaringLoop::pollAxisPosition ()
 		movePierChangedFlag = true;
 		status.movePierChanged = true;
 	}
+
+	// The SBT W->E failure seen on the RA axis itself (udp3-udp5): the RA axis
+	// runs at ~0.09 deg/s - about 21x sidereal - for the whole move, whatever
+	// rate character the mount reports (udp5 move 4 said 'S' throughout while
+	// the Dec axis alone drove the tube to alt -49). A slewing RA axis moves
+	// degrees per second, a waiting or tracking one ~0; only a crawl sits in
+	// between. Needs the predicted target counter, so predicted moves only.
+	if (!status.moveInProgress || std::isnan (status.lastPrediction.targetRaTicks) || !status.geometry.valid)
+	{
+		raAxisHistory.clear ();
+		return;
+	}
+	double now = status.axisTimestamp;
+	raAxisHistory.push_back ({ now, ra });
+	while (raAxisHistory.size () > 2 && now - raAxisHistory[1].first >= RA_CRAWL_WINDOW_SEC)
+		raAxisHistory.pop_front ();
+
+	double k = status.geometry.ticksPerDeg ();
+	double remainingDeg = fabs (status.lastPrediction.targetRaTicks - ra) / k;
+	double span = now - raAxisHistory.front ().first;
+	if (span < RA_CRAWL_WINDOW_SEC || remainingDeg <= CRAWL_MIN_SEPARATION_DEG)
+		return;
+	double rateDegSec = fabs ((double) ra - raAxisHistory.front ().second) / k / span;
+	if (rateDegSec < RA_CRAWL_MIN_DEG_SEC || rateDegSec > RA_CRAWL_MAX_DEG_SEC)
+		return;
+
+	char end[220];
+	snprintf (end, sizeof (end), "RA axis not slewing - %.3f deg/s over %.0f s, %.2f deg of RA axis still to go, after %.0f s (Dec axis %s); stopped",
+		rateDegSec, span, remainingDeg, now - moveStartedAt, side == moveStartDecSide ? "not flipped yet" : "already flipped");
+	status.moveEndReason = end;
+	status.moveEndSerial = status.gotoSerial;
+	status.moveInProgress = false;
+	status.moveAborted = true;
+	abortRequested = true;
+	raAxisHistory.clear ();
 }
 
 bool GeminiCaringLoop::readGeometryInternal ()
@@ -1492,6 +1537,7 @@ void GeminiCaringLoop::handleGoto ()
 		moveMinSeparation = NAN;
 		wrongWayCount = 0;
 		crawlSince = NAN;
+		raAxisHistory.clear ();
 		moveStartPierSide = pierSideNow;
 		moveStartDecSide = prediction.sideBefore != '?' ? prediction.sideBefore : decSideNow;
 		// a flip that is expected, or can't be ruled out, suspends the

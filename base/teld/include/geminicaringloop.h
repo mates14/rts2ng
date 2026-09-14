@@ -131,6 +131,7 @@ struct GeminiSidePrediction
 	// negative when outside - in the order the firmware tries them
 	double firstMarginDeg = NAN;
 	double secondMarginDeg = NAN;
+	double targetRaTicks = NAN;	// the RA axis counter the mount should end at (the candidate it ends up on)
 	std::string reason;		// why UNKNOWN
 
 	/** the margin of the candidate the mount ends up on */
@@ -670,6 +671,8 @@ class GeminiCaringLoop
 		// caring-thread-only, like the move-tracking members above
 		double moveMinSeparation;
 		double crawlSince;	// timestamp the mount started reporting centering rate far from its target, NAN otherwise
+		// RA axis samples (time, ticks) of the move in flight, for the RA-axis crawl check in pollAxisPosition()
+		std::deque<std::pair<double, int32_t>> raAxisHistory;
 		int wrongWayCount;
 		char moveStartPierSide;
 		char moveStartDecSide;

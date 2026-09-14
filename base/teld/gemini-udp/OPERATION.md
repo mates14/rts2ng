@@ -174,9 +174,12 @@ At startup the driver logs what that means:
     centering speed**, while on E→W gotos the RA axis slews first (157° in ~11 s) and Dec follows. With a small
     RA difference that looks like a crawl that nearly gets there; with a large one the Dec axis alone carries
     the tube somewhere dangerous.
-  - The driver now stops such a move after 15 s at centering rate (`C`) more than 2° from the target and reports
-    "move ended: RA axis not slewing …" — a failed move, not a safety incident (the counters are fine). When the
-    wrong pose is low, the below-horizon watchdog gets there first and it is an incident.
+  - The driver now stops such a move as soon as the **RA axis itself** shows it: more than 2° of RA axis travel
+    still to go and the RA axis counter moving at 0.04–0.2°/s for 15 s — faster than a waiting (tracking) axis,
+    far slower than a slewing one. That does not depend on the rate letter the mount reports (the move that went
+    to alt −49° reported `S` throughout). A second rule stops a move at centering rate `C` more than 2° from the
+    target for 15 s. Either logs "move ended: RA axis not slewing …" and fails the move without a safety
+    incident (the counters are fine). The below-horizon watchdog remains the last line.
   - An earlier build skipped the below-horizon watchdog during slews, on the mistaken reading that the low pass
     was the firmware's normal flip path. It is not: with both axes moving a flip passes near the pole. The
     watchdog applies during slews again, and it is what stops this failure (3 polls below `safety_alt_limit`).
