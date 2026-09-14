@@ -431,7 +431,7 @@ _Note: the directions mentioned depend upon the hemisphere of the observing site
 
 | Command | Returns | Remarks |
 |---|---|---|
-| `:Q#` |  | Quit all movements mentioned below. |
+| `:Q#` |  | Quit all movements mentioned below (a slew in progress, guiding, and other auxiliary moves). Sidereal tracking (the RA worm) is NOT stopped and keeps running - confirmed by the operator, 2026-09-14. This is why goto_prestop=STOP (:Q# only, the driver default) loses no sky, and why stopping the worm needs the separate native 135. |
 | `:Qe#` |  | Quit movement eastwards. |
 | `:Qw#` |  | Quit movement westwards. |
 | `:Qn#` |  | Quit movement northwards. |
