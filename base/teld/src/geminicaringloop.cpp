@@ -44,8 +44,9 @@ namespace
 	constexpr double CRAWL_MAX_SEC = 15.0;
 	// RA axis speed band that is neither a slew nor a wait - see pollAxisPosition()
 	constexpr double RA_CRAWL_WINDOW_SEC = 15.0;
-	constexpr double RA_CRAWL_MIN_DEG_SEC = 0.04;
-	constexpr double RA_CRAWL_MAX_DEG_SEC = 0.2;
+	constexpr double RA_CRAWL_RECENT_SEC = 5.0;
+	constexpr double RA_CRAWL_OBSERVED_DEG_SEC = 0.088;	// SBT, when native 170 could not be read
+	constexpr double SIDEREAL_DEG_SEC = 15.04106858 / 3600.0;
 	// forces a stop-and-check past this even if nobody called requestAbort().
 	// Not a slew duration estimate: Gemini sequences the axes of some moves
 	// (on SBT, a meridian flip swung Dec over the pole for 30 s before the
@@ -823,6 +824,7 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	// already showing - see pollTrackingLimit()
 	to.trackingSecToWestLimit = from.trackingSecToWestLimit;
 	to.trackingRate = from.trackingRate;
+	to.centeringSpeed = from.centeringSpeed;
 
 	to.startupState = from.startupState;
 	to.startupComplete = from.startupComplete;
@@ -1067,8 +1069,27 @@ void GeminiCaringLoop::pollAxisPosition ()
 	double span = now - raAxisHistory.front ().first;
 	if (span < RA_CRAWL_WINDOW_SEC || remainingDeg <= CRAWL_MIN_SEPARATION_DEG)
 		return;
+	// The band is built around the mount's own centering rate, which is what a
+	// non-slewing RA axis runs at: (native 170 + 1) x sidereal, on SBT
+	// 20 -> 0.088 deg/s, measured 0.0858-0.0891 over four failures. Half to
+	// twice that; a tracking axis (0.0042 deg/s) is far below, a slew far above.
+	double crawl = status.centeringSpeed > 0 ? (status.centeringSpeed + 1) * SIDEREAL_DEG_SEC : RA_CRAWL_OBSERVED_DEG_SEC;
+	double minRate = crawl * 0.45, maxRate = crawl * 2.2;
 	double rateDegSec = fabs ((double) ra - raAxisHistory.front ().second) / k / span;
-	if (rateDegSec < RA_CRAWL_MIN_DEG_SEC || rateDegSec > RA_CRAWL_MAX_DEG_SEC)
+	if (rateDegSec < minRate || rateDegSec > maxRate)
+		return;
+	// ...and steadily: the last few seconds must be in the band too, or an axis
+	// that waited and has just started to slew would briefly average into it
+	double recentRate = NAN;
+	for (auto it = raAxisHistory.rbegin (); it != raAxisHistory.rend (); ++it)
+	{
+		if (now - it->first >= RA_CRAWL_RECENT_SEC)
+		{
+			recentRate = fabs ((double) ra - it->second) / k / (now - it->first);
+			break;
+		}
+	}
+	if (std::isnan (recentRate) || recentRate < minRate || recentRate > maxRate)
 		return;
 
 	char end[220];
@@ -1300,6 +1321,11 @@ void GeminiCaringLoop::runPostStartupSequence ()
 	readGeometryInternal ();
 	pollAxisPosition ();
 
+	int centering = 0;
+	std::string centeringStr;
+	if (readNativeInternal (170, centeringStr))
+		centering = atoi (centeringStr.c_str ());
+
 	int rate = 0;
 	std::string rateStr;
 	if (readNativeInternal (130, rateStr))
@@ -1329,6 +1355,8 @@ void GeminiCaringLoop::runPostStartupSequence ()
 	}
 	if (rate != 0)
 		status.trackingRate = rate;
+	if (centering > 0)
+		status.centeringSpeed = centering;
 	if (parkRead && !status.parking)
 		status.parkStatus = parkResponse[0];
 	status.clockOffsetSec = clockRead ? clockOffset : NAN;

@@ -793,7 +793,10 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 	if (oldValue == centeringSpeedValue)
 	{
 		if (caring)
+		{
 			caring->queueNativeSet (GEMINI_CMD_RATE_CENTER, (int32_t) newValue->getValueInteger ());
+			caring->setCenteringSpeed (newValue->getValueInteger ());
+		}
 		return 0;
 	}
 	if (oldValue == pollIntervalValue)
@@ -1206,6 +1209,16 @@ void GeminiUDP::checkStartup (const GeminiStatus &st)
 	}
 
 	trackingRateValue->setValueInteger (st.trackingRate);
+
+	// the mount's own centering speed, not the driver's default: it sets the
+	// speed of a goto whose RA axis does not slew (see pollAxisPosition())
+	if (st.centeringSpeed > 0)
+	{
+		centeringSpeedValue->setValueInteger (st.centeringSpeed);
+		sendValueAll (centeringSpeedValue);
+		logStream (MESSAGE_INFO) << "GeminiUDP: centering speed " << st.centeringSpeed << "x sidereal (native 170) - an RA axis moving at "
+			<< (st.centeringSpeed + 1) * 15.04106858 / 3600.0 << " deg/s during a goto is taken for one that does not slew" << sendLog;
+	}
 
 	if (!std::isnan (st.clockOffsetSec) && fabs (st.clockOffsetSec) > 2.0)
 		logStream (MESSAGE_WARNING) << "GeminiUDP: the mount clock was " << st.clockOffsetSec << " s off system UTC - reset it" << sendLog;

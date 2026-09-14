@@ -301,6 +301,11 @@ struct GeminiStatus
 	// off), 136 closed loop, 137 comet/user. 0 until first read.
 	int trackingRate = 0;
 
+	// native 170, read after startup: the centering rate in multiples of
+	// sidereal, 0 until read. A goto whose RA axis does not slew runs it at
+	// (centeringSpeed + 1) x sidereal - on SBT 20 -> 0.088 deg/s observed.
+	int centeringSpeed = 0;
+
 	// native 220-223, read once per startup by runPostStartupSequence() -
 	// raw and unparsed, same reasoning as readNativeRaw()'s doc comment
 	bool limitsValid = false;
@@ -449,6 +454,9 @@ class GeminiCaringLoop
 		 */
 		enum GotoPrestop { PRESTOP_NONE = 0, PRESTOP_STOP = 1, PRESTOP_STOP_TRACKING = 2 };
 		void setGotoPrestop (GotoPrestop mode) { gotoPrestop = (int) mode; }
+
+		/** after writing native 170: keep the RA-axis crawl band in step (see pollAxisPosition()) */
+		void setCenteringSpeed (int speed) { std::lock_guard<std::mutex> lock (mutex_); status.centeringSpeed = speed; }
 
 		/** best-effort, asynchronous: caring loop sends :Q# at its next opportunity, ahead of routine polling */
 		void requestAbort ();

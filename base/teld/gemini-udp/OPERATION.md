@@ -175,9 +175,12 @@ At startup the driver logs what that means:
     RA difference that looks like a crawl that nearly gets there; with a large one the Dec axis alone carries
     the tube somewhere dangerous.
   - The driver now stops such a move as soon as the **RA axis itself** shows it: more than 2° of RA axis travel
-    still to go and the RA axis counter moving at 0.04–0.2°/s for 15 s — faster than a waiting (tracking) axis,
-    far slower than a slewing one. That does not depend on the rate letter the mount reports (the move that went
-    to alt −49° reported `S` throughout). A second rule stops a move at centering rate `C` more than 2° from the
+    still to go and the RA axis counter moving at the mount's **centering rate** — (native 170 + 1) × sidereal,
+    0.088°/s on SBT (measured 0.0858–0.0891°/s over four failures) — within ×0.45…×2.2, both over the last 15 s
+    and over the last 5 s: faster than a waiting (tracking) axis, far slower than a slewing one, and steady, so
+    an axis that waited and has just started to slew does not count. The driver reads native 170 at startup
+    (shown in `centering_speed`); changing `centering_speed` moves the band with it. That does not depend on the rate letter the mount reports (across these failures
+    it reported `C`, `S` and `N`). A second rule stops a move at centering rate `C` more than 2° from the
     target for 15 s. Either logs "move ended: RA axis not slewing …" and fails the move without a safety
     incident (the counters are fine). The below-horizon watchdog remains the last line.
   - An earlier build skipped the below-horizon watchdog during slews, on the mistaken reading that the low pass
