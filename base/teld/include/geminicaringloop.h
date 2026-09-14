@@ -669,6 +669,7 @@ class GeminiCaringLoop
 
 		// caring-thread-only, like the move-tracking members above
 		double moveMinSeparation;
+		double crawlSince;	// timestamp the mount started reporting centering rate far from its target, NAN otherwise
 		int wrongWayCount;
 		char moveStartPierSide;
 		char moveStartDecSide;

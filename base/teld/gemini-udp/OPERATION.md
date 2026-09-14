@@ -170,6 +170,13 @@ At startup the driver logs what that means:
   - `goto_prestop` selects what is sent ahead of every goto: `NONE` (as in those tests), `STOP` (`:Q#`, like
     the production driver — the default) or `STOP_TRACKING` (worm off, then `:Q#`). If the suspicion is right,
     `STOP` fixes W→E flips and changes nothing for E→W. See dry-run step H.
+  - The mechanism, from the polls: on W→E gotos the **Dec axis slews normally and the RA axis never leaves
+    centering speed**, while on E→W gotos the RA axis slews first (157° in ~11 s) and Dec follows. With a small
+    RA difference that looks like a crawl that nearly gets there; with a large one the Dec axis alone carries
+    the tube somewhere dangerous.
+  - The driver now stops such a move after 15 s at centering rate (`C`) more than 2° from the target and reports
+    "move ended: RA axis not slewing …" — a failed move, not a safety incident (the counters are fine). When the
+    wrong pose is low, the below-horizon watchdog gets there first and it is an incident.
   - An earlier build skipped the below-horizon watchdog during slews, on the mistaken reading that the low pass
     was the firmware's normal flip path. It is not: with both axes moving a flip passes near the pole. The
     watchdog applies during slews again, and it is what stops this failure (3 polls below `safety_alt_limit`).
@@ -354,7 +361,9 @@ above the horizon.
    the same side** (no flip, the RA axis runs against tracking) with `NONE`. If that fails too, the reversal
    is the cause.
 5. An E→W flip with each setting should work throughout.
-6. For each: the "move ended" line, "stop (:Q#) sent" lines, and the RA values from the polls.
+6. For each: the "move ended" line, "stop (:Q#) sent" lines, and **the RA axis rate** from the polls (RA values
+   against time — about 0.09°/s means it is not slewing), not just whether the move arrived. The prediction to
+   check: `STOP` restores a fast RA slew on W→E and changes nothing about Dec or about E→W.
 
 ### G. Re-zero mechanics, without sky (optional)
 

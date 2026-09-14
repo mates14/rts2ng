@@ -40,6 +40,8 @@ namespace
 {
 	constexpr double MOVE_STABLE_DEG = 0.01;
 	constexpr double MOVE_MIN_SETTLE_SEC = 3.0;
+	constexpr double CRAWL_MIN_SEPARATION_DEG = 2.0;	// centering this far from the target is not centering
+	constexpr double CRAWL_MAX_SEC = 15.0;
 	// forces a stop-and-check past this even if nobody called requestAbort().
 	// Not a slew duration estimate: Gemini sequences the axes of some moves
 	// (on SBT, a meridian flip swung Dec over the pole for 30 s before the
@@ -439,7 +441,7 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	abortRequested (false), parkRequested (false), parkAtStartupPosition (false), rebootRequested (false), rebootCold (false),
 	startupMode ((int) STARTUP_NONE), forcedSelection ((int) STARTUP_NONE), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
 	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP),
-	moveMinSeparation (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
+	moveMinSeparation (NAN), crawlSince (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
 	slowPollCounter (0), nextDatagramNumber (0)
 {
 }
@@ -897,6 +899,38 @@ void GeminiCaringLoop::pollStatus ()
 
 		// never while the mount itself still reports slewing/centering: a
 		// sequenced move can hold one axis still while the other waits
+		// The SBT W->E failure (2026-09-14, udp3-udp5): the Dec axis arrives
+		// and the RA axis never leaves centering speed (~0.09 deg/s), so the
+		// mount reports 'C' while still degrees away. Healthy centering only
+		// happens within a fraction of a degree. Stop it and report the move
+		// as not arrived - but as a stop, not a failure: the counters are
+		// fine, this must not open a safety incident.
+		if (fresh.moveRate == 'C' && !std::isnan (fresh.moveSeparation) && fresh.moveSeparation > CRAWL_MIN_SEPARATION_DEG)
+		{
+			if (std::isnan (crawlSince))
+				crawlSince = fresh.timestamp;
+			else if (fresh.timestamp - crawlSince > CRAWL_MAX_SEC)
+			{
+				char end[200];
+				snprintf (end, sizeof (end), "RA axis not slewing - centering speed for %.0f s, %.3f deg from target after %.0f s; stopped",
+					fresh.timestamp - crawlSince, fresh.moveSeparation, fresh.timestamp - moveStartedAt);
+				fresh.moveEndReason = end;
+				fresh.moveEndSerial = status.gotoSerial;
+				fresh.moveInProgress = false;
+				fresh.moveAborted = true;
+				abortRequested = true;
+				crawlSince = NAN;
+				lastPollRa = fresh.ra;
+				lastPollDec = fresh.dec;
+				status = fresh;
+				return;
+			}
+		}
+		else
+		{
+			crawlSince = NAN;
+		}
+
 		bool stoppedChanging = stableCount >= 2 && (fresh.timestamp - moveStartedAt) >= MOVE_MIN_SETTLE_SEC
 			&& fresh.moveRate != 'S' && fresh.moveRate != 'C';
 		bool timedOut = fresh.timestamp > moveDeadline;
@@ -1457,6 +1491,7 @@ void GeminiCaringLoop::handleGoto ()
 
 		moveMinSeparation = NAN;
 		wrongWayCount = 0;
+		crawlSince = NAN;
 		moveStartPierSide = pierSideNow;
 		moveStartDecSide = prediction.sideBefore != '?' ? prediction.sideBefore : decSideNow;
 		// a flip that is expected, or can't be ruled out, suspends the
