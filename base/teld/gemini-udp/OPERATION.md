@@ -112,8 +112,9 @@ differently: it does **not** call a human and does **not** lose trust. It stops,
 division of the two sky halves, the pose parks reach reliably, and the best place to start any move from),
 and re-sends the target, up to `move_retries` times (default 3). All of it is invisible to the framework,
 which sees one move that stays in flight until it arrives or the retries run out (`move_recovery` shows
-IDLE / STOPPING / PARKING). If the budget is spent, the mount is left parked at CWD with its position still
-trusted and the move fails — the scheduler simply moves on and its next target tries again from CWD. A cold
+IDLE / STOPPING / PARKING). The retry itself is a normal slew, run with the full watchdog live; only the stop
+and the park to CWD stand the watchdog down, the two phases where the mount cannot go downwards. If the budget
+is spent, the mount is left parked at CWD with its position still trusted and the move fails — the scheduler simply moves on and its next target tries again from CWD. A cold
 start behind the driver's back, or the boot menu, is *not* this: those still go to LOST and wait for a human,
 because parking "to CWD" would drive somewhere wrong when the counters can't be believed.
 
@@ -121,6 +122,14 @@ Every goto — and every park — now stops the worm and waits for the RA axis t
 (`goto_prestop`, default STOP_TRACKING), because a move whose RA axis has to run against a turning worm is
 exactly what crawls. So on a healthy mount the recovery should rarely fire; it is the safety net for when the
 worm-off measure is not enough.
+
+One consequence for a scheduler: while a move is being recovered the framework sees a single move that stays
+in flight for the whole stop/park/retry cycle. In the worst case that is `move_retries` times
+(2.5 s settle + up to 180 s park + up to 300 s per slew), about **24 minutes at the default 3** before the move
+is finally failed. Every leg is bounded so it always terminates, and a scheduler waiting on one target is a
+gentler failure than a mount locked at 3 a.m. — but if an executor seems stuck on a target for many minutes,
+`move_recovery` will say why, and `move_retries` is the dial (a CWD park took 16–32 s in the real logs, so most
+of that budget is the per-slew timeout, not the park).
 
 ---
 

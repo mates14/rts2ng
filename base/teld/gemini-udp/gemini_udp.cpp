@@ -2684,6 +2684,13 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 			}
 			if (!st.parking && st.parkStatus == '1')	// parked at CWD
 			{
+				// Leave the recovery state BEFORE the retry goto, deliberately:
+				// the retry is a real slew and must run with checkSafety() and
+				// the RA-crawl detector live (a botched retry has to be caught,
+				// including going below the horizon). The stand-down only
+				// covers STOPPING and PARKING - a decelerating mount and a park
+				// climbing to the pole, the two phases where nothing goes down.
+				// Do not move this reset after the doGoto().
 				recoverState = RECOVER_IDLE;
 				moveRecoveryValue->setValueCharArr ("IDLE");
 				sendValueAll (moveRecoveryValue);
