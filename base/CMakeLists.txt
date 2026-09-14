@@ -21,6 +21,28 @@ add_compile_options(-Wall -Wshadow)
 
 set(BASE_CONFDIR "/etc" CACHE STRING "Base directory for rts2.ini and friends")
 
+# Which commit this build came from, so a log file can say what produced it.
+# Two rounds of field testing were spent arguing about whether the binary at
+# the telescope matched the source being discussed, and the honest answer was
+# that nobody could tell from the log. Best effort only: not a git checkout,
+# no git installed, or a source tarball all just give "unknown".
+set(BASE_GIT_DESCRIBE "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+	execute_process(
+		COMMAND ${GIT_EXECUTABLE} describe --always --dirty --tags
+		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+		OUTPUT_VARIABLE _base_git_describe
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+		ERROR_QUIET
+		RESULT_VARIABLE _base_git_result
+	)
+	if(_base_git_result EQUAL 0 AND _base_git_describe)
+		set(BASE_GIT_DESCRIBE "${_base_git_describe}")
+	endif()
+endif()
+message(STATUS "base: building from ${BASE_GIT_DESCRIBE}")
+
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/config/base-config.h.in
 	${CMAKE_CURRENT_BINARY_DIR}/generated/base-config.h

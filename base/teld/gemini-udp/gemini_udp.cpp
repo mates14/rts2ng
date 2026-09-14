@@ -56,6 +56,9 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
+
+#include "base-config.h"	// BASE_GIT_DESCRIBE
 #include <strings.h>
 #include <vector>
 #include <algorithm>
@@ -302,6 +305,9 @@ class GeminiUDP:public Telescope
 		unsigned lastStartupCount;			// GeminiStatus::startupCount as of the last time checkStartup() ran
 
 		void checkStartup (const GeminiStatus &st);
+
+		// one line at startup saying what this binary is - see its definition
+		void logBuildIdentity ();
 
 		// ---- safety watchdog ----
 		// The driver polls the mount once a second anyway, so it is in a
@@ -698,8 +704,33 @@ int GeminiUDP::processOption (int in_opt)
 	return 0;
 }
 
+// What is actually running. BASE_GIT_DESCRIBE is captured by CMake at
+// configure time and the executable's mtime is read here at startup: the two
+// answer different halves of the question, because a `cmake --build` after a
+// pull relinks the binary without re-running configure, and a reconfigure
+// without a build does the opposite. If they disagree, believe the mtime and
+// reconfigure. Reading /proc/self/exe fails on anything but Linux, and on a
+// binary that has been replaced underneath a running process - the line is
+// still worth printing without it.
+void GeminiUDP::logBuildIdentity ()
+{
+	struct stat st;
+	char built[64] = "";
+	if (stat ("/proc/self/exe", &st) == 0)
+	{
+		struct tm tm;
+		gmtime_r (&st.st_mtime, &tm);
+		strftime (built, sizeof (built), "%Y-%m-%dT%H:%M:%SZ", &tm);
+	}
+
+	logStream (MESSAGE_INFO) << "GeminiUDP: build " << BASE_GIT_DESCRIBE
+		<< (built[0] ? ", executable linked " : "") << built << sendLog;
+}
+
 int GeminiUDP::initHardware ()
 {
+	logBuildIdentity ();
+
 	if (host == nullptr)
 	{
 		logStream (MESSAGE_ERROR) << "You must specify IP:port of the Gemini-2 mount's UDP interface (-e option)." << sendLog;

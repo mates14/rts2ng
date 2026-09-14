@@ -4,6 +4,15 @@
 
 #define BASE_VERSION "@PROJECT_VERSION@"
 
+/* What this tree was at configure time: `git describe --always --dirty`, or
+ * "unknown" outside a git checkout. Captured by CMake, so it is only as
+ * fresh as the last cmake run - buildme.sh reconfigures from scratch every
+ * time, but an incremental `cmake --build` after a pull will not update it.
+ * That is why anything reporting this should report the executable's own
+ * build time next to it: the pair cannot both be wrong in the same
+ * direction, and together they say what is actually running. */
+#define BASE_GIT_DESCRIBE "@BASE_GIT_DESCRIBE@"
+
 /* Default centrald port, kept identical to the classic tree's wire protocol default. */
 #define RTS2_CENTRALD_PORT "617"
 
