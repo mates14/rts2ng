@@ -179,6 +179,7 @@ class GeminiUDP:public Telescope
 		int32_t lastDecTicks;
 		double lastAxisSampleTimestamp;
 		double lastMotionAt;		// getNow() when a move, park or re-zero was last in flight
+		double lastCommandedMotionAt;	// getNow() of the last poll we had motion in flight - grace for post-move deceleration
 
 		// set by "position unmoved/cwd" while the mount (re)boots on a
 		// human's word: 'R' restart, 'W'/'C' warm/cold start at CWD
@@ -589,6 +590,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	lastDecTicks = 0;
 	lastAxisSampleTimestamp = 0;
 	lastMotionAt = 0;
+	lastCommandedMotionAt = 0;
 	pendingHumanStartup = 0;
 	lostOnlyForBootMenu = false;
 
@@ -1002,23 +1004,27 @@ int GeminiUDP::abortMoveTracking ()
 		return 1;
 
 	// Below the hard horizon. With both axes sound (which they are, or an
-	// axis-progress detector would already be recovering the move), this is
-	// a pointing state, not a controller fault: it must NOT lock or lose the
-	// mount's position - doing so turned a healthy mount sitting at alt -0.8
-	// into an unrecoverable stop->park->LOST loop, one incident per info()
-	// call (SBT, teld-udp6). Stop tracking so nothing is driven further down,
-	// keep the position trusted, and say so at most once per episode. The
-	// dangerous case - an axis that stops slewing and drives the tube down -
-	// is caught by the RA-axis-progress / wrong-way / arrival detectors,
-	// which recover the move; it never comes through here.
-	Telescope::abortMoveTracking ();	// stops tracking
+	// axis-progress detector would already be recovering the move), this is a
+	// pointing state, not a controller fault. Do NOT lock or lose the mount's
+	// position (that made a healthy mount at alt -0.8 loop stop->park->LOST,
+	// SBT teld-udp6), and - the reason for not calling the base here - do NOT
+	// let this repeatedly stop the mount: infoUTCLST() calls abortMoveTracking()
+	// every poll while the position is low, and the base's stopTracking() ->
+	// stopMove() sends :Q# each time, which cancelled every park the operator
+	// tried and would abort a goto sent to bring the mount back up - the mount
+	// could not be commanded out of a low pose at all (SBT teld-udp7). So do
+	// not interfere: keep the position trusted, warn at most once per episode,
+	// and let the operator or scheduler park it or slew it up. The dangerous
+	// case - an axis that stops slewing and drives the tube down - is caught
+	// by the axis-progress / wrong-way / arrival detectors, which recover the
+	// move; it never comes through here.
 	if (getNow () - belowHorizonWarnedAt > 30.0)
 	{
 		belowHorizonWarnedAt = getNow ();
 		logStream (MESSAGE_WARNING) << "GeminiUDP: the mount points below the hard horizon (alt=" << hrz.alt << " az=" << hrz.az
-			<< ") - tracking stopped, position kept; move it to a target above the horizon to resume" << sendLog;
+			<< ") - position kept; park it or slew to a target above the horizon to resume" << sendLog;
 	}
-	return 1;	// handled here - do not let the caller log it every info() cycle
+	return 1;	// allowed violation: do not stop/abort, and suppress the per-poll caller log
 }
 
 void GeminiUDP::applyStatus (const GeminiStatus &st)
@@ -1190,9 +1196,16 @@ void GeminiUDP::checkSidePrediction (const GeminiStatus &st)
 		predictionMissesValue->inc ();
 		sendValueAll (predictionMissesValue);
 	}
+	if (st.moveFailed || st.moveAborted)
+	{
+		// stopped before it could reach the predicted side - not a rule miss
+		logStream (MESSAGE_INFO) << "GeminiUDP: goto ended on pier side " << st.decSide () << " (predicted " << p.describe ()
+			<< ")" << failedNote << sendLog;
+		return;
+	}
 	logStream (MESSAGE_WARNING) << "GeminiUDP: goto ended on pier side " << st.decSide () << ", predicted " << p.describe ()
 		<< (p.ambiguous (flipAmbiguityMarginValue->getValueDouble ()) ? " - was within flip_ambiguity_margin" : " - NOT within flip_ambiguity_margin, the rule or its inputs are off")
-		<< " (axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << ")" << failedNote << sendLog;
+		<< " (axis ticks RA=" << st.raAxisTicks << " Dec=" << st.decAxisTicks << ")" << sendLog;
 }
 
 // Reflects the caring loop's startup handshake, and does the RTS2-thread
@@ -2175,7 +2188,10 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	}
 
 	rts2_status_t moving = getState () & TEL_MASK_MOVING;
-	bool weCommandedMovement = (moving == TEL_MOVING || moving == TEL_PARKING) || st.moveInProgress || rezeroState != REZERO_IDLE;
+	bool weCommandedMovement = (moving == TEL_MOVING || moving == TEL_PARKING) || st.moveInProgress
+		|| rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || st.parking;
+	if (weCommandedMovement)
+		lastCommandedMotionAt = getNow ();
 
 	// ---- the mount is slewing and we didn't ask it to ----
 	// 'S' slewing / 'C' centering only: 'T' is ordinary tracking and 'G' is
@@ -2183,7 +2199,13 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// RTS2's own state doesn't model as "moving". Note that somebody
 	// driving the mount from the hand controller is indistinguishable from
 	// this - hence safety_enabled being writable at runtime.
-	if (!weCommandedMovement && (st.moveRate == 'S' || st.moveRate == 'C'))
+	// ... and for a few seconds after: a mount decelerating out of a slew or
+	// a park we just commanded (or one whose park was refused mid-move)
+	// legitimately still reports 'S'/'C'. Firing on that turned an aborted
+	// flip + park into a false runaway -> LOST (SBT teld-udp8).
+	constexpr double COMMANDED_MOTION_GRACE_SEC = 12.0;
+	bool recentlyCommanded = getNow () - lastCommandedMotionAt < COMMANDED_MOTION_GRACE_SEC;
+	if (!weCommandedMovement && !recentlyCommanded && (st.moveRate == 'S' || st.moveRate == 'C'))
 		unexpectedMoveCount++;
 	else
 		unexpectedMoveCount = 0;

@@ -1685,12 +1685,12 @@ void GeminiCaringLoop::handlePark ()
 {
 	// parking/parkFailed/parkStatus are already set by requestPark() -
 	// see its comment for why that has to happen there, not here.
-	// Stop the worm first: a park is a goto to CWD, and on SBT a goto whose
-	// RA axis has to run against the worm never slews (see handleGoto's
-	// prestop). gemini2ser.cpp's startPark() stops the mount first too.
-	std::string ignored;
-	sendAndReceive (buildNativeSet (135, "1"), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
-	std::string response;
+	// :Q# then the park command, exactly as gemini2ser.cpp's startPark()
+	// (stopMove() + :hP#), with the WORM LEFT ON. Turning the worm off first
+	// made this firmware reject the park - :h?# came straight back '0' and the
+	// mount never moved (SBT teld-udp7); and a park slews the RA axis fine
+	// with the worm running anyway (udp2/udp3 parked, 77 deg of RA in 32 s).
+	std::string ignored, response;
 	sendAndReceive (":Q#", ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 	std::this_thread::sleep_for (std::chrono::milliseconds (300));
 	sendAndReceive (parkAtStartupPosition.load () ? ":hC#" : ":hP#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);

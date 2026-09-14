@@ -100,6 +100,12 @@ what it was told:
 - an axis not slewing (the RA-axis crawl);
 - tracking while parked.
 
+A park always keeps the worm (sidereal tracking) running - it is `:Q#` then `:hP#`/`:hC#`, exactly as
+`gemini2ser.cpp` does. Turning the worm off first made this firmware reject the park outright (`:h?#` = `0`,
+the mount never moved). And a mount decelerating out of a slew or a park the driver just commanded still
+reports rate `S`/`C` for a few seconds; that no longer counts as unexpected movement (a 12 s grace after any
+commanded motion), which had turned an aborted flip + park into a false runaway incident.
+
 **Pointing below the horizon is not on that list.** With both axes sound, being low is a pointing state, not
 a fault: it stops tracking (so nothing is driven further down), keeps the position trusted, and says so once —
 it does **not** lock or mark the position LOST. (An earlier build did, and turned a healthy mount idling at
