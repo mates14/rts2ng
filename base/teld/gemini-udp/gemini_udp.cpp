@@ -353,7 +353,6 @@ class GeminiUDP:public Telescope
 		//  - a move in flight is travelling away from its target
 		//    (GeminiStatus::moveWrongWay, suspended across a real flip)
 		//  - a move ended nowhere near its target (GeminiStatus::moveFailed)
-		//  - the mount is pointed below safety_alt_limit
 		//  - the mount is tracking while parked - corrected in place first,
 		//    escalated only if the correction doesn't stick
 		enum SafetyState { SAFETY_OK, SAFETY_STOPPING, SAFETY_PARKING, SAFETY_LOCKED };
@@ -364,7 +363,7 @@ class GeminiUDP:public Telescope
 
 		rts2core::ValueBool *safetyEnabledValue;
 		rts2core::ValueBool *safetyLockedValue;		// writable: clearing it is the operator's "I've looked, carry on"
-		rts2core::ValueDouble *safetyAltLimitValue;
+		double belowHorizonWarnedAt;	// rate-limits the below-hard-horizon log
 		rts2core::ValueDouble *wrongWayMarginValue;
 		rts2core::ValueString *safetyStateValue;
 		rts2core::ValueString *lastIncidentValue;
@@ -382,7 +381,6 @@ class GeminiUDP:public Telescope
 		// three times" and make every threshold here meaningless.
 		double lastSafetyPollTimestamp;
 		int unexpectedMoveCount;
-		int belowHorizonCount;
 		int parkedTrackingCount;
 		int parkedTrackingCorrections;
 
@@ -555,8 +553,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	safetyEnabledValue->setValueBool (true);
 	createValue (safetyLockedValue, "safety_locked", "an incident recovery finished and the mount is held blocked - set to false once you've looked at the incident log", false, RTS2_VALUE_WRITABLE);
 	safetyLockedValue->setValueBool (false);
-	createValue (safetyAltLimitValue, "safety_alt_limit", "[deg] altitude below which the mount's own reported position counts as an incident", false, RTS2_VALUE_WRITABLE);
-	safetyAltLimitValue->setValueDouble (5.0);
+	belowHorizonWarnedAt = 0;
 	createValue (wrongWayMarginValue, "wrong_way_margin", "[deg] how far a move in flight may back away from its closest approach to the target before it counts as going the wrong way", false, RTS2_VALUE_WRITABLE);
 	wrongWayMarginValue->setValueDouble (15.0);
 	createValue (safetyStateValue, "safety_state", "OK, or which stage of an incident recovery is running", false);
@@ -638,7 +635,6 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	rezeroArmedValue->setValueBool (false);
 	lastSafetyPollTimestamp = NAN;
 	unexpectedMoveCount = 0;
-	belowHorizonCount = 0;
 	parkedTrackingCount = 0;
 	parkedTrackingCorrections = 0;
 	moveFailReported = false;
@@ -1005,13 +1001,24 @@ int GeminiUDP::abortMoveTracking ()
 	if (caring == nullptr || !caring->getStatus ().valid || std::isnan (hrz.alt))
 		return 1;
 
-	int ret = Telescope::abortMoveTracking ();
-
-	std::ostringstream detail;
-	detail << "framework hard-horizon violation at alt=" << hrz.alt << " az=" << hrz.az;
-	triggerIncident ("mount below the hard horizon", detail.str (), true);
-
-	return ret;
+	// Below the hard horizon. With both axes sound (which they are, or an
+	// axis-progress detector would already be recovering the move), this is
+	// a pointing state, not a controller fault: it must NOT lock or lose the
+	// mount's position - doing so turned a healthy mount sitting at alt -0.8
+	// into an unrecoverable stop->park->LOST loop, one incident per info()
+	// call (SBT, teld-udp6). Stop tracking so nothing is driven further down,
+	// keep the position trusted, and say so at most once per episode. The
+	// dangerous case - an axis that stops slewing and drives the tube down -
+	// is caught by the RA-axis-progress / wrong-way / arrival detectors,
+	// which recover the move; it never comes through here.
+	Telescope::abortMoveTracking ();	// stops tracking
+	if (getNow () - belowHorizonWarnedAt > 30.0)
+	{
+		belowHorizonWarnedAt = getNow ();
+		logStream (MESSAGE_WARNING) << "GeminiUDP: the mount points below the hard horizon (alt=" << hrz.alt << " az=" << hrz.az
+			<< ") - tracking stopped, position kept; move it to a target above the horizon to resume" << sendLog;
+	}
+	return 1;	// handled here - do not let the caller log it every info() cycle
 }
 
 void GeminiUDP::applyStatus (const GeminiStatus &st)
@@ -2163,7 +2170,7 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// leave every check to it, and start from clean counts afterwards
 	if (recoverState != RECOVER_IDLE)
 	{
-		unexpectedMoveCount = belowHorizonCount = 0;
+		unexpectedMoveCount = 0;
 		return;
 	}
 
@@ -2226,42 +2233,14 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 		moveFailReported = false;
 	}
 
-	// ---- the mount is pointed below the horizon ----
-	// Skipped while parked or parking: the park position is wherever the
-	// operator configured it, and a driver that responds to "you asked me
-	// to park and now I am parked" by parking again would never stop.
-	// Also while a move of ours is in flight - especially then. On SBT
-	// (2026-09-14) W->E meridian flips swung the Dec axis to the other side
-	// while the RA axis did not slew; the telescope went to alt 3.8 deg in one
-	// test and to alt -49 deg (tube down, counterweight up) in another. That
-	// is not a flip path: done with both axes, a flip passes near the pole.
-	// (For one build this check was skipped during slews on the mistaken
-	// reading that the low pass was normal. It is not.)
-	if (moving != TEL_PARKED && st.alt < safetyAltLimitValue->getValueDouble ())
-		belowHorizonCount++;
-	else
-		belowHorizonCount = 0;
-
-	if (belowHorizonCount >= SAFETY_CONFIRM_POLLS)
-	{
-		std::ostringstream detail;
-		detail << "mount reports alt=" << st.alt << " az=" << st.az << " deg, below the " << safetyAltLimitValue->getValueDouble ()
-			<< " deg safety limit, for " << belowHorizonCount << " consecutive polls";
-		belowHorizonCount = 0;
-		// low while a move of ours is in flight is a move that failed to
-		// execute (a flip whose RA axis did not slew, so one axis alone drove
-		// the tube down), not a controller we distrust: recover it from CWD,
-		// don't lock the mount. The counters are still sound.
-		if ((moving == TEL_MOVING || st.moveInProgress) && !positionLost () && tryStartMoveRecovery ("pointed below the horizon during a move (" + detail.str () + ")"))
-			return;
-		bool active = weCommandedMovement || isTracking () || st.moveRate != 'N';
-		// A mount that is simply sitting somewhere low is a bad position,
-		// not evidence of a controller fault: park it and leave its
-		// alignment alone. One that got there while moving or tracking is
-		// a controller we no longer trust, so that one gets the cold start.
-		triggerIncident ("mount pointed below the horizon", detail.str (), active);
-		return;
-	}
+	// The mount pointing below the horizon is deliberately NOT an incident
+	// here: with both axes sound it is a pointing state, not a controller
+	// fault, and treating it as one locked a healthy mount at alt -0.8 into
+	// an unrecoverable loop (SBT, teld-udp6). Tracking below the hard horizon
+	// is stopped in abortMoveTracking(); an axis that stops slewing and
+	// drives the tube down is caught as an execution failure (the RA-axis
+	// crawl / wrong-way / arrival detectors -> move recovery), which is where
+	// the real danger - one axis alone carrying the mount - is handled.
 
 	// ---- tracking while parked ----
 	// The mildest of the lot, and the one with a cheap fix: Gemini wakes
@@ -2318,7 +2297,6 @@ void GeminiUDP::setSafetyState (SafetyState newState)
 		// start the next watch from a clean slate rather than from
 		// whatever half-accumulated counts the incident left behind
 		unexpectedMoveCount = 0;
-		belowHorizonCount = 0;
 		parkedTrackingCount = 0;
 		parkedTrackingCorrections = 0;
 		moveFailReported = false;

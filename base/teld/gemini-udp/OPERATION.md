@@ -92,12 +92,22 @@ position becomes `LOST`: "the Dec axis counter jumped to exactly CWD while no mo
 
 ### Safety incidents
 
-The watchdog (`safety_enabled`) still stops the mount on:
-- unexpected slewing;
+The watchdog (`safety_enabled`) still stops the mount on the signs of a *malfunction* — an axis not doing
+what it was told:
+- unexpected slewing (the mount moving when the driver commanded nothing);
 - a move heading away from its target;
 - a move ending far from its target;
-- pointing below `safety_alt_limit`;
+- an axis not slewing (the RA-axis crawl);
 - tracking while parked.
+
+**Pointing below the horizon is not on that list.** With both axes sound, being low is a pointing state, not
+a fault: it stops tracking (so nothing is driven further down), keeps the position trusted, and says so once —
+it does **not** lock or mark the position LOST. (An earlier build did, and turned a healthy mount idling at
+alt −0.8° into an unrecoverable stop→park→LOST loop, one incident per status poll — SBT teld-udp6. It also
+killed legitimate slews that merely dipped low on the way to a valid target.) The dangerous version of low —
+an axis that stops slewing and lets the other carry the tube down — is caught as an *axis* failure (the crawl
+/ wrong-way / arrival detectors → move recovery), not as a horizon event. To resume after the mount has been
+left pointing low, send it to a target above the horizon; no unlock is needed.
 
 The sequence is now **stop → park → locked**. It **never cold-starts** the mount: after an incident nobody
 knows where the telescope is, and a cold start would make wherever it is the new CWD. Incidents that cast
@@ -211,11 +221,8 @@ At startup the driver logs what that means:
     (shown in `centering_speed`); changing `centering_speed` moves the band with it. That does not depend on the rate letter the mount reports (across these failures
     it reported `C`, `S` and `N`). A second rule stops a move at centering rate `C` more than 2° from the
     target for 15 s. Either logs "move ended: RA axis not slewing …" and fails the move without a safety
-    incident (the counters are fine). The below-horizon watchdog remains the last line.
-  - An earlier build skipped the below-horizon watchdog during slews, on the mistaken reading that the low pass
-    was the firmware's normal flip path. It is not: with both axes moving a flip passes near the pole. The
-    watchdog applies during slews again, and it is what stops this failure (3 polls below `safety_alt_limit`).
-- **A stuck goto takes up to 5 minutes to be declared failed** (the move timeout, 300 s; the below-horizon watchdog
+    incident (the counters are fine), and the move recovery (section 3) takes it from there.
+- **A stuck goto takes up to 5 minutes to be declared failed** (the move timeout, 300 s; the RA-axis crawl detector
   stops a flip that goes wrong long before that). Every move now logs one line saying how it ended: "move ended: arrived / stopped moving / timed
   out / stopped by :Q# after N s, X deg from target, mount rate 'R'".
 - **`/var/log/rts2` must exist and be writable** by the user running the driver (it was not; the incident
@@ -311,7 +318,7 @@ corrections are off by the same factor. Check which one `/etc/rts2/img_process` 
 | `sky_evidence`, `rezero_armed`, `rezero_state` | no | section 5 |
 | `move_recovery`, `move_retries` | (retries writable) | move execution-failure recovery (section 3) |
 | `rezero_auto`, `rezero_min`, `rezero_max`, `rezero_samples`, `rezero_agree`, `rezero_spread`, `rezero_interval` | yes | section 5 |
-| `safety_enabled`, `safety_locked`, `safety_alt_limit`, `wrong_way_margin` | yes | as before |
+| `safety_enabled`, `safety_locked`, `wrong_way_margin` | yes | as before (safety_alt_limit removed - a low pointing is no longer a fault) |
 
 ---
 
