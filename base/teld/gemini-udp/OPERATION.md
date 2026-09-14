@@ -118,10 +118,10 @@ is spent, the mount is left parked at CWD with its position still trusted and th
 start behind the driver's back, or the boot menu, is *not* this: those still go to LOST and wait for a human,
 because parking "to CWD" would drive somewhere wrong when the counters can't be believed.
 
-Every goto — and every park — now stops the worm and waits for the RA axis to come to rest before it moves
-(`goto_prestop`, default STOP_TRACKING), because a move whose RA axis has to run against a turning worm is
-exactly what crawls. So on a healthy mount the recovery should rarely fire; it is the safety net for when the
-worm-off measure is not enough.
+Every goto sends `:Q#` first by default (`goto_prestop` = STOP), matching `gemini2ser.cpp` — it clears a
+stray prior move and leaves the worm tracking, so no sky is lost. Whether the SBT crawl needs more than that
+(stopping the worm) is unsettled and is what the mount test checks; until it is, the recovery above is the net
+for a goto that crawls, and a park stops the worm first because a park ends stopped anyway.
 
 One consequence for a scheduler: while a move is being recovered the framework sees a single move that stays
 in flight for the whole stop/park/retry cycle. In the worst case that is `move_retries` times
@@ -194,9 +194,11 @@ At startup the driver logs what that means:
   against the tracking direction (towards CWD and past it), so the leading suspect is Gemini's "stop an axis
   that must reverse before slewing it" step in its goto routine, run while the worm is tracking. The
   production driver (`gemini2ser.cpp`) always sends `:Q#` before a goto.
-  - `goto_prestop` selects what is sent ahead of every goto: `NONE` (as in those tests), `STOP` (`:Q#`, like
-    the production driver — the default) or `STOP_TRACKING` (worm off, then `:Q#`). If the suspicion is right,
-    `STOP` fixes W→E flips and changes nothing for E→W. See dry-run step H.
+  - **This is unproven.** `goto_prestop` selects what is sent ahead of every goto: `NONE`, `STOP` (`:Q#`, like
+    the production driver — the **default**, no sky lost), or `STOP_TRACKING` (worm off, `:Q#`, wait for the RA
+    axis to rest — which costs a tracking gap on every goto, so it is not the default). The default sends only
+    `:Q#`, exactly what the known-good `gemini2ser.cpp` does; whether the mount needs the worm stopped is what
+    the mount test decides (step H). If it does, the move-recovery net catches any goto that crawls meanwhile.
   - The mechanism, from the polls: on W→E gotos the **Dec axis slews normally and the RA axis never leaves
     centering speed**, while on E→W gotos the RA axis slews first (157° in ~11 s) and Dec follows. With a small
     RA difference that looks like a crawl that nearly gets there; with a large one the Dec axis alone carries
@@ -387,10 +389,13 @@ running the driver. Keep a hand on stop: a failing W→E flip can point the tube
 watchdog's three polls are up — prefer northern targets (Dec ≥ +40°) for this test, where the failure stays
 above the horizon.
 
-1. Track a target on the W side. With `goto_prestop` = `NONE`, goto a target that needs a W→E flip. *Expect*
-   (as before) the RA axis not to slew. Stop it.
-2. Same start, `goto_prestop` = `STOP`. If the suspicion is right, the flip now works.
-3. If not, `goto_prestop` = `STOP_TRACKING`.
+The default is `STOP` (`:Q#`), so a W→E flip on the default is the first data point: does it crawl (→ the
+recovery parks and retries) or slew? Then vary the setting to find the lightest thing that works:
+1. Track a target on the W side. With `goto_prestop` = `NONE`, goto a target that needs a W→E flip. Note
+   whether the RA axis slews or crawls.
+2. Same start, `goto_prestop` = `STOP` (the default, `:Q#` only).
+3. Same start, `goto_prestop` = `STOP_TRACKING` (worm off). If only this one slews, the worm is the cause and
+   the tracking-gap cost is justified; if `STOP` or `NONE` already slews, leave the default and avoid the gap.
 4. Separate "flip" from "RA axis reversing": from a tracking W-side start, goto a target further **east on
    the same side** (no flip, the RA axis runs against tracking) with `NONE`. If that fails too, the reversal
    is the cause.

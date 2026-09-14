@@ -451,11 +451,16 @@ class GeminiCaringLoop
 		void setFlipAmbiguityMargin (double deg) { flipAmbiguityMarginDeg = deg; }
 
 		/**
-		 * What to send ahead of every goto. On SBT two meridian flips sent
-		 * to a tracking mount moved the RA axis at ~21x sidereal for the
-		 * whole move, while gotos from a stopped mount slewed normally; the
-		 * production driver always stops first. Which of these the mount
-		 * actually needs is still to be established on the sky.
+		 * What to send ahead of every goto. STOP (the default) is :Q#, exactly
+		 * what the production gemini2ser.cpp does - it clears a stray prior
+		 * move and leaves the worm tracking, so no sky is lost. On SBT two
+		 * meridian flips sent to a tracking mount crawled the RA axis at ~21x
+		 * sidereal while gotos from a stopped mount slewed; STOP_TRACKING
+		 * (worm off, :Q#, wait for the RA axis to rest) is the experiment for
+		 * that, but it costs a tracking gap on every goto, so it is NOT the
+		 * default - whether the mount needs anything beyond :Q# is still to be
+		 * settled on the sky, and the move-recovery supervisor is the net
+		 * meanwhile.
 		 */
 		enum GotoPrestop { PRESTOP_NONE = 0, PRESTOP_STOP = 1, PRESTOP_STOP_TRACKING = 2 };
 		void setGotoPrestop (GotoPrestop mode) { gotoPrestop = (int) mode; }

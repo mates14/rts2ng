@@ -526,11 +526,11 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	createValue (gotoPredictionValue, "goto_prediction", "pier side outcome predicted for the last goto from Gemini's own decision rule", false);
 	createValue (flipAmbiguityMarginValue, "flip_ambiguity_margin", "[deg] side predictions closer than this to a window edge count as too close to call (Gemini's pointing model is not predicted)", false, RTS2_VALUE_WRITABLE);
 	flipAmbiguityMarginValue->setValueDouble (0.5);
-	createValue (gotoPrestopValue, "goto_prestop", "sent ahead of every goto: NONE, STOP (:Q#, as gemini2ser.cpp), STOP_TRACKING (worm off, :Q#, wait until the RA axis is still - default)", false, RTS2_VALUE_WRITABLE);
+	createValue (gotoPrestopValue, "goto_prestop", "sent ahead of every goto: NONE, STOP (:Q#, as gemini2ser.cpp - default), STOP_TRACKING (worm off, :Q#, wait until the RA axis is still - loses a little sky, only if the mount is shown to need it)", false, RTS2_VALUE_WRITABLE);
 	gotoPrestopValue->addSelVal ("NONE");
 	gotoPrestopValue->addSelVal ("STOP");
 	gotoPrestopValue->addSelVal ("STOP_TRACKING");
-	gotoPrestopValue->setValueInteger (GeminiCaringLoop::PRESTOP_STOP_TRACKING);
+	gotoPrestopValue->setValueInteger (GeminiCaringLoop::PRESTOP_STOP);
 	createValue (predictionMissesValue, "side_prediction_misses", "gotos that ended on a different pier side than predicted", false);
 	predictionMissesValue->setValueInteger (0);
 	verifiedGotoSerial = 0;

@@ -451,7 +451,7 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	activeMoveTargetRa (NAN), activeMoveTargetDec (NAN),
 	abortRequested (false), parkRequested (false), parkAtStartupPosition (false), rebootRequested (false), rebootCold (false),
 	startupMode ((int) STARTUP_NONE), forcedSelection ((int) STARTUP_NONE), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
-	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP_TRACKING),
+	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP),
 	moveMinSeparation (NAN), crawlSince (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
 	slowPollCounter (0), nextDatagramNumber (0)
 {
