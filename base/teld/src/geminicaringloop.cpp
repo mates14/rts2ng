@@ -40,7 +40,11 @@ namespace
 {
 	constexpr double MOVE_STABLE_DEG = 0.01;
 	constexpr double MOVE_MIN_SETTLE_SEC = 3.0;
-	constexpr double MOVE_MAX_SEC = 60.0;	// forces a stop-and-check past this even if nobody called requestAbort()
+	// forces a stop-and-check past this even if nobody called requestAbort().
+	// Not a slew duration estimate: Gemini sequences the axes of some moves
+	// (on SBT, a meridian flip swung Dec over the pole for 30 s before the
+	// RA axis started - 2026-09-14), so a long flip can take minutes.
+	constexpr double MOVE_MAX_SEC = 300.0;
 	constexpr double ARRIVAL_TOLERANCE_DEG = 0.5;	// generous vs. the ~0.01-0.02 deg errors seen on real successful slews - catches "stopped nowhere near the target", not normal settling wobble
 	constexpr double COMMAND_TIMEOUT_SEC = 1.0;
 	constexpr int RESYNC_ATTEMPTS = 5;
@@ -886,7 +890,10 @@ void GeminiCaringLoop::pollStatus ()
 		else
 			stableCount = 0;
 
-		bool stoppedChanging = stableCount >= 2 && (fresh.timestamp - moveStartedAt) >= MOVE_MIN_SETTLE_SEC;
+		// never while the mount itself still reports slewing/centering: a
+		// sequenced move can hold one axis still while the other waits
+		bool stoppedChanging = stableCount >= 2 && (fresh.timestamp - moveStartedAt) >= MOVE_MIN_SETTLE_SEC
+			&& fresh.moveRate != 'S' && fresh.moveRate != 'C';
 		bool timedOut = fresh.timestamp > moveDeadline;
 
 		// "stopped changing" is NOT the same thing as "arrived" - a move
@@ -1445,6 +1452,7 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveWrongWay = false;
 		status.movePierChanged = movePierChangedFlag;
 		status.moveSeparation = NAN;
+		status.parkStatus = '0';	// the firmware clears its park status on every goto
 		status.gotoSerial++;
 		status.lastPrediction = prediction;
 	}

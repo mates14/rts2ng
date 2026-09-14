@@ -161,6 +161,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueString *positionReasonValue;
 		const char *positionStatePath;
 		double positionStateSavedAt;
+		bool positionStateFailed;
 
 		// what the state file said when the driver started
 		PositionTrust savedTrust;
@@ -543,6 +544,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	positionTrust = TRUST_UNKNOWN;
 	positionStatePath = "/var/log/rts2/gemini-udp-position.state";
 	positionStateSavedAt = 0;
+	positionStateFailed = false;
 	savedTrust = TRUST_UNKNOWN;
 	savedHaveAxis = false;
 	savedDecTicks = 0;
@@ -916,6 +918,12 @@ int GeminiUDP::abortMoveTracking ()
 	// being logged every second, and - the reason this matters now - stops
 	// a NaN opening a safety incident and cold-starting a healthy mount.
 	if (caring == nullptr || !caring->getStatus ().valid || std::isnan (hrz.alt))
+		return 1;
+
+	// the same reason as checkSafety()'s below-horizon check: a slew of ours
+	// legitimately passes low (Dec-first meridian flips)
+	rts2_status_t moving = getState () & TEL_MASK_MOVING;
+	if (moving == TEL_MOVING || moving == TEL_PARKING || caring->getStatus ().moveInProgress || rezeroState != REZERO_IDLE)
 		return 1;
 
 	int ret = Telescope::abortMoveTracking ();
@@ -1369,7 +1377,15 @@ void GeminiUDP::savePositionState (const GeminiStatus *st)
 	{
 		std::ofstream f (tmp.c_str (), std::ios::trunc);
 		if (!f.good ())
+		{
+			if (!positionStateFailed)
+			{
+				positionStateFailed = true;
+				logStream (MESSAGE_ERROR) << "GeminiUDP: cannot write the position state file " << positionStatePath
+					<< " - position_trust will not survive a driver restart; create the directory, make it writable, or use --position-state" << sendLog;
+			}
 			return;
+		}
 		f << "trust " << (int) positionTrust << "\n";
 		f << "reason " << positionReasonValue->getValue () << "\n";
 		if (st && st->axisValid)
@@ -2109,7 +2125,13 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// Skipped while parked or parking: the park position is wherever the
 	// operator configured it, and a driver that responds to "you asked me
 	// to park and now I am parked" by parking again would never stop.
-	if (moving != TEL_PARKED && moving != TEL_PARKING && st.alt < safetyAltLimitValue->getValueDouble ())
+	// Only while nothing of ours is moving the mount. In flight, pointing low
+	// is part of the path: Gemini sequences a meridian flip Dec axis first,
+	// and until the RA axis follows the telescope points at the same
+	// declination 12h away - on SBT (2026-09-14) Dec +40 went to alt 3.8 deg
+	// in the north for several seconds of a perfectly healthy flip. A move
+	// that stays wrong is caught by the wrong-way, arrival and timeout checks.
+	if (!weCommandedMovement && moving != TEL_PARKED && st.alt < safetyAltLimitValue->getValueDouble ())
 		belowHorizonCount++;
 	else
 		belowHorizonCount = 0;

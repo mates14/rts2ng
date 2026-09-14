@@ -159,6 +159,16 @@ At startup the driver logs what that means:
   tracking stop; the driver flips at HA −0.5°, about 6 minutes before it. An exposure still running then
   blocks the flip until it ends, and the mount may reach the limit and stop tracking in the meantime; the flip
   follows once the exposure ends.
+- **Flips are sequenced, Dec axis first.** In the 2026-09-14 test a W→E flip swung Dec from +40° over the
+  pole and back down to +40° on the other side in about 30 s while the RA axis waited. Until the RA axis
+  follows, the telescope really points at the same declination 12 h away: low in the north, alt 3.8° at
+  az 337° for Dec +40°. This is the mount's own path, not a fault. The below-horizon watchdog (and the
+  framework's hard-horizon hook) now apply only while no move, park or re-zero of the driver's is in flight;
+  a slew that stays wrong is caught by the wrong-way, arrival and timeout checks. The move timeout is 300 s,
+  and a move is never declared stopped while the mount still reports slewing.
+- **`/var/log/rts2` must exist and be writable** by the user running the driver (it was not; the incident
+  report went only to the RTS2 log and the position state was not saved). Create it, or pass
+  `--incident-log` and `--position-state`.
 - **Flip points:** 229 = 2 enables Gemini's western flip point, which can force flips the prediction does not
   model. Either set 229 to 0, or treat `side_prediction_misses` on the W side with that in mind.
 
