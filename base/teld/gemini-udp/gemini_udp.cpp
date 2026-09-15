@@ -1162,6 +1162,21 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 		{
 			trackingLimitWarned = false;
 			trackingLimitWaitLogged = false;
+			// The mount is no longer near the limit - typically because the
+			// scheduler slewed it to a new target before the armed action
+			// could run. Disarm, and give the cameras back: armLimitAction()
+			// called blockExposure(), and the only thing that used to lift it
+			// was the action actually executing. Left armed, the block stayed
+			// on (nothing can expose, so a script waits for ever) and the
+			// stale action could later fire a flip in a completely different
+			// part of the sky.
+			if (pendingLimitAction != LIMIT_ACTION_NONE)
+			{
+				pendingLimitAction = LIMIT_ACTION_NONE;
+				clearExposure ();
+				logStream (MESSAGE_INFO) << "GeminiUDP: tracking limit no longer close ("
+					<< st.trackingSecToWestLimit << " s) - the armed flip/park is cancelled and exposures are unblocked" << sendLog;
+			}
 		}
 	}
 
