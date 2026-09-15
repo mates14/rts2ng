@@ -254,6 +254,16 @@ class Filtros(scriptcomm.Rts2Comm):
                     self.log('I', f"{self.name}: Exposure completed: {image}")
                     self.process(image)
                     num_completed += 1
+                except scriptcomm.Rts2NotActive:
+                    # RTS2 has deactivated this script - the target ended, or
+                    # EXEC restarted. That is not a retryable exposure error:
+                    # every further exposure fails the same way, num_completed
+                    # never advances, and this loop then holds the camera for
+                    # ever, retrying on the delay below. Observed 2026-09-15
+                    # holding C2 and blocking a pointing-model target from
+                    # ever concluding.
+                    self.log('I', f"{self.name}: deactivated by RTS2, ending after {num_completed} exposures")
+                    return num_completed
                 except Exception as e:
                     self.log('E', f"{self.name}: Exposure failed: {str(e)}")
                     continue
@@ -268,6 +278,9 @@ class Filtros(scriptcomm.Rts2Comm):
 
             return num_completed
 
+        except scriptcomm.Rts2NotActive:
+            self.log('I', f"{self.name}: deactivated by RTS2, ending")
+            return 0
         except TimeoutError as e:
             self.log('E', f"{self.name}: {str(e)}")
             return 0
