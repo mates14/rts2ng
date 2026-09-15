@@ -716,6 +716,11 @@ class GeminiCaringLoop
 		// reusing commandQueue/NativeSetCommand since these aren't native
 		// >ID:VAL# register writes
 		std::deque<std::string> rawCommandQueue;
+		// when the last guide pulse was sent and how long it runs. A goto that
+		// lands while the pulse is still moving an axis is the "never slew
+		// while guiding" quirk - and the crawl we reproduced: a command into a
+		// moving axis shock-stops it and it then creeps at centering speed.
+		std::atomic<double> lastPulseEndsAt { 0.0 };
 
 		uint32_t nextDatagramNumber;
 };

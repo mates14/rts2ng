@@ -44,6 +44,8 @@ namespace
 	constexpr double CRAWL_MAX_SEC = 15.0;
 	// RA axis speed band that is neither a slew nor a wait - see pollAxisPosition()
 	constexpr double CRAWL_WINDOW_SEC = 15.0;
+	// how long after a guide pulse ends before a slew may be sent (deceleration)
+	constexpr double PULSE_SETTLE_SEC = 0.3;
 	// how far off the counterweight-down position a completed park may be. The
 	// mount settles within a few arcmin; the bad park was 17.8 deg out.
 	constexpr double PARK_TOLERANCE_DEG = 1.0;
@@ -595,6 +597,9 @@ void GeminiCaringLoop::queuePulseGuide (char direction, unsigned int magnitude)
 		return;	// matches gemini2ser.cpp's performGuide() - reject, don't clamp, see header
 	char buf[16];
 	snprintf (buf, sizeof (buf), ":Mi%c%u#", direction, magnitude);
+	// the pulse keeps the axis moving for its own duration after the command
+	// returns; handleGoto() must not send a slew into that - see lastPulseEndsAt
+	lastPulseEndsAt = nowSeconds () + magnitude / 1000.0 + PULSE_SETTLE_SEC;
 	std::lock_guard<std::mutex> lock (mutex_);
 	rawCommandQueue.push_back (buf);
 }
@@ -1545,6 +1550,22 @@ void GeminiCaringLoop::handleGoto ()
 		// sends :Q# ahead of a goto; on SBT (2026-09-14) two meridian flips
 		// sent to a tracking mount without it ran the RA axis at ~21x
 		// sidereal for the whole move instead of slewing.
+		// Never start a slew while a guide pulse is still moving an axis.
+		// Torman's rule for this mount, and the mechanism we reproduced: a
+		// command arriving at a moving axis shock-stops it (violently - it
+		// leaves the mount ringing) and the axis then creeps at centering
+		// speed instead of slewing. Guide pulses are asynchronous, so without
+		// this the failure is random, which is exactly how it behaved.
+		{
+			double waitUntil = lastPulseEndsAt.load ();
+			double now = nowSeconds ();
+			if (waitUntil > now)
+			{
+				double sleepFor = std::min (waitUntil - now, 2.0);
+				std::this_thread::sleep_for (std::chrono::milliseconds ((int) (sleepFor * 1000)));
+			}
+		}
+
 		// Drain any queued native sets first (e.g. the setTracking(131) the
 		// framework's endMove() queues after the previous move): otherwise
 		// one could drain right after this goto's worm-stop and turn the worm

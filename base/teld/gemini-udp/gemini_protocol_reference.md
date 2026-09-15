@@ -432,6 +432,20 @@ _Note: the directions mentioned depend upon the hemisphere of the observing site
 | Command | Returns | Remarks |
 |---|---|---|
 | `:Q#` |  | Quit all movements mentioned below (a slew in progress, guiding, and other auxiliary moves). Sidereal tracking (the RA worm) is NOT stopped and keeps running - confirmed by the operator, 2026-09-14. This is why goto_prestop=STOP (:Q# only, the driver default) loses no sky, and why stopping the worm needs the separate native 135. |
+
+**Two operational quirks of this mount** (from Torman via the operator, 2026-09-15), both of which
+match what we reproduced here:
+
+1. **Never start a slew while guiding is active.** A guide pulse keeps an axis moving after the
+   command returns; a goto landing in that window hits a moving axis. On SBT that shock-stops the
+   axis (violently enough to leave the mount ringing) and it then creeps at the centering speed
+   instead of slewing - the "crawl". Because guide pulses are asynchronous this makes the failure
+   look random, which is exactly how it behaved (6 of 6 crawls one day, 0 of 9 the next). The
+   driver now delays a goto until any guide pulse has finished plus 0.3 s.
+2. **Short moves should be made at CENTERING speed, not full slew.** Doing a small correction as a
+   full-speed goto is reported to misbehave. NOT yet implemented in this driver - a correction
+   currently goes out as an ordinary goto. The threshold ("how short") is not established; the move
+   log records distance and per-axis rate for every move, so a pointing-model run will show it.
 | `:Qe#` |  | Quit movement eastwards. |
 | `:Qw#` |  | Quit movement westwards. |
 | `:Qn#` |  | Quit movement northwards. |
