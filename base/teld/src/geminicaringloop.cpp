@@ -815,6 +815,7 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveAborted = from.moveAborted;
 	to.moveExecutionFault = from.moveExecutionFault;
 	to.parkFailReason = from.parkFailReason;
+	to.predictionWarning = from.predictionWarning;
 	to.lastMoveSeparation = from.lastMoveSeparation;
 	to.moveEndReason = from.moveEndReason;
 	to.moveEndSerial = from.moveEndSerial;
@@ -1523,11 +1524,6 @@ void GeminiCaringLoop::handleGoto ()
 	{
 		message = "not sent: the caller needs a pier flip, predicted " + prediction.describe ();
 	}
-	else if (prediction.outcome == GeminiSidePrediction::REFUSE && !prediction.ambiguous (ambiguityMargin))
-	{
-		// Gemini would answer 6 - there is no point asking it
-		message = "not sent: the target fits neither side of the pier (" + prediction.describe () + ")";
-	}
 	else if (cancelled)
 	{
 		// the prediction reads above take real round trips, long enough
@@ -1565,6 +1561,20 @@ void GeminiCaringLoop::handleGoto ()
 			}
 			std::string ignored;
 			sendAndReceive (buildNativeSet (queued.id, queued.valueStr), ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+		}
+
+		// A REFUSE prediction is a warning, NOT a veto: the mount is the
+		// authority and answers 6 itself if it really will not take the
+		// target. Vetoing here would silently reject good targets wherever
+		// the model of the window is off - and it is: modelling native 223 as
+		// 7 deg off the west end of the goto window turns the 2 deg overlap
+		// the two sides must have around the meridian into a 5 deg hole,
+		// which cannot be right (there is no hour angle neither side reaches).
+		if (prediction.outcome == GeminiSidePrediction::REFUSE)
+		{
+			std::lock_guard<std::mutex> lock (mutex_);
+			status.predictionWarning = "the side prediction says this target fits neither side of the pier ("
+				+ prediction.describe () + ") - sent anyway, the mount decides";
 		}
 
 		int prestop = gotoPrestop.load ();
@@ -1680,6 +1690,7 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveWrongWay = false;
 		status.moveAborted = false;
 		status.moveExecutionFault = false;
+		status.predictionWarning.clear ();
 		status.movePierChanged = movePierChangedFlag;
 		status.moveSeparation = NAN;
 		status.parkStatus = '0';	// the firmware clears its park status on every goto

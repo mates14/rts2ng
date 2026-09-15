@@ -270,6 +270,9 @@ struct GeminiStatus
 	bool parking = false;
 	bool parkFailed = false;
 	std::string parkFailReason;	// why, when parkFailed - empty for the plain ":h?# said 0" case
+	// set when a goto was sent despite the side prediction refusing it - the
+	// prediction warns, the mount decides (see handleGoto)
+	std::string predictionWarning;
 	char parkStatus = '?';
 
 	// ---- startup / boot-menu handshake (the 0x06 ACK command) ----

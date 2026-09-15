@@ -178,6 +178,7 @@ class GeminiUDP:public Telescope
 		bool haveLastAxis;
 		int32_t lastDecTicks;
 		double lastAxisSampleTimestamp;
+		std::string lastPredictionWarning;
 		double lastMotionAt;		// getNow() when a move, park or re-zero was last in flight
 		double lastCommandedMotionAt;	// getNow() of the last poll we had motion in flight - grace for post-move deceleration
 
@@ -1295,6 +1296,12 @@ void GeminiUDP::checkStartup (const GeminiStatus &st)
 		sendValueAll (centeringSpeedValue);
 		logStream (MESSAGE_INFO) << "GeminiUDP: centering speed " << st.centeringSpeed << "x sidereal (native 170) - an RA axis moving at "
 			<< (st.centeringSpeed + 1) * 15.04106858 / 3600.0 << " deg/s during a goto is taken for one that does not slew" << sendLog;
+	}
+
+	if (!st.predictionWarning.empty () && st.predictionWarning != lastPredictionWarning)
+	{
+		lastPredictionWarning = st.predictionWarning;
+		logStream (MESSAGE_WARNING) << "GeminiUDP: " << st.predictionWarning << sendLog;
 	}
 
 	if (!std::isnan (st.clockOffsetSec) && fabs (st.clockOffsetSec) > 2.0)
