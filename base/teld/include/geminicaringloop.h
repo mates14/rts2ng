@@ -103,6 +103,7 @@ struct GeminiAxisGeometry
 	int flipPoints = -1;			// native 229: flip points in use, 0 none; -1 unread
 
 	double ticksPerDeg () const { return raHalf / 180.0; }
+	double decTicksPerDeg () const { return decHalf / 180.0; }
 	int32_t westGotoTicks () const { return (int32_t) (westGotoDeg * ticksPerDeg ()); }
 
 	// the RA axis window a goto target has to land strictly inside
@@ -268,6 +269,7 @@ struct GeminiStatus
 	// See GeminiCaringLoop::pollParkStatus().
 	bool parking = false;
 	bool parkFailed = false;
+	std::string parkFailReason;	// why, when parkFailed - empty for the plain ":h?# said 0" case
 	char parkStatus = '?';
 
 	// ---- startup / boot-menu handshake (the 0x06 ACK command) ----
@@ -689,8 +691,10 @@ class GeminiCaringLoop
 		// caring-thread-only, like the move-tracking members above
 		double moveMinSeparation;
 		double crawlSince;	// timestamp the mount started reporting centering rate far from its target, NAN otherwise
-		// RA axis samples (time, ticks) of the move in flight, for the RA-axis crawl check in pollAxisPosition()
-		std::deque<std::pair<double, int32_t>> raAxisHistory;
+		// axis samples (time, RA ticks, Dec ticks) of the motion in flight, for
+		// the crawl check in pollAxisPosition() - both axes, gotos and parks
+		struct AxisSample { double t; int32_t ra, dec; };
+		std::deque<AxisSample> axisHistory;
 		int wrongWayCount;
 		char moveStartPierSide;
 		char moveStartDecSide;

@@ -43,9 +43,12 @@ namespace
 	constexpr double CRAWL_MIN_SEPARATION_DEG = 2.0;	// centering this far from the target is not centering
 	constexpr double CRAWL_MAX_SEC = 15.0;
 	// RA axis speed band that is neither a slew nor a wait - see pollAxisPosition()
-	constexpr double RA_CRAWL_WINDOW_SEC = 15.0;
-	constexpr double RA_CRAWL_RECENT_SEC = 5.0;
-	constexpr double RA_CRAWL_OBSERVED_DEG_SEC = 0.088;	// SBT, when native 170 could not be read
+	constexpr double CRAWL_WINDOW_SEC = 15.0;
+	// how far off the counterweight-down position a completed park may be. The
+	// mount settles within a few arcmin; the bad park was 17.8 deg out.
+	constexpr double PARK_TOLERANCE_DEG = 1.0;
+	constexpr double CRAWL_RECENT_SEC = 5.0;
+	constexpr double CRAWL_OBSERVED_DEG_SEC = 0.088;	// SBT, when native 170 could not be read
 	constexpr double SIDEREAL_DEG_SEC = 15.04106858 / 3600.0;
 	// forces a stop-and-check past this even if nobody called requestAbort().
 	// Not a slew duration estimate: Gemini sequences the axes of some moves
@@ -811,6 +814,7 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveWrongWay = from.moveWrongWay;
 	to.moveAborted = from.moveAborted;
 	to.moveExecutionFault = from.moveExecutionFault;
+	to.parkFailReason = from.parkFailReason;
 	to.lastMoveSeparation = from.lastMoveSeparation;
 	to.moveEndReason = from.moveEndReason;
 	to.moveEndSerial = from.moveEndSerial;
@@ -1051,60 +1055,82 @@ void GeminiCaringLoop::pollAxisPosition ()
 		status.movePierChanged = true;
 	}
 
-	// The SBT W->E failure seen on the RA axis itself (udp3-udp5): the RA axis
-	// runs at ~0.09 deg/s - about 21x sidereal - for the whole move, whatever
-	// rate character the mount reports (udp5 move 4 said 'S' throughout while
-	// the Dec axis alone drove the tube to alt -49). A slewing RA axis moves
-	// degrees per second, a waiting or tracking one ~0; only a crawl sits in
-	// between. Needs the predicted target counter, so predicted moves only.
-	if (!status.moveInProgress || std::isnan (status.lastPrediction.targetRaTicks) || !status.geometry.valid)
+	// An axis that runs at the mount's CENTERING speed instead of slewing.
+	// Seen on the RA axis on W->E flips (udp3-udp5) and on the Dec axis during
+	// a park issued while the other axis was still slewing (udp8, and
+	// reproduced on the mount 2026-09-15: Dec crept 155 s toward the pole).
+	// Either axis can be the victim, and it happens to parks as well as gotos,
+	// so this watches both axes whenever the mount is moving on our orders.
+	// No target position is needed: a legitimate centering approach lasts a
+	// poll or three (measured 1-3 polls over every good move in udp3-udp5),
+	// while a crawl runs for tens of seconds - the duration separates them.
+	if (!(status.moveInProgress || status.parking) || !status.geometry.valid)
 	{
-		raAxisHistory.clear ();
+		axisHistory.clear ();
 		return;
 	}
 	double now = status.axisTimestamp;
-	raAxisHistory.push_back ({ now, ra });
-	while (raAxisHistory.size () > 2 && now - raAxisHistory[1].first >= RA_CRAWL_WINDOW_SEC)
-		raAxisHistory.pop_front ();
-
-	double k = status.geometry.ticksPerDeg ();
-	double remainingDeg = fabs (status.lastPrediction.targetRaTicks - ra) / k;
-	double span = now - raAxisHistory.front ().first;
-	if (span < RA_CRAWL_WINDOW_SEC || remainingDeg <= CRAWL_MIN_SEPARATION_DEG)
+	axisHistory.push_back ({ now, ra, dec });
+	while (axisHistory.size () > 2 && now - axisHistory[1].t >= CRAWL_WINDOW_SEC)
+		axisHistory.pop_front ();
+	double span = now - axisHistory.front ().t;
+	if (span < CRAWL_WINDOW_SEC)
 		return;
-	// The band is built around the mount's own centering rate, which is what a
-	// non-slewing RA axis runs at: (native 170 + 1) x sidereal, on SBT
-	// 20 -> 0.088 deg/s, measured 0.0858-0.0891 over four failures. Half to
-	// twice that; a tracking axis (0.0042 deg/s) is far below, a slew far above.
-	double crawl = status.centeringSpeed > 0 ? (status.centeringSpeed + 1) * SIDEREAL_DEG_SEC : RA_CRAWL_OBSERVED_DEG_SEC;
+
+	// the band around the mount's own centering rate: (native 170 + 1) x
+	// sidereal - 0.088 deg/s on SBT, measured 0.0858-0.0891 over four failures
+	double crawl = status.centeringSpeed > 0 ? (status.centeringSpeed + 1) * SIDEREAL_DEG_SEC : CRAWL_OBSERVED_DEG_SEC;
 	double minRate = crawl * 0.45, maxRate = crawl * 2.2;
-	double rateDegSec = fabs ((double) ra - raAxisHistory.front ().second) / k / span;
-	if (rateDegSec < minRate || rateDegSec > maxRate)
-		return;
-	// ...and steadily: the last few seconds must be in the band too, or an axis
-	// that waited and has just started to slew would briefly average into it
-	double recentRate = NAN;
-	for (auto it = raAxisHistory.rbegin (); it != raAxisHistory.rend (); ++it)
-	{
-		if (now - it->first >= RA_CRAWL_RECENT_SEC)
-		{
-			recentRate = fabs ((double) ra - it->second) / k / (now - it->first);
-			break;
-		}
-	}
-	if (std::isnan (recentRate) || recentRate < minRate || recentRate > maxRate)
-		return;
 
-	char end[220];
-	snprintf (end, sizeof (end), "RA axis not slewing - %.3f deg/s over %.0f s, %.2f deg of RA axis still to go, after %.0f s (Dec axis %s); stopped",
-		rateDegSec, span, remainingDeg, now - moveStartedAt, side == moveStartDecSide ? "not flipped yet" : "already flipped");
-	status.moveEndReason = end;
-	status.moveEndSerial = status.gotoSerial;
-	status.moveInProgress = false;
-	status.moveAborted = true;
-	status.moveExecutionFault = true;
-	abortRequested = true;
-	raAxisHistory.clear ();
+	for (int axis = 0; axis < 2; axis++)
+	{
+		bool isRa = axis == 0;
+		double k = isRa ? status.geometry.ticksPerDeg () : status.geometry.decTicksPerDeg ();
+		if (k <= 0)
+			continue;
+		int32_t nowTicks = isRa ? ra : dec;
+		auto ticksOf = [isRa] (const AxisSample &s) { return isRa ? s.ra : s.dec; };
+
+		double rateDegSec = fabs ((double) nowTicks - ticksOf (axisHistory.front ())) / k / span;
+		if (rateDegSec < minRate || rateDegSec > maxRate)
+			continue;
+		// ...and steadily: the last few seconds must be in the band too, or an
+		// axis that waited and has just started to slew would briefly average in
+		double recentRate = NAN;
+		for (auto it = axisHistory.rbegin (); it != axisHistory.rend (); ++it)
+		{
+			if (now - it->t >= CRAWL_RECENT_SEC)
+			{
+				recentRate = fabs ((double) nowTicks - ticksOf (*it)) / k / (now - it->t);
+				break;
+			}
+		}
+		if (std::isnan (recentRate) || recentRate < minRate || recentRate > maxRate)
+			continue;
+
+		char what[260];
+		snprintf (what, sizeof (what), "%s axis not slewing - %.3f deg/s (the mount's centering speed) for %.0f s",
+			isRa ? "RA" : "Dec", rateDegSec, span);
+		if (status.parking)
+		{
+			// a park that crawls would take minutes; stop it and say so rather
+			// than let the framework's park timeout expire in silence
+			status.parking = false;
+			status.parkFailed = true;
+			status.parkFailReason = what;
+		}
+		else
+		{
+			status.moveEndReason = std::string (what) + "; stopped";
+			status.moveEndSerial = status.gotoSerial;
+			status.moveInProgress = false;
+			status.moveAborted = true;
+			status.moveExecutionFault = true;
+		}
+		abortRequested = true;
+		axisHistory.clear ();
+		return;
+	}
 }
 
 bool GeminiCaringLoop::readGeometryInternal ()
@@ -1629,7 +1655,7 @@ void GeminiCaringLoop::handleGoto ()
 		moveMinSeparation = NAN;
 		wrongWayCount = 0;
 		crawlSince = NAN;
-		raAxisHistory.clear ();
+		axisHistory.clear ();
 		moveStartPierSide = pierSideNow;
 		moveStartDecSide = prediction.sideBefore != '?' ? prediction.sideBefore : decSideNow;
 		// a flip that is expected, or can't be ruled out, suspends the
@@ -1720,11 +1746,33 @@ void GeminiCaringLoop::pollParkStatus ()
 	{
 		status.parking = false;
 		status.parkFailed = false;
+		status.parkFailReason.clear ();
+		// The park flag is not proof the mount got there. On SBT (2026-09-15) a
+		// park stopped with the Dec axis 17.8 deg short of the pole, went idle,
+		// set its park flag anyway - and then ignored further park commands as
+		// no-ops, because as far as it was concerned it was parked. A wrong
+		// "done" is worse than a slow move, so check the counters: at the
+		// counterweight-down position both axes read half a circle (native 238),
+		// which is what geometry.raHalf/decHalf hold.
+		if (status.axisValid && status.geometry.valid && status.geometry.raHalf > 0)
+		{
+			double dRa = fabs ((double) status.raAxisTicks - status.geometry.raHalf) / status.geometry.ticksPerDeg ();
+			double dDec = fabs ((double) status.decAxisTicks - status.geometry.decHalf) / status.geometry.decTicksPerDeg ();
+			if (dRa > PARK_TOLERANCE_DEG || dDec > PARK_TOLERANCE_DEG)
+			{
+				char buf[220];
+				snprintf (buf, sizeof (buf), "the mount reports itself parked but its axes are %.2f deg (RA) and %.2f deg (Dec) from the counterweight-down position",
+					dRa, dDec);
+				status.parkFailed = true;
+				status.parkFailReason = buf;
+			}
+		}
 	}
 	else if (c == '0')
 	{
 		status.parking = false;
 		status.parkFailed = true;
+		status.parkFailReason.clear ();
 	}
 	// else: still parking ('2'/' ') or an undocumented code - keep polling
 }

@@ -310,6 +310,10 @@ class GeminiUDP:public Telescope
 		enum MoveRecoveryState { RECOVER_IDLE, RECOVER_STOPPING, RECOVER_PARKING };
 		MoveRecoveryState recoverState;
 		double recoverSince;
+		// used by RECOVER_STOPPING to see the axes actually stop
+		double restSampleAt;
+		int32_t restRaTicks, restDecTicks;
+		int restStableCount;
 		double recoverTargetRa, recoverTargetDec;
 		int moveRetries;			// used so far for the framework's current target
 		bool recoverGiveUp;			// budget spent - isMoving() fails the move once
@@ -596,6 +600,9 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 
 	recoverState = RECOVER_IDLE;
 	recoverSince = 0;
+	restSampleAt = 0;
+	restRaTicks = restDecTicks = 0;
+	restStableCount = 0;
 	recoverTargetRa = recoverTargetDec = NAN;
 	recoverGiveUp = false;
 	createValue (moveRecoveryValue, "move_recovery", "auto-recovery of a move the mount failed to execute: IDLE, STOPPING, PARKING", false);
@@ -2650,7 +2657,8 @@ bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
 // the whole stop/park/retry looks like one continuous move to it.
 void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 {
-	constexpr double STOP_SETTLE_SEC = 2.5;
+	constexpr double STOP_SETTLE_SEC = 2.5;		// never park sooner than this
+	constexpr double STOP_REST_MAX_SEC = 20.0;	// ...nor wait longer than this for rest
 	constexpr double PARK_TIMEOUT_SEC = 180.0;
 
 	auto giveUp = [this] (const char *why)
@@ -2668,14 +2676,41 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 		case RECOVER_IDLE:
 			return;
 		case RECOVER_STOPPING:
-			if (getNow () - recoverSince < STOP_SETTLE_SEC)
+		{
+			// Wait until the axes have actually stopped, not a fixed delay:
+			// after :Q# the SBT axes took ~8 s to come to rest (measured
+			// 2026-09-15), and a park issued into a still-moving axis is what
+			// makes that axis crawl. Give up waiting after STOP_REST_MAX_SEC
+			// and park anyway - a mount that will not come to rest needs the
+			// park more, not less.
+			bool atRest = false;
+			if (st.axisValid && st.axisTimestamp != restSampleAt)
+			{
+				if (restSampleAt > 0 && st.raAxisTicks == restRaTicks && st.decAxisTicks == restDecTicks)
+					restStableCount++;
+				else
+					restStableCount = 0;
+				restSampleAt = st.axisTimestamp;
+				restRaTicks = st.raAxisTicks;
+				restDecTicks = st.decAxisTicks;
+			}
+			atRest = restStableCount >= 2;
+			double waited = getNow () - recoverSince;
+			if (!atRest && waited < STOP_REST_MAX_SEC)
 				return;
+			if (waited < STOP_SETTLE_SEC)
+				return;		// never park sooner than this, even if the counters look still
+			logStream (MESSAGE_DEBUG) << "GeminiUDP: recovery - axes " << (atRest ? "at rest" : "still moving")
+				<< " after " << waited << " s, parking to CWD" << sendLog;
+			restStableCount = 0;
+			restSampleAt = 0;
 			caring->requestPark (true);	// :hC#, park at CWD
 			recoverState = RECOVER_PARKING;
 			recoverSince = getNow ();
 			moveRecoveryValue->setValueCharArr ("PARKING");
 			sendValueAll (moveRecoveryValue);
 			return;
+		}
 		case RECOVER_PARKING:
 			if (st.parkFailed)
 			{
@@ -3006,7 +3041,10 @@ int GeminiUDP::isParking ()
 		return USEC_SEC;
 	if (st.parkFailed)
 	{
-		logStream (MESSAGE_ERROR) << "GeminiUDP: park failed, :h?# reported '" << st.parkStatus << "' (0 = called without a park command in progress)" << sendLog;
+		if (!st.parkFailReason.empty ())
+			logStream (MESSAGE_ERROR) << "GeminiUDP: park failed - " << st.parkFailReason << sendLog;
+		else
+			logStream (MESSAGE_ERROR) << "GeminiUDP: park failed, :h?# reported '" << st.parkStatus << "' (0 = called without a park command in progress)" << sendLog;
 		return -1;
 	}
 	return -2;
