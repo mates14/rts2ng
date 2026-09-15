@@ -23,9 +23,11 @@ import sys
 sys.path.insert(0, '/home/mates/src/rts2/python')
 from rts2.scriptcomm import Rts2Comm
 
-# Try to import our database query module
+# Try to import our database query module. It is rts2.grb_query - a bare
+# `from grb_query import ...` only resolved because both files happened to sit
+# in /etc/rts2 together. The guard stays: the fallback below works without it.
 try:
-    from grb_query import get_grb_info
+    from rts2.grb_query import get_grb_info
     HAS_DB_QUERY = True
 except ImportError:
     HAS_DB_QUERY = False

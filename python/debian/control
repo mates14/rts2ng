@@ -20,8 +20,9 @@ Description: Remote Telescope System 2 - Python client scripting support
  This package contains the rts2 Python module RTS2's "exe" observation
  scripts import: rts2.scriptcomm, the library they use to talk to the
  running system (device values, state, exposures, image handling, ...),
- and rts2.flats, the sky-flat engine that a site's per-camera flat
- scripts configure and drive. Site-independent scripts are installed to
+ rts2.flats, the sky-flat engine that a site's per-camera flat
+ scripts configure and drive, and rts2.grb_query, which reads GRB details
+ for a target out of the RTS2 database. Site-independent scripts are installed to
  /usr/share/rts2/scripts, with /etc/rts2/scripts kept as a symlink to
  it; scripts specific to one observatory live in a separate
  rts2-python-SITE package (see rts2-python-sbt). rts2-base's script-path resolution (see [scriptexec]
