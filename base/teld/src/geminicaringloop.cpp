@@ -821,6 +821,7 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveExecutionFault = from.moveExecutionFault;
 	to.parkFailReason = from.parkFailReason;
 	to.predictionWarning = from.predictionWarning;
+	to.moveAtCenteringRate = from.moveAtCenteringRate;
 	to.lastMoveSeparation = from.lastMoveSeparation;
 	to.moveEndReason = from.moveEndReason;
 	to.moveEndSerial = from.moveEndSerial;
@@ -1070,7 +1071,8 @@ void GeminiCaringLoop::pollAxisPosition ()
 	// No target position is needed: a legitimate centering approach lasts a
 	// poll or three (measured 1-3 polls over every good move in udp3-udp5),
 	// while a crawl runs for tens of seconds - the duration separates them.
-	if (!(status.moveInProgress || status.parking) || !status.geometry.valid)
+	if (!(status.moveInProgress || status.parking) || !status.geometry.valid
+		|| (status.moveInProgress && status.moveAtCenteringRate))
 	{
 		axisHistory.clear ();
 		return;
@@ -1493,6 +1495,7 @@ void GeminiCaringLoop::handleGoto ()
 	std::string sr, sd;
 	bool accepted = false;
 	std::string message;
+	bool centeringMove = false;	// this goto is being sent at centering rate (short move)
 	GeminiSidePrediction prediction;
 	double ambiguityMargin = flipAmbiguityMarginDeg.load ();
 	const char *slewCommand = sideMode == GOTO_FLIP ? ":MM#" : ":MS#";
@@ -1564,6 +1567,31 @@ void GeminiCaringLoop::handleGoto ()
 				double sleepFor = std::min (waitUntil - now, 2.0);
 				std::this_thread::sleep_for (std::chrono::milliseconds ((int) (sleepFor * 1000)));
 			}
+		}
+
+		// Short moves go at CENTERING rate, not full slew. Torman's rule for
+		// this mount: a short move sent at slew rate can leave the motor ramped
+		// up and running away, as if the firmware only started checking where
+		// to stop after accelerating. The original gemini.cpp does exactly
+		// this at a 1 deg threshold (gemini2ser.cpp has the same code, but
+		// commented out on the assumption the firmware picks the rate itself).
+		// RTS2 makes no distinction between a long slew and a small correction,
+		// so the driver has to.
+		double shortDeg = shortMoveDeg.load ();
+		if (shortDeg > 0)
+		{
+			double curRa, curDec;
+			{
+				std::lock_guard<std::mutex> lock (mutex_);
+				curRa = status.ra;
+				curDec = status.dec;
+			}
+			if (!std::isnan (curRa) && !std::isnan (curDec))
+				centeringMove = angularSeparationDeg (curRa, curDec, gotoTargetRa, gotoTargetDec) <= shortDeg;
+		}
+		{
+			std::string ignored;
+			sendAndReceive (centeringMove ? ":RC#" : ":RS#", ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 		}
 
 		// Drain any queued native sets first (e.g. the setTracking(131) the
@@ -1712,6 +1740,7 @@ void GeminiCaringLoop::handleGoto ()
 		status.moveAborted = false;
 		status.moveExecutionFault = false;
 		status.predictionWarning.clear ();
+		status.moveAtCenteringRate = centeringMove;
 		status.movePierChanged = movePierChangedFlag;
 		status.moveSeparation = NAN;
 		status.parkStatus = '0';	// the firmware clears its park status on every goto

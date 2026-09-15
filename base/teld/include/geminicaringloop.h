@@ -273,6 +273,11 @@ struct GeminiStatus
 	// set when a goto was sent despite the side prediction refusing it - the
 	// prediction warns, the mount decides (see handleGoto)
 	std::string predictionWarning;
+
+	// this move was deliberately sent at centering rate (:RC#) because it is
+	// short - so it SHOULD run at ~the centering speed, and the crawl detector
+	// must not report it as an axis that failed to slew
+	bool moveAtCenteringRate = false;
 	char parkStatus = '?';
 
 	// ---- startup / boot-menu handshake (the 0x06 ACK command) ----
@@ -469,6 +474,9 @@ class GeminiCaringLoop
 		 */
 		enum GotoPrestop { PRESTOP_NONE = 0, PRESTOP_STOP = 1, PRESTOP_STOP_TRACKING = 2 };
 		void setGotoPrestop (GotoPrestop mode) { gotoPrestop = (int) mode; }
+
+		/** below this separation a goto is sent at centering rate; <= 0 disables (see handleGoto) */
+		void setShortMoveDeg (double deg) { shortMoveDeg = deg; }
 
 		/** after writing native 170: keep the RA-axis crawl band in step (see pollAxisPosition()) */
 		void setCenteringSpeed (int speed) { std::lock_guard<std::mutex> lock (mutex_); status.centeringSpeed = speed; }
@@ -721,6 +729,7 @@ class GeminiCaringLoop
 		// while guiding" quirk - and the crawl we reproduced: a command into a
 		// moving axis shock-stops it and it then creeps at centering speed.
 		std::atomic<double> lastPulseEndsAt { 0.0 };
+		std::atomic<double> shortMoveDeg { 1.0 };
 
 		uint32_t nextDatagramNumber;
 };

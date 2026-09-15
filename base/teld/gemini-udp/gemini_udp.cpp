@@ -416,6 +416,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueDouble *trackingSecToLimitValue;
 		rts2core::ValueBool *limitActionEnabledValue;
 		rts2core::ValueDouble *limitForceSecValue;
+		rts2core::ValueDouble *shortMoveDegValue;
 		bool trackingLimitWarned;
 
 		// ---- tracking-limit flip-or-park decision ----
@@ -657,6 +658,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	parkedRaTicks = 0;
 	moveFailReported = false;
 	wrongWayReported = false;
+	createValue (shortMoveDegValue, "short_move_deg", "[deg] a goto shorter than this is sent at CENTERING rate (:RC#) instead of slew - a short move at slew rate can leave the motor ramped up and running away on this mount; 0 disables", false, RTS2_VALUE_WRITABLE);
+	shortMoveDegValue->setValueDouble (1.0);
 	createValue (limitForceSecValue, "limit_force_sec", "[s] with this much tracking left, an armed limit flip/park stops waiting for the cameras and goes anyway - an exposure is cheaper than a mount parked on its limit", false, RTS2_VALUE_WRITABLE);
 	limitForceSecValue->setValueDouble (120);
 	createValue (limitActionEnabledValue, "limit_action", "act on the approaching western tracking limit (flip or park). Off = only log, and let Gemini's own firmware do whatever it does - for observing the mount's native behaviour", false, RTS2_VALUE_WRITABLE);
@@ -798,6 +801,7 @@ int GeminiUDP::initHardware ()
 	caring->setWrongWayMargin (wrongWayMarginValue->getValueDouble ());
 	caring->setFlipAmbiguityMargin (flipAmbiguityMarginValue->getValueDouble ());
 	caring->setGotoPrestop ((GeminiCaringLoop::GotoPrestop) gotoPrestopValue->getValueInteger ());
+	caring->setShortMoveDeg (shortMoveDegValue->getValueDouble ());
 	if (!caring->start ())
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: failed to open UDP socket to " << host->getHostname () << ":" << host->getPort () << sendLog;
@@ -913,6 +917,12 @@ int GeminiUDP::setValue (rts2core::Value *oldValue, rts2core::Value *newValue)
 				<< safetyStateValue->getValue () << ")" << sendLog;
 			return -2;
 		}
+		return 0;
+	}
+	if (oldValue == shortMoveDegValue)
+	{
+		if (caring)
+			caring->setShortMoveDeg (newValue->getValueDouble ());
 		return 0;
 	}
 	if (oldValue == pulseGuideRaValue || oldValue == pulseGuideDecValue)
