@@ -2305,7 +2305,14 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 		parkedAxisAt = st.axisTimestamp;
 		parkedRaTicks = st.raAxisTicks;
 	}
-	if (moving == TEL_PARKED && !isTracking () && (st.moveRate == 'T' || axisReallyMoving))
+	// ...and only when the MOUNT says it is parked (:h?# == '1'). After a park
+	// that failed, the framework can still hold TEL_PARKED while the mount sits
+	// unparked and simply tracks, which is normal behaviour for it - fighting
+	// that, and then escalating when the mount predictably will not stop, turned
+	// a plain park failure into a locked mount with its position LOST
+	// (2026-09-15, new firmware). A failed park is reported as a failed park.
+	if (moving == TEL_PARKED && st.parkStatus == '1' && !st.parkFailed
+		&& !isTracking () && (st.moveRate == 'T' || axisReallyMoving))
 		parkedTrackingCount++;
 	else
 		parkedTrackingCount = 0;
