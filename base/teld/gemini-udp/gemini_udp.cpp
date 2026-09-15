@@ -415,6 +415,7 @@ class GeminiUDP:public Telescope
 		// what acts on this.
 		rts2core::ValueDouble *trackingSecToLimitValue;
 		rts2core::ValueBool *limitActionEnabledValue;
+		rts2core::ValueDouble *limitForceSecValue;
 		bool trackingLimitWarned;
 
 		// ---- tracking-limit flip-or-park decision ----
@@ -656,6 +657,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	parkedRaTicks = 0;
 	moveFailReported = false;
 	wrongWayReported = false;
+	createValue (limitForceSecValue, "limit_force_sec", "[s] with this much tracking left, an armed limit flip/park stops waiting for the cameras and goes anyway - an exposure is cheaper than a mount parked on its limit", false, RTS2_VALUE_WRITABLE);
+	limitForceSecValue->setValueDouble (120);
 	createValue (limitActionEnabledValue, "limit_action", "act on the approaching western tracking limit (flip or park). Off = only log, and let Gemini's own firmware do whatever it does - for observing the mount's native behaviour", false, RTS2_VALUE_WRITABLE);
 	limitActionEnabledValue->setValueBool (true);
 	createValue (trackingSecToLimitValue, "tracking_sec_to_limit", "native 226: seconds of tracking left before Gemini's own firmware hits the western limit and stops - triggers armLimitAction() below 660s", false);
@@ -1100,6 +1103,26 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 	// Hysteresis (only re-arms above 900 s) keeps it to one decision per
 	// approach; pendingLimitAction / limitActionInFlight guard against
 	// re-arming mid-flight.
+	// A limit action waits for the cameras (blockExposure / setFullBopState),
+	// but it cannot wait for ever: an exposure longer than the time left would
+	// hold the flip until the mount sat on its limit, which is the one place
+	// it is awkward to free. Past limit_force_sec the limit wins and the
+	// exposure is sacrificed - losing a frame beats parking on the limit.
+	// The margin has to cover the flip itself (~35 s measured), plus detecting
+	// a flip that crawls (15 s) and parking instead (~30 s).
+	if (pendingLimitAction != LIMIT_ACTION_NONE && !limitActionInFlight
+		&& !std::isnan (st.trackingSecToWestLimit)
+		&& st.trackingSecToWestLimit < limitForceSecValue->getValueDouble ())
+	{
+		LimitAction action = pendingLimitAction;
+		pendingLimitAction = LIMIT_ACTION_NONE;
+		logStream (MESSAGE_WARNING) << "GeminiUDP: only " << st.trackingSecToWestLimit
+			<< " s of tracking left and a camera is still exposing - doing the "
+			<< (action == LIMIT_ACTION_FLIP ? "flip" : "park") << " now, the exposure is lost" << sendLog;
+		executeLimitAction (action);
+		return;
+	}
+
 	if (!std::isnan (st.trackingSecToWestLimit))
 	{
 		if (!trackingLimitWarned && pendingLimitAction == LIMIT_ACTION_NONE && !limitActionInFlight
