@@ -387,6 +387,10 @@ class GeminiUDP:public Telescope
 		double lastSafetyPollTimestamp;
 		int unexpectedMoveCount;
 		int parkedTrackingCount;
+		// last RA axis sample while parked, to tell a turning worm from a
+		// tracking-rate register that merely says "sidereal"
+		double parkedAxisAt;
+		int32_t parkedRaTicks;
 		int parkedTrackingCorrections;
 
 		// GeminiStatus::moveFailed and ::moveWrongWay stay set until the
@@ -646,6 +650,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	unexpectedMoveCount = 0;
 	parkedTrackingCount = 0;
 	parkedTrackingCorrections = 0;
+	parkedAxisAt = 0;
+	parkedRaTicks = 0;
 	moveFailReported = false;
 	wrongWayReported = false;
 	createValue (trackingSecToLimitValue, "tracking_sec_to_limit", "native 226: seconds of tracking left before Gemini's own firmware hits the western limit and stops - triggers armLimitAction() below 660s", false);
@@ -2276,7 +2282,30 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// itself up on all sorts of provocations (see native 92), and a parked
 	// mount that starts tracking simply drifts off its park position. Try
 	// stopping the worm a few times before treating it as a fault.
-	if (moving == TEL_PARKED && !isTracking () && (st.moveRate == 'T' || st.trackingRate == GEMINI_CMD_TRACK_SIDEREAL))
+	// Native 130 is the SELECTED tracking rate, not proof the worm is turning:
+	// a correctly parked, motionless mount holds 131 (sidereal) there for ever.
+	// Triggering on it declared a properly parked mount "tracking while parked",
+	// tried three times to "correct" something that was not happening, then
+	// locked the mount with its position LOST - twice on 2026-09-15, once on
+	// each firmware. So require EVIDENCE OF MOTION: the mount saying it tracks,
+	// or the RA axis counter actually advancing at about sidereal.
+	constexpr double SIDEREAL_DEG_SEC = 15.04106858 / 3600.0;
+	bool axisReallyMoving = false;
+	if (st.axisValid && st.axisTimestamp != parkedAxisAt)
+	{
+		if (parkedAxisAt > 0 && st.geometry.valid && st.geometry.ticksPerDeg () > 0)
+		{
+			double dt = st.axisTimestamp - parkedAxisAt;
+			if (dt > 0.5 && dt < 30)
+			{
+				double degPerSec = fabs ((double) st.raAxisTicks - parkedRaTicks) / st.geometry.ticksPerDeg () / dt;
+				axisReallyMoving = degPerSec > SIDEREAL_DEG_SEC * 0.5;
+			}
+		}
+		parkedAxisAt = st.axisTimestamp;
+		parkedRaTicks = st.raAxisTicks;
+	}
+	if (moving == TEL_PARKED && !isTracking () && (st.moveRate == 'T' || axisReallyMoving))
 		parkedTrackingCount++;
 	else
 		parkedTrackingCount = 0;
