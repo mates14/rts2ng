@@ -1,0 +1,8 @@
+sites/sbt/filtros.py usr/share/rts2/scripts
+sites/sbt/flatC1.py usr/share/rts2/scripts
+sites/sbt/flatC2.py usr/share/rts2/scripts
+sites/sbt/flatC3.py usr/share/rts2/scripts
+sites/sbt/guideccd.py usr/share/rts2/scripts
+sites/sbt/make_survey.py usr/share/rts2/scripts
+sites/sbt/ojitos.py usr/share/rts2/scripts
+sites/sbt/ojitos_adaptive.py usr/share/rts2/scripts

@@ -21,7 +21,7 @@ import threading
 import numpy as np
 import astropy.io.fits as pyfits
 from PIL import Image
-import rts2comm
+from rts2 import scriptcomm
 
 # --- site configuration ----------------------------------------------------
 # Everything the guiding telemetry and the kept frames need to know about
@@ -111,7 +111,7 @@ def save_levels(levels):
         pass
 
 
-class GuideScript(rts2comm.Rts2Comm):
+class GuideScript(scriptcomm.Rts2Comm):
     """ Guide the telescope with a CMOS camera on a WF lens."""
     def __init__(self):
         super().__init__()

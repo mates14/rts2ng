@@ -17,15 +17,35 @@ Description: Remote Telescope System 2 - Python client scripting support
  RTS2 (Remote Telescope System, 2nd version) is a distributed control
  system for robotic astronomical observatories.
  .
- This package contains rts2.scriptcomm, the Python library RTS2's "exe"
- observation scripts use to talk to the running system (device values,
- state, exposures, image handling, ...), plus a set of ready-to-use
- system scripts - guiding, sky flats, filter-synchronized multi-camera
- sequences, GRB follow-up, an idle-time sky survey, an airmass scan -
- installed to /usr/share/rts2/scripts, with /etc/rts2/scripts kept as a
- symlink to it. rts2-base's script-path resolution (see [scriptexec]
+ This package contains the rts2 Python module RTS2's "exe" observation
+ scripts import: rts2.scriptcomm, the library they use to talk to the
+ running system (device values, state, exposures, image handling, ...),
+ and rts2.flats, the sky-flat engine that a site's per-camera flat
+ scripts configure and drive. Site-independent scripts are installed to
+ /usr/share/rts2/scripts, with /etc/rts2/scripts kept as a symlink to
+ it; scripts specific to one observatory live in a separate
+ rts2-python-SITE package (see rts2-python-sbt). rts2-base's script-path resolution (see [scriptexec]
  script_path in rts2.ini, defaulting to /etc/rts2/scripts) finds
  anything there by bare filename, e.g. "exe guideccd.py", without every
  target/camera needing a full path. Pure Python, no compiled
  extensions; the same setup.py this package builds from is also
  directly pip-installable.
+
+Package: rts2-python-sbt
+Architecture: all
+Depends: rts2-python, ${python3:Depends}, ${misc:Depends}
+Description: Remote Telescope System 2 - observation scripts for SBT
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ Observation scripts specific to the Small Binocular Telescope: the C3
+ pulse-guiding script, per-camera sky-flat configurations for C1-C3
+ driving rts2.flats, the filter-synchronized multi-camera sequencer,
+ the adaptive and plain multi-band scripts, and an idle-time sky
+ survey. Installed to /usr/share/rts2/scripts, where rts2-base's
+ script-path resolution ([scriptexec] script_path in rts2.ini,
+ defaulting to /etc/rts2/scripts) finds them by bare filename - so a
+ target's script can read "exe guideccd.py" with no absolute path.
+ .
+ Other observatories should ship their own rts2-python-SITE package
+ rather than adding scripts here.

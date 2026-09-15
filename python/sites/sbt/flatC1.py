@@ -8,7 +8,7 @@
 # You most probably would like to modify this file to suit your needs.
 # Please see comments in flats.py for details of the parameters.
 
-from flats import FlatScript,Flat
+from rts2.flats import FlatScript, Flat
 
 # You would at least like to specify filter order, if not binning and other things
 f = FlatScript(eveningFlats=[Flat('sii'),Flat('halpha'),Flat('i'),Flat('r'),Flat('clear')],maxDarks=15,expTimes=range(2,30))
