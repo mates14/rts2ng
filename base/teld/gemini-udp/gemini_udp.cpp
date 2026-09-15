@@ -413,6 +413,7 @@ class GeminiUDP:public Telescope
 		// pollTrackingLimit()'s doc comment and armLimitAction() below for
 		// what acts on this.
 		rts2core::ValueDouble *trackingSecToLimitValue;
+		rts2core::ValueBool *limitActionEnabledValue;
 		bool trackingLimitWarned;
 
 		// ---- tracking-limit flip-or-park decision ----
@@ -654,6 +655,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	parkedRaTicks = 0;
 	moveFailReported = false;
 	wrongWayReported = false;
+	createValue (limitActionEnabledValue, "limit_action", "act on the approaching western tracking limit (flip or park). Off = only log, and let Gemini's own firmware do whatever it does - for observing the mount's native behaviour", false, RTS2_VALUE_WRITABLE);
+	limitActionEnabledValue->setValueBool (true);
 	createValue (trackingSecToLimitValue, "tracking_sec_to_limit", "native 226: seconds of tracking left before Gemini's own firmware hits the western limit and stops - triggers armLimitAction() below 660s", false);
 	trackingLimitWarned = false;
 	trackingLimitWaitLogged = false;
@@ -1107,7 +1110,12 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 			{
 				trackingLimitWarned = true;
 				trackingLimitWaitLogged = false;
-				armLimitAction (decision == LIMIT_FLIP ? LIMIT_ACTION_FLIP : LIMIT_ACTION_PARK);
+				if (limitActionEnabledValue->getValueBool ())
+					armLimitAction (decision == LIMIT_FLIP ? LIMIT_ACTION_FLIP : LIMIT_ACTION_PARK);
+				else
+					logStream (MESSAGE_WARNING) << "GeminiUDP: tracking limit " << st.trackingSecToWestLimit
+						<< " s away and the driver would now " << (decision == LIMIT_FLIP ? "flip" : "park")
+						<< ", but limit_action is off - leaving it to the mount's own firmware" << sendLog;
 			}
 			else if (st.trackingSecToWestLimit < 660.0 && !trackingLimitWaitLogged)
 			{
