@@ -227,7 +227,21 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.doGuiding(x, y)
 
 
-# Main loop: restart guiding if it exits
+# Main loop: re-acquire and guide again if a guiding run ends by itself
+# (lost star, restart). RTS2 deactivating the script - target finished, the
+# exposure script ended, EXEC restarted - arrives as Rts2NotActive from
+# whatever scriptcomm call is in flight, so catch it and leave quietly
+# instead of dying inside readline() and spraying a traceback into the log.
+# Exiting also means the next guiding run starts a fresh process, which picks
+# up any edit to this file; the old unconditional loop kept one process alive
+# for ever, still running the code it was started with.
 while True:
-    a = GuideScript()
-    a.run()
+    try:
+        a = GuideScript()
+        a.run()
+    except scriptcomm.Rts2NotActive:
+        try:
+            a.log('I', 'guide: script deactivated by RTS2, ending')
+        except Exception:
+            pass          # the connection is already gone - nothing to say it to
+        sys.exit(0)
