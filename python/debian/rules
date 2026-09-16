@@ -4,9 +4,15 @@
 # all - the only one of rts2ng's packages that doesn't go through
 # debhelper's cmake buildsystem. dh-python's pybuild driver runs setup.py
 # directly - the exact same setup.py a plain `pip install .` would use,
-# see setup.py's own docstring-adjacent note in README.md - so unlike
-# rts2-base/rts2-db/rts2-viewer there's no dh_auto_install override
-# needed for the library itself.
+# see setup.py's own docstring-adjacent note in README.md.
+#
+# The library DOES need a dh_auto_install destdir, though, because this
+# source builds more than one binary package: with several, pybuild stages
+# the module into debian/tmp and leaves it for the .install files to claim,
+# and a .install glob cannot name the versioned dist-packages path portably.
+# Pointing dh_auto_install straight at rts2-python puts the module in the
+# package that owns it and keeps the .install files to what they are good
+# at - the action scripts.
 #
 # The action scripts (guideccd.py, flats.py, ...) are deliberately NOT
 # part of setup.py's packages - they're not meant to become PATH-
@@ -31,6 +37,10 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
 	dh $@ --with python3 --buildsystem=pybuild
+
+# The module belongs to rts2-python; the site packages carry only scripts.
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/rts2-python
 
 # No test suite exists for this package (same reasoning as
 # rts2-base/rts2-db/rts2-viewer's override_dh_auto_test - nothing to
