@@ -127,12 +127,38 @@ class FocusScript(scriptcomm.Rts2Comm):
             self.log('W', 'focus: no suitable focus star found - staying put')
             return None
 
-        self.log('I', 'focus: slewing to G=%.1f  HA %+.1f deg  %.1f deg from zenith  (%.4f %+.4f)'
+        self.log('I', 'focus: slew START'); self.log('I',
+                 'focus: slewing to G=%.1f  HA %+.1f deg  %.1f deg from zenith  (%.4f %+.4f)'
                  % (star['mag'], star.get('ha', float('nan')),
                     star.get('zenith_distance', star['distance']), star['ra'], star['dec']))
         self.radec(star['ra'], star['dec'])
-        self.waitIdle(self.telescope, self.args.slew_timeout)
+        self._wait_on_target(star['ra'], star['dec'])
         return star
+
+    def _wait_on_target(self, ra, dec, tolerance=0.2):
+        """Wait until the telescope reports it is on the requested position.
+
+        NOT waitIdle(): a telescope that has arrived is tracking, not idle, so
+        waiting for idle can block until the timeout - or for ever if the
+        state never matches. Polling the reported position asks the question
+        we actually care about and cannot outlive its own deadline.
+        """
+        deadline = time.time() + self.args.slew_timeout
+        while time.time() < deadline:
+            try:
+                tel = self.getValue('TEL', self.telescope).split()
+                cra, cdec = float(tel[0]), float(tel[1])
+            except Exception:
+                time.sleep(2)
+                continue
+            dra = ((cra - ra + 180.0) % 360.0 - 180.0) * np.cos(np.radians(dec))
+            if np.sqrt(dra ** 2 + (cdec - dec) ** 2) <= tolerance:
+                self.log('I', 'focus: on target')
+                return True
+            time.sleep(2)
+        self.log('W', 'focus: telescope did not reach the target in %.0f s - going on anyway'
+                 % self.args.slew_timeout)
+        return False
 
     def acquire(self):
         """Find the brightest star in a binned full frame and window on it."""
@@ -143,9 +169,13 @@ class FocusScript(scriptcomm.Rts2Comm):
             self.saved['binning'] = None
 
         if self.args.acq_binning is not None:
+            # binning is a selection on most cameras; an out-of-range code is
+            # silently ignored rather than allowed to wedge the run
+            self.log('I', 'focus: acquisition binning %s' % self.args.acq_binning)
             self.setValue('binning', self.args.acq_binning)
         self.setValue('WINDOW', '-1 -1 -1 -1')
 
+        self.log('I', 'focus: acquisition exposure %.2f s' % self.args.acq_exposure)
         data = self._frame(self.args.acq_exposure)
         peak = peak_of(data)
         binf = self.args.bin_factor
