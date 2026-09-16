@@ -310,6 +310,39 @@ class BrightStars:
             self._table = Table.read(self.path)
         return self._table
 
+    def near_zenith(self, latitude, lst_deg, mag_range=(5.0, 8.5),
+                    ha_range=(5.0, 40.0), max_zenith_distance=30.0):
+        """Best focus star near the zenith and PAST the meridian.
+
+        Past the meridian on purpose: a star still rising would cross the
+        meridian during the run, and on a German mount that means a flip in
+        the middle of a focus sweep. `ha_range` is degrees of hour angle west
+        of the meridian - positive, already setting, with enough margin to
+        finish.
+
+        Near the zenith for the thinnest air and the roundest image. Among
+        the candidates, the one closest to the zenith wins; brightness only
+        has to be inside the range, since any star there gives ample signal.
+        """
+        cat = self._load()
+        ra_c = np.asarray(cat['radeg'], dtype=float)
+        dec_c = np.asarray(cat['decdeg'], dtype=float)
+        mag = np.asarray(cat['G'], dtype=float)
+
+        ha = (lst_deg - ra_c + 180.0) % 360.0 - 180.0     # -180..180, + is west
+        zd = np.sqrt(((ha) * np.cos(np.radians(dec_c))) ** 2 + (dec_c - latitude) ** 2)
+
+        ok = ((mag >= mag_range[0]) & (mag <= mag_range[1])
+              & (ha >= ha_range[0]) & (ha <= ha_range[1])
+              & (zd <= max_zenith_distance))
+        if not ok.any():
+            return None
+
+        i = int(np.argmin(np.where(ok, zd, np.inf)))
+        return {'ra': float(ra_c[i]), 'dec': float(dec_c[i]), 'mag': float(mag[i]),
+                'ha': float(ha[i]), 'zenith_distance': float(zd[i]),
+                'distance': float(zd[i])}
+
     def nearest(self, ra, dec, mag_range=(5.0, 8.5), max_distance=5.0):
         """Closest catalogue star to (ra, dec) in degrees within the magnitude range.
 

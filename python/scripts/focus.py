@@ -74,34 +74,64 @@ class FocusScript(scriptcomm.Rts2Comm):
 
     # ---- steps ---------------------------------------------------------
 
+    def _lst(self):
+        """Local sidereal time in degrees, from the telescope or the clock."""
+        try:
+            return float(self.getValueFloat('LST', self.telescope))
+        except Exception:
+            pass
+        lon = self.args.longitude
+        if lon is None:
+            lon = float(self.getValueFloat('LONGITUD', self.telescope))
+        jd = time.time() / 86400.0 + 2440587.5
+        return (280.46061837 + 360.98564736629 * (jd - 2451545.0) + lon) % 360.0
+
     def pick_star(self):
-        """Slew to a bright catalogue star near where we are pointing."""
+        """Slew to a bright focus star: near the zenith and past the meridian.
+
+        Past the meridian on purpose - a star still east of it would cross
+        during the run, and on a German mount that is a flip in the middle of
+        a focus sweep. Near the zenith for the thinnest air.
+
+        This matters for target 3 in particular: it is an ordinary fixed
+        target at RA 0, Dec 0 - 'o' is not in createTarget()'s switch, so it
+        falls through to ConstTarget - which is wherever the celestial equator
+        happens to be, possibly below the horizon. The script picks its own
+        star rather than trusting the target's coordinates.
+        """
         if self.args.no_slew:
             self.log('I', 'focus: --no-slew, using whatever is in the field')
             return None
-        try:
-            tel = self.getValue('TEL', self.telescope).split()
-            ra, dec = float(tel[0]), float(tel[1])
-        except Exception as e:
-            self.log('W', 'focus: cannot read TEL (%s) - staying put' % e)
-            return None
 
+        cat = BrightStars(self.args.catalog)
+        star = None
         try:
-            star = BrightStars(self.args.catalog).nearest(
-                ra, dec, mag_range=(self.args.mag_min, self.args.mag_max),
-                max_distance=self.args.max_slew)
+            if self.args.near_pointing:
+                tel = self.getValue('TEL', self.telescope).split()
+                star = cat.nearest(float(tel[0]), float(tel[1]),
+                                   mag_range=(self.args.mag_min, self.args.mag_max),
+                                   max_distance=self.args.max_slew)
+            else:
+                lat = self.args.latitude
+                if lat is None:
+                    lat = float(self.getValueFloat('LATITUDE', self.telescope))
+                star = cat.near_zenith(lat, self._lst(),
+                                       mag_range=(self.args.mag_min, self.args.mag_max),
+                                       ha_range=(self.args.ha_min, self.args.ha_max),
+                                       max_zenith_distance=self.args.max_zenith_distance)
         except Exception as e:
             self.log('W', 'focus: catalogue unavailable (%s) - staying put' % e)
             return None
 
         if star is None:
-            self.log('W', 'focus: no catalogue star within %.1f deg - staying put'
-                     % self.args.max_slew)
+            self.log('W', 'focus: no suitable focus star found - staying put')
             return None
 
-        self.log('I', 'focus: slewing to G=%.1f star %.1f deg away (%.4f %+.4f)'
-                 % (star['mag'], star['distance'], star['ra'], star['dec']))
+        self.log('I', 'focus: slewing to G=%.1f  HA %+.1f deg  %.1f deg from zenith  (%.4f %+.4f)'
+                 % (star['mag'], star.get('ha', float('nan')),
+                    star.get('zenith_distance', star['distance']), star['ra'], star['dec']))
         self.radec(star['ra'], star['dec'])
+        self.waitIdle(self.telescope, self.args.slew_timeout)
         return star
 
     def acquire(self):
@@ -230,7 +260,15 @@ def parse_args(argv):
     p.add_argument('--no-slew', action='store_true', help='focus on whatever is in the field now')
     p.add_argument('--mag-min', type=float, default=5.0)
     p.add_argument('--mag-max', type=float, default=8.5)
-    p.add_argument('--max-slew', type=float, default=5.0, help='[deg] furthest acceptable focus star')
+    p.add_argument('--max-slew', type=float, default=5.0, help='[deg] furthest star in --near-pointing mode')
+    p.add_argument('--near-pointing', action='store_true',
+                   help='pick a star near the current pointing instead of near the zenith')
+    p.add_argument('--ha-min', type=float, default=5.0, help='[deg] least hour angle past the meridian')
+    p.add_argument('--ha-max', type=float, default=40.0, help='[deg] most hour angle past the meridian')
+    p.add_argument('--max-zenith-distance', type=float, default=30.0, help='[deg]')
+    p.add_argument('--latitude', type=float, default=None, help='[deg] default: LATITUDE from the telescope')
+    p.add_argument('--longitude', type=float, default=None, help='[deg] only if LST is unreadable')
+    p.add_argument('--slew-timeout', type=float, default=120.0)
 
     p.add_argument('--box', type=int, default=64, help='[px] windowed readout size')
     p.add_argument('--hfd-radius', type=float, default=15.0, help='[px] aperture for HFD')
