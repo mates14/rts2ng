@@ -328,6 +328,13 @@ rts2core::DevClient * Executor::createOtherType (rts2core::Connection * conn, in
 		case DEVICE_TYPE_DOME:
 		case DEVICE_TYPE_SENSOR:
 		case DEVICE_TYPE_ROTATOR:
+		// base note: classic listed no DEVICE_TYPE_FW here, so a filter
+		// wheel's values never reached the FITS header however they were
+		// flagged. C++ filterd flags none of its values for FITS, so this
+		// changes nothing for it; the rtspy OVIS spectrograph (a filter wheel
+		// and focuser in one device) writes NEON - the calibration lamp the
+		// automated reduction relies on - and its focuser position.
+		case DEVICE_TYPE_FW:
 			return new rts2image::DevClientWriteImage (conn);
 		default:
 			return rts2db::DeviceDb::createOtherType (conn, other_device_type);
