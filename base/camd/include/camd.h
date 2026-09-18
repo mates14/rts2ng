@@ -981,9 +981,35 @@ class Camera:public rts2core::ScriptDevice
 		virtual int setFilterNum (int new_filter, const char *fn = nullptr);
 		virtual int getFilterNum (const char *fn = nullptr);
 
+		/**
+		 * Move the camera's own (internal) filter wheel. Cameras with one
+		 * override this; the default reports that there is none.
+		 *
+		 * base note: the internal wheel used to have no way of its own to be
+		 * moved or read - it lived in camFilterVal, which --wheeldev hands
+		 * over to the first external wheel. A camera with both then had no
+		 * access to its internal wheel at all, and gxccd's reinitialisation
+		 * set it from camFilterVal, i.e. to the external wheel's number.
+		 */
+		virtual int setCamFilterNum (int new_filter) { return -1; }
+
+		/**
+		 * Number of the camera's own filter wheel: the value of its entry in
+		 * camFilterVals if the internal wheel is configured (--wheeldev -),
+		 * otherwise camFilterVal, which is the internal wheel when no
+		 * external wheel is configured.
+		 */
+		int getInternalFilterNum ();
+
+		/** The selection holding the internal wheel's filter names. */
+		rts2core::ValueSelection *internalFilterValue ();
+
 		void offsetForFilter (int new_filter, std::list <FilterVal>::iterator fvi);
 
 		int getCamFilterNum () { return camFilterVal->getValueInteger (); }
+
+		/** A wheelDevices entry with no name is the camera's own wheel (--wheeldev -). */
+		static bool isInternalWheel (const char *wheelName) { return wheelName == nullptr; }
 
 		void setFilterWorking (bool working) { getCondValue (camFilterVal)->setStateCondition (working ? CAM_WORKING : CAM_EXPOSING); }
 

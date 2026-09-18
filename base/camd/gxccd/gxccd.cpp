@@ -81,6 +81,7 @@ class GXCCD:public Camera
 		virtual int switchCooling (bool cooling);
 
 		virtual int setFilterNum (int new_filter, const char *fn = nullptr);
+		virtual int setCamFilterNum (int new_filter);
 
 		virtual int startExposure ();
 
@@ -576,7 +577,15 @@ int GXCCD::setFilterNum (int new_filter, const char *fn)
 {
 	if (fn != nullptr)
 		return Camera::setFilterNum (new_filter, fn);
-	logStream (MESSAGE_INFO) << "moving filter from #" << camFilterVal->getValueInteger () << " (" << camFilterVal->getSelName () << ")" << " to #" << new_filter << " (" << camFilterVal->getSelName (new_filter) << ")" << sendLog;
+	return setCamFilterNum (new_filter);
+}
+
+int GXCCD::setCamFilterNum (int new_filter)
+{
+	// the internal wheel's own names and number: with --wheeldev these are
+	// not camFilterVal, which then belongs to the first external wheel
+	rts2core::ValueSelection *fv = internalFilterValue ();
+	logStream (MESSAGE_INFO) << "moving filter from #" << fv->getValueInteger () << " (" << fv->getSelName () << ")" << " to #" << new_filter << " (" << fv->getSelName (new_filter) << ")" << sendLog;
 
 	int iter;
 	int ret = 0;
@@ -588,7 +597,7 @@ int GXCCD::setFilterNum (int new_filter, const char *fn)
 		last_filter_move = getNow () - last_filter_move;
 		if (ret == 0)
 		{
-			logStream (MESSAGE_INFO) << "filter moved to #" << new_filter << " (" << camFilterVal->getSelName (new_filter) << ")" << " in " << std::setprecision (3) << last_filter_move << "s" << sendLog;
+			logStream (MESSAGE_INFO) << "filter moved to #" << new_filter << " (" << fv->getSelName (new_filter) << ")" << " in " << std::setprecision (3) << last_filter_move << "s" << sendLog;
 			break;
 		}
 		else
@@ -834,7 +843,10 @@ int GXCCD::reinitCamera ()
 		return -1;
 	}
 
-	ret = gxccd_set_filter (camera, camFilterVal->getValueFloat ());
+	// the internal wheel, not camFilterVal - with --wheeldev that one holds
+	// the first external wheel's number, and putting it here is how the
+	// camera's own wheel ended up on whatever filter the spectrograph was on
+	ret = gxccd_set_filter (camera, getInternalFilterNum ());
 	if (ret)
 	{
 		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
@@ -865,7 +877,7 @@ int GXCCD::commandAuthorized (rts2core::Connection * conn)
 	{
 		int nfilters = gxccd_reset_filters (camera);
 		logStream (MESSAGE_INFO) << "GXCCD::resetFilters " << nfilters << sendLog;
-		gxccd_set_filter (camera, camFilterVal->getValueFloat ());
+		gxccd_set_filter (camera, getInternalFilterNum ());
 
 		return 0;
 	}

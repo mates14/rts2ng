@@ -51,7 +51,9 @@ void ClientFilterCamera::postEvent (rts2core::Event * event)
 	{
 		case EVENT_FILTER_START_MOVE:
 			fs = (filterStart *) event->getArg ();
-			if (!strcmp (getName (), fs->filterName) && fs->filter >= 0)
+			// filterName is null for the camera's own wheel (--wheeldev -),
+			// which no wheel device client may answer for
+			if (fs->filterName != nullptr && !strcmp (getName (), fs->filterName) && fs->filter >= 0)
 			{
 				connection->queCommand (new rts2core::CommandFilter (this, fs->filter));
 				fs->filter = -1;
@@ -61,7 +63,7 @@ void ClientFilterCamera::postEvent (rts2core::Event * event)
 			break;
 		case EVENT_FILTER_GET:
 			fs = (filterStart *) event->getArg ();
-			if (!strcmp (getName (), fs->filterName))
+			if (fs->filterName != nullptr && !strcmp (getName (), fs->filterName))
 				fs->filter = getConnection ()->getValueInteger ("filter");
 			break;
 	}

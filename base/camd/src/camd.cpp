@@ -606,7 +606,8 @@ int Camera::willConnect (rts2core::NetworkAddress * in_addr)
 	{
 		for (std::vector <const char *>::iterator iter = wheelDevices.begin (); iter != wheelDevices.end (); iter++)
 		{
-			if (in_addr->isAddress (*iter))
+			// the internal wheel (--wheeldev -) is no device to connect to
+			if (!isInternalWheel (*iter) && in_addr->isAddress (*iter))
 				return 1;
 		}
 	}
@@ -622,7 +623,7 @@ rts2core::DevClient *Camera::createOtherType (rts2core::Connection * conn, int o
 		case DEVICE_TYPE_FW:
 			for (std::list <FilterVal>::iterator iter = camFilterVals.begin (); iter != camFilterVals.end (); iter++)
 			{
-				if (!strcmp (iter->name, conn->getName ()))
+				if (!isInternalWheel (iter->name) && !strcmp (iter->name, conn->getName ()))
 					return new ClientFilterCamera (conn, &(*iter));
 			}
 			break;
@@ -773,7 +774,11 @@ int Camera::info ()
 	std::vector <const char *>::iterator niter;
 	for (viter = camFilterVals.begin (), niter = wheelDevices.begin (); viter != camFilterVals.end (); viter++, niter++)
 	{
-		viter->filter->setValueInteger (getFilterNum (*niter));
+		// the internal wheel keeps what it was last set to; asking
+		// getFilterNum() for it would answer with the first external
+		// wheel's number, which is not this wheel's position
+		if (!isInternalWheel (*niter))
+			viter->filter->setValueInteger (getFilterNum (*niter));
 	}
 	camFocVal->setValueInteger (getFocPos ());
 	return rts2core::ScriptDevice::info ();
@@ -1244,13 +1249,14 @@ int Camera::initValues ()
 
 	if (wheelDevices.size () > 0)
 	{
-		addConstValue ("wheel", wheelDevices.front ());
+		// "-" is the camera's own wheel; it has no device name
+		addConstValue ("wheel", isInternalWheel (wheelDevices.front ()) ? "-" : wheelDevices.front ());
 
 		char fil = 'A';
 		std::vector <const char *>::iterator iter;
 		for (iter = wheelDevices.begin (); iter != wheelDevices.end (); iter++, fil++)
 		{
-			addConstValue ((std::string ("wheel") + fil).c_str (), *iter);
+			addConstValue ((std::string ("wheel") + fil).c_str (), isInternalWheel (*iter) ? "-" : *iter);
 		}
 
                 createFilter ();
@@ -1259,6 +1265,16 @@ int Camera::initValues ()
 		for (iter = wheelDevices.begin (); iter != wheelDevices.end (); iter++, fil++)
 		{
 			camFilterVals.push_back (FilterVal (this, *iter, fil));
+			// The internal wheel's names come from -f, which is what
+			// camFilterVal holds now; an external wheel's names arrive
+			// with the wheel (deviceReady), and deviceReady also copies
+			// the first one's into camFilterVal - so take them here,
+			// before that happens.
+			if (isInternalWheel (*iter) && camFilterVal != nullptr)
+			{
+				camFilterVals.back ().filter->duplicateSelVals (camFilterVal);
+				camFilterVals.back ().filter->setValueInteger (camFilterVal->getValueInteger ());
+			}
 		}
 	}
 
@@ -1483,7 +1499,9 @@ int Camera::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 	{
 		if (iter->filter == old_value)
 		{
-			int ret = setFilterNum (new_value->getValueInteger (), wheelDevices[i]) == 0 ? 0 : -2;
+			int ret = (isInternalWheel (wheelDevices[i])
+				? setCamFilterNum (new_value->getValueInteger ())
+				: setFilterNum (new_value->getValueInteger (), wheelDevices[i])) == 0 ? 0 : -2;
 			if (ret == 0)
 				offsetForFilter (new_value->getValueInteger (), iter);
 			return ret;
@@ -1539,6 +1557,8 @@ void Camera::deviceReady (rts2core::Connection * conn)
 		std::vector <const char *>::iterator iter;
 		for (fiter = camFilterVals.begin (), iter = wheelDevices.begin (); fiter != camFilterVals.end () && iter != wheelDevices.end (); fiter++, iter++)
 		{
+			if (isInternalWheel (*iter))
+				continue;
 			if (!strcmp (conn->getName (), *iter))
 			{
 				// copy content of device filter variable to our list..
@@ -1944,6 +1964,11 @@ int Camera::setFilterNum (int new_filter, const char *fn)
 		else
 			fs.filterName = fn;
 
+		// the camera's own wheel is no device to send a command to - this
+		// also catches --wheeldev - given first, where wheelDevices[0] is it
+		if (isInternalWheel (fs.filterName))
+			return setCamFilterNum (new_filter);
+
 		fs.filter = new_filter;
 		fs.arg = this;
 		postEvent (new rts2core::Event (EVENT_FILTER_START_MOVE, (void *) &fs));
@@ -2001,6 +2026,24 @@ void Camera::setExposureMinMax (double exp_min, double exp_max)
 	sendValueAll (exposure);
 }
 
+rts2core::ValueSelection *Camera::internalFilterValue ()
+{
+	std::list <FilterVal>::iterator viter;
+	std::vector <const char *>::iterator niter;
+	for (viter = camFilterVals.begin (), niter = wheelDevices.begin (); viter != camFilterVals.end () && niter != wheelDevices.end (); viter++, niter++)
+	{
+		if (isInternalWheel (*niter))
+			return viter->filter;
+	}
+	return camFilterVal;
+}
+
+int Camera::getInternalFilterNum ()
+{
+	rts2core::ValueSelection *val = internalFilterValue ();
+	return val == nullptr ? 0 : val->getValueInteger ();
+}
+
 int Camera::getFilterNum (const char *fn)
 {
 	if (wheelDevices.size () > 0)
@@ -2010,6 +2053,8 @@ int Camera::getFilterNum (const char *fn)
 			fs.filterName = wheelDevices[0];
 		else
 			fs.filterName = fn;
+		if (isInternalWheel (fs.filterName))
+			return getInternalFilterNum ();
 		fs.filter = -1;
 		postEvent (new rts2core::Event (EVENT_FILTER_GET, (void *) &fs));
 		return fs.filter;
