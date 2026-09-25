@@ -19,6 +19,13 @@ ViewerClient::ViewerClient (int argc, char **argv):
 	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
 	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %y%m%d%H%M%S-%s.fits, in the current directory");
+
+	// GUI requests are only picked up in idle(), which Block runs when a
+	// network message wakes the poll loop or, failing that, every 10 s -
+	// so a click took anything from under a second to 10 s to act,
+	// depending on how chatty the devices happened to be, and two quick
+	// Expose clicks within one wait merged into one exposure.
+	setTimeout (USEC_SEC / 10);
 }
 
 int ViewerClient::processOption (int in_opt)

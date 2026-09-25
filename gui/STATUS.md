@@ -1211,8 +1211,9 @@ stacker compiles the viewer's ImageCanvas/SightItem sources from
   EXPTIME = summed exposure, NCOMBINE, DATE-OBS/DATE-END, DARKn/FLATn.
 - Frames are always read full-chip (a leftover WINDOW is reset before each
   exposure), since the darks are full-chip.
-- Unlike the viewer, the client polls its request queue every 100 ms
-  (`setTimeout`) instead of Block's default 10 s idle timeout - with the
-  default a click on an idle camera could take up to 10 s to act, and two
-  quick Expose clicks collapsed into one exposure. rts2-viewer still has
-  that latency.
+- The client polls its request queue every 100 ms (`setTimeout`) instead
+  of Block's default 10 s idle timeout - with the default a click on an
+  idle camera could take up to 10 s to act, and two quick Expose clicks
+  collapsed into one exposure. rts2-viewer got the same fix afterwards
+  (clicks measured at 55-110 ms from click to exposure start on an idle
+  dummy camera).
