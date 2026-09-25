@@ -1217,3 +1217,20 @@ stacker compiles the viewer's ImageCanvas/SightItem sources from
   collapsed into one exposure. rts2-viewer got the same fix afterwards
   (clicks measured at 55-110 ms from click to exposure start on an idle
   dummy camera).
+
+## Night mode (viewer and stacker)
+
+"Night mode (Ctrl+N)" checkbox under the camera selector turns the
+controls red on black for use at the telescope; the image, the cursors
+and the zoomed crop are left as they are. Shared code in
+`viewer/src/nightmode.cpp` (compiled into both programs, like the
+canvas): it switches the application to the Fusion style with a dim red
+palette - platform styles such as a GTK theme ignore much of the palette -
+and back to the original style and palette when turned off. Widgets that
+set their own colours ask it for them: status labels use
+`statusStyle(good)` (dim red when fine, a bright red block when not -
+green/red is not available), the saving toggle `activeStyle()`, and the
+focus graph draws FWHM X solid and FWHM Y dashed in red. The choice is
+remembered per program with QSettings (~/.config/rts2/rts2-viewer.conf,
+rts2-stacker.conf). The window title bar belongs to the window manager
+and stays as it is.

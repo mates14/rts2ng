@@ -17,6 +17,7 @@ add_executable(rts2-stacker
 	src/mainwindow.cpp include/stacker/mainwindow.h
 	${VIEWER_DIR}/src/imagecanvas.cpp ${VIEWER_DIR}/include/gui/imagecanvas.h
 	${VIEWER_DIR}/src/sightitem.cpp ${VIEWER_DIR}/include/gui/sightitem.h
+	${VIEWER_DIR}/src/nightmode.cpp ${VIEWER_DIR}/include/gui/nightmode.h
 )
 
 target_include_directories(rts2-stacker PRIVATE include ${VIEWER_DIR}/include)

@@ -1,4 +1,5 @@
 #include "gui/mainwindow.h"
+#include "gui/nightmode.h"
 
 #include <connection.h>
 
@@ -12,6 +13,8 @@
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPixmap>
+#include <QSettings>
+#include <QShortcut>
 #include <QStandardItemModel>
 #include <QtGlobal>
 
@@ -99,7 +102,7 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	zoomedView = new QLabel (focusPanel);
 	zoomedView->setFixedSize (200, 200);
 	zoomedView->setAlignment (Qt::AlignCenter);
-	zoomedView->setStyleSheet ("background-color: black; color: white;");
+	zoomedView->setStyleSheet (zoomedViewStyle ());
 	zoomedView->setText ("no fit yet");
 	focusLayout->addWidget (zoomedView);
 
@@ -160,6 +163,11 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	cameraCombo = new QComboBox (controlWidget);
 	controlLayout->addWidget (new QLabel ("Camera:", controlWidget));
 	controlLayout->addWidget (cameraCombo);
+
+	// Red-on-black controls for use at the telescope at night (the image
+	// itself is left alone) - remembered between runs.
+	nightCheck = new QCheckBox ("Night mode (Ctrl+N)", controlWidget);
+	controlLayout->addWidget (nightCheck);
 
 	QGroupBox *exposeBox = new QGroupBox ("Expose", controlWidget);
 	QFormLayout *exposeForm = new QFormLayout (exposeBox);
@@ -338,6 +346,9 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	connect (coolingCheck, &QCheckBox::toggled, this, &MainWindow::onCoolingToggled);
 	connect (windowingCheck, &QCheckBox::toggled, this, &MainWindow::onWindowingToggled);
 	connect (windowSizeSpin, QOverload<int>::of (&QSpinBox::valueChanged), this, &MainWindow::onWindowSizeChanged);
+	connect (nightCheck, &QCheckBox::toggled, this, &MainWindow::onNightModeToggled);
+	connect (new QShortcut (QKeySequence ("Ctrl+N"), this), &QShortcut::activated, nightCheck, &QCheckBox::toggle);
+	nightCheck->setChecked (QSettings ("rts2", "rts2-viewer").value ("nightMode", false).toBool ());
 
 	// --- RTS2 connection, on its own thread (see viewerclient.h) --------
 	clientThread = new ClientThread (argc, argv, this);
@@ -606,7 +617,7 @@ void MainWindow::updateStatusPanel ()
 	if (!state.stateText.isEmpty ())
 	{
 		statusStateLabel->setText (state.stateText);
-		statusStateLabel->setStyleSheet (state.hasError ? "background-color: #FFCCCC;" : "background-color: #CCFFCC;");
+		statusStateLabel->setStyleSheet (statusStyle (!state.hasError));
 	}
 
 	double ccdTemp = state.values.value ("CCD_TEMP", NAN);
@@ -618,7 +629,7 @@ void MainWindow::updateStatusPanel ()
 		{
 			text += QString (" / %1 °C").arg (ccdSet, 0, 'f', 1);
 			bool close = std::abs (ccdTemp - ccdSet) < 0.5;
-			statusTempLabel->setStyleSheet (close ? "background-color: #CCFFCC;" : "background-color: #FFCCCC;");
+			statusTempLabel->setStyleSheet (statusStyle (close));
 		}
 		statusTempLabel->setText (text);
 	}
@@ -632,7 +643,7 @@ void MainWindow::updateStatusPanel ()
 		statusVoltageLabel->setText (QString ("%1 V").arg (v, 0, 'f', 1));
 		// Same 11.5-15.5 V "good" band fiber_pointing_client.py used for its
 		// own (also 12V-nominal) camera power supply.
-		statusVoltageLabel->setStyleSheet ((v > 11.5 && v < 15.5) ? "background-color: #CCFFCC;" : "background-color: #FFCCCC;");
+		statusVoltageLabel->setStyleSheet (statusStyle (v > 11.5 && v < 15.5));
 	}
 
 	if (state.values.contains ("TEMPPWR"))
@@ -641,7 +652,7 @@ void MainWindow::updateStatusPanel ()
 		statusPowerLabel->setText (QString ("%1 %").arg (p, 0, 'f', 0));
 		// fiber_pointing_client.py flags >=90% cooling-power utilization as
 		// the camera struggling to hold its set point.
-		statusPowerLabel->setStyleSheet ((p < 90.0) ? "background-color: #CCFFCC;" : "background-color: #FFCCCC;");
+		statusPowerLabel->setStyleSheet (statusStyle (p < 90.0));
 	}
 
 	if (state.choices.contains ("filter"))
@@ -833,7 +844,25 @@ void MainWindow::updateSaveButton ()
 {
 	bool enabled = saveButton->isChecked ();
 	saveButton->setText (enabled ? "Saving: ON" : "Saving: OFF");
-	saveButton->setStyleSheet (enabled ? "background-color: #66CC66;" : "background-color: #CC6666;");
+	saveButton->setStyleSheet (enabled ? activeStyle () : statusStyle (false));
+}
+
+QString MainWindow::zoomedViewStyle () const
+{
+	return nightMode () ? "background-color: black; color: #b00000;" : "background-color: black; color: white;";
+}
+
+void MainWindow::onNightModeToggled (bool checked)
+{
+	setNightMode (checked);
+	QSettings ("rts2", "rts2-viewer").setValue ("nightMode", checked);
+
+	// The palette covers ordinary widgets; the ones with their own
+	// colours have to be redone.
+	updateStatusPanel ();
+	updateSaveButton ();
+	zoomedView->setStyleSheet (zoomedViewStyle ());
+	focusGraphWidget->update ();
 }
 
 void MainWindow::onWindowingToggled (bool checked)

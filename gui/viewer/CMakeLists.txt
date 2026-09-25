@@ -16,6 +16,7 @@ add_executable(rts2-viewer
 	src/imagecanvas.cpp include/gui/imagecanvas.h
 	src/sightitem.cpp include/gui/sightitem.h
 	src/focusgraphwidget.cpp include/gui/focusgraphwidget.h
+	src/nightmode.cpp include/gui/nightmode.h
 )
 
 target_include_directories(rts2-viewer PRIVATE include)

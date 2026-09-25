@@ -1,4 +1,5 @@
 #include "gui/focusgraphwidget.h"
+#include "gui/nightmode.h"
 
 #include <QPainter>
 
@@ -25,9 +26,13 @@ void FocusGraphWidget::paintEvent (QPaintEvent *)
 	QPainter painter (this);
 	painter.fillRect (rect (), Qt::black);
 
+	// Night mode: red only - FWHM X solid, FWHM Y dashed and dimmer.
+	bool night = nightMode ();
+	QColor textColor = night ? nightText () : QColor (Qt::white);
+
 	if (m_points.isEmpty ())
 	{
-		painter.setPen (Qt::white);
+		painter.setPen (textColor);
 		painter.drawText (rect (), Qt::AlignCenter, "no data yet");
 		return;
 	}
@@ -62,10 +67,10 @@ void FocusGraphWidget::paintEvent (QPaintEvent *)
 		return QPointF (px, py);
 	};
 
-	painter.setPen (Qt::gray);
+	painter.setPen (night ? nightText ().darker (250) : QColor (Qt::gray));
 	painter.drawRect (plotRect);
 
-	painter.setPen (Qt::white);
+	painter.setPen (textColor);
 	painter.drawText (QRectF (0, plotRect.top () - 4, marginLeft - 4, 16), Qt::AlignRight | Qt::AlignTop, QString::number (yMax, 'f', 1));
 	painter.drawText (QRectF (0, plotRect.bottom () - 12, marginLeft - 4, 16), Qt::AlignRight | Qt::AlignTop, QString::number (yMin, 'f', 1));
 	painter.drawText (QRectF (plotRect.left (), plotRect.bottom () + 2, 60, marginBottom), Qt::AlignLeft, QString::number (xMin, 'f', 0));
@@ -78,13 +83,13 @@ void FocusGraphWidget::paintEvent (QPaintEvent *)
 		lineY << toPixel (p.x, p.fwhmY);
 	}
 
-	painter.setPen (QPen (Qt::red, 2));
+	painter.setPen (QPen (night ? nightText () : QColor (Qt::red), 2));
 	if (lineX.size () > 1)
 		painter.drawPolyline (lineX.data (), lineX.size ());
 	for (const auto &pt : lineX)
 		painter.drawEllipse (pt, 2, 2);
 
-	painter.setPen (QPen (Qt::blue, 2));
+	painter.setPen (QPen (night ? nightText ().darker (160) : QColor (Qt::blue), 2, night ? Qt::DashLine : Qt::SolidLine));
 	if (lineY.size () > 1)
 		painter.drawPolyline (lineY.data (), lineY.size ());
 	for (const auto &pt : lineY)

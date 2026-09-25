@@ -1,4 +1,5 @@
 #include "stacker/mainwindow.h"
+#include "gui/nightmode.h"
 
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -9,6 +10,8 @@
 #include <QDateTime>
 #include <QFontMetrics>
 #include <QVariantMap>
+#include <QSettings>
+#include <QShortcut>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -130,6 +133,10 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	cameraCombo = new QComboBox (controlWidget);
 	controlLayout->addWidget (new QLabel ("Camera:", controlWidget));
 	controlLayout->addWidget (cameraCombo);
+
+	// Red-on-black controls, as in rts2-viewer - remembered between runs.
+	nightCheck = new QCheckBox ("Night mode (Ctrl+N)", controlWidget);
+	controlLayout->addWidget (nightCheck);
 
 	QGroupBox *exposeBox = new QGroupBox ("Expose", controlWidget);
 	QFormLayout *exposeForm = new QFormLayout (exposeBox);
@@ -265,6 +272,9 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	connect (binningCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onBinningComboChanged);
 	connect (ccdSetSpin, &QDoubleSpinBox::editingFinished, this, &MainWindow::onCcdSetChanged);
 	connect (coolingCheck, &QCheckBox::toggled, this, &MainWindow::onCoolingToggled);
+	connect (nightCheck, &QCheckBox::toggled, this, &MainWindow::onNightModeToggled);
+	connect (new QShortcut (QKeySequence ("Ctrl+N"), this), &QShortcut::activated, nightCheck, &QCheckBox::toggle);
+	nightCheck->setChecked (QSettings ("rts2", "rts2-stacker").value ("nightMode", false).toBool ());
 
 	clientThread = new ClientThread (argc, argv, this);
 	connect (clientThread, &ClientThread::cameraCreated, this, &MainWindow::onCameraCreated);
@@ -603,7 +613,7 @@ void MainWindow::updateFlatStatus ()
 	QString f = opts[idx];
 	bool have = calibFlats.contains (f) || calibFlats.contains (f, Qt::CaseInsensitive);
 	flatStatusLabel->setText (have ? QString ("%1: yes").arg (f) : QString ("%1: NONE - dark only").arg (f));
-	flatStatusLabel->setStyleSheet (have ? "background-color: #CCFFCC;" : "background-color: #FFCCCC;");
+	flatStatusLabel->setStyleSheet (gui::statusStyle (have));
 }
 
 void MainWindow::updateStatusPanel ()
@@ -616,7 +626,7 @@ void MainWindow::updateStatusPanel ()
 	if (!state.stateText.isEmpty ())
 	{
 		statusStateLabel->setText (state.stateText);
-		statusStateLabel->setStyleSheet (state.hasError ? "background-color: #FFCCCC;" : "background-color: #CCFFCC;");
+		statusStateLabel->setStyleSheet (gui::statusStyle (!state.hasError));
 	}
 
 	double ccdTemp = state.values.value ("CCD_TEMP", NAN);
@@ -627,7 +637,7 @@ void MainWindow::updateStatusPanel ()
 		if (!std::isnan (ccdSet))
 		{
 			text += QString (" / %1 °C").arg (ccdSet, 0, 'f', 1);
-			statusTempLabel->setStyleSheet (std::abs (ccdTemp - ccdSet) < 0.5 ? "background-color: #CCFFCC;" : "background-color: #FFCCCC;");
+			statusTempLabel->setStyleSheet (gui::statusStyle (std::abs (ccdTemp - ccdSet) < 0.5));
 		}
 		statusTempLabel->setText (text);
 	}
@@ -825,7 +835,19 @@ void MainWindow::updateSaveButton ()
 {
 	bool enabled = saveButton->isChecked ();
 	saveButton->setText (enabled ? "ON" : "OFF");
-	saveButton->setStyleSheet (enabled ? "background-color: #66CC66;" : "");
+	saveButton->setStyleSheet (enabled ? gui::activeStyle () : QString ());
+}
+
+void MainWindow::onNightModeToggled (bool checked)
+{
+	gui::setNightMode (checked);
+	QSettings ("rts2", "rts2-stacker").setValue ("nightMode", checked);
+
+	// The palette covers ordinary widgets; the labels with their own
+	// colours have to be redone.
+	updateStatusPanel ();
+	updateFlatStatus ();
+	updateSaveButton ();
 }
 
 void MainWindow::onMeasureSizeChanged (int size)

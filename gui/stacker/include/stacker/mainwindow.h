@@ -82,6 +82,7 @@ class MainWindow : public QMainWindow
 		void onZoomSpinChanged (double zoom);
 		void onCanvasZoomChanged (double zoom);
 		void onProgressTick ();
+		void onNightModeToggled (bool checked);
 
 	private:
 		void onImageReady (const QString &cameraName, QImage image);
@@ -126,6 +127,7 @@ class MainWindow : public QMainWindow
 		QPlainTextEdit *logView;
 
 		QComboBox *cameraCombo;
+		QCheckBox *nightCheck;
 		QComboBox *exptimeCombo;
 		QDoubleSpinBox *exptimeSpin;
 		QSpinBox *repeatSpin;
