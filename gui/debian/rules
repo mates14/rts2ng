@@ -9,7 +9,7 @@
 # "only what I depend on") - hence the base build-deps below, even though
 # this package ships none of those drivers itself. We don't set
 # BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR/BASE_ANDOR_SDK_DIR here: rts2-viewer
-# doesn't need any camera driver built, and those CMake options just
+# and rts2-stacker don't need any camera driver built, and those CMake options just
 # cleanly skip the corresponding base subdirectories when unset.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
@@ -26,6 +26,8 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	install -d debian/rts2-viewer/usr/bin
 	install -m 0755 $(BUILDDIR)/viewer/rts2-viewer debian/rts2-viewer/usr/bin/
+	install -d debian/rts2-stacker/usr/bin
+	install -m 0755 $(BUILDDIR)/stacker/rts2-stacker debian/rts2-stacker/usr/bin/
 
 # No systemd unit - this is a GUI tool a user launches by hand, not a
 # daemon (same reasoning as never auto-starting anything that commands

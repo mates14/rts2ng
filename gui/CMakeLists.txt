@@ -42,3 +42,4 @@ add_subdirectory(${GUI_BASE_DIR} base-build)
 find_package(Qt5 5.12 COMPONENTS Widgets REQUIRED)
 
 add_subdirectory(viewer)
+add_subdirectory(stacker)

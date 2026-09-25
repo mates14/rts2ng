@@ -1186,3 +1186,33 @@ listing every `Q_OBJECT` header directly in `viewer/CMakeLists.txt`'s
 `add_executable()` call alongside its `.cpp`. Worth re-checking whether
 this is still needed if the build host's `cmake` ever moves off the snap
 package.
+
+## rts2-stacker (gui/stacker)
+
+A clone of rts2-viewer for demonstrating image accumulation: every frame
+is calibrated and added into a running sum, shown live, and written out as
+a FITS file on Reset (and on exit). rts2-viewer itself is untouched - the
+stacker compiles the viewer's ImageCanvas/SightItem sources from
+`../viewer` and has its own copies of the camera/client/window classes.
+
+    rts2-stacker --device C0 --calib ~/calib/andor46/2026 --stack-dir ~/stacks
+
+- `--calib DIR`: master darks (`dark-*.fits`, matched by EXPTIME and size,
+  used as-is - they include the bias) and flats (`flat-<filter>-*.fits`,
+  matched by FILTER, exact case first; normalized to median 1 on load).
+  The exposure-time choice is limited to the darks that match the chip at
+  the current binning. A frame without a matching dark is shown raw and
+  kept out of the stack; one without a flat is stacked dark-subtracted
+  (logged once per filter, and FLATCOR=F in the saved file). Without
+  `--calib` frames are stacked raw and any exposure time is allowed.
+- No registration - the guider is trusted. A filter or frame-size change
+  closes (saves) the current stack and starts a new one.
+- Saved file: `stack-<UTC start>-<camera>-<filter>.fits`, float sum,
+  EXPTIME = summed exposure, NCOMBINE, DATE-OBS/DATE-END, DARKn/FLATn.
+- Frames are always read full-chip (a leftover WINDOW is reset before each
+  exposure), since the darks are full-chip.
+- Unlike the viewer, the client polls its request queue every 100 ms
+  (`setTimeout`) instead of Block's default 10 s idle timeout - with the
+  default a click on an idle camera could take up to 10 s to act, and two
+  quick Expose clicks collapsed into one exposure. rts2-viewer still has
+  that latency.

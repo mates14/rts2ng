@@ -27,3 +27,18 @@ Description: Remote Telescope System 2 - Qt camera viewer client
  is a standalone network client - point it at any centrald with
  --server/--device, whether local or remote - and does not require
  rts2-base to be installed on the same machine.
+
+Package: rts2-stacker
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Remote Telescope System 2 - Qt camera stacking demonstrator
+ RTS2 (Remote Telescope System, 2nd version) is a distributed control
+ system for robotic astronomical observatories.
+ .
+ This package contains rts2-stacker: a clone of rts2-viewer that shows
+ how a CCD image builds up. Every frame received from the camera is
+ dark-subtracted and flat-fielded with master calibration frames from a
+ directory given on the command line (--calib), added into a running
+ sum displayed live, and the sum is saved as a FITS file on reset.
+ Exposure times are limited to those with a master dark. No image
+ registration is done - the telescope's guider is relied upon.
