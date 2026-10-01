@@ -2474,6 +2474,18 @@ CDP against that exact seeded collision and confirmed it now correctly
 lands on `8002` - free on both sides - instead of failing. Test rows
 and databases cleaned up afterward.
 
+**Follow-up (2026-09-30)**: still failed "basically every time". The
+`after` fix made each retry advance, but only by one hole of *this*
+site's free list, 8 tries max - and this site's lowest holes are ids of
+purged targets, most of which are still real targets on the peer, so
+8 steps rarely got past them. The loop now alternates: this site's
+smallest free id, then the peer's smallest free id `>=` that
+(`new-target-id?after=candidate-1` on the peer), then this site's again
+from there, until both return the same id. Each step skips a whole run
+of taken ids, so it settles in a few rounds. If the peer can't allocate
+(unreachable/not logged in), it falls back to the old existence check.
+No backend change.
+
 ### Guiding performance display (C1) - 2026-09-08
 
 D50's monitor page had a C1 box showing `C1_small.jpg`/`C1_center.jpg`
@@ -2591,3 +2603,37 @@ time it launches the script.
 - Every deliberate drop/deviation gets written down here with the reason,
   same as `base`'s "base note:" comment convention - don't just say "some
   things were dropped," say exactly what and why.
+
+### Prefilled "new target" link (2026-09-30)
+
+Filip's request (`rts2_target_prefill_request.md`): his D50 transient list
+wants a "Schedule" link that opens the editor with a new target filled in.
+`target.html?new=1&name=&ra=&dec=&comment=&info=&site=d50,sbt&priority=&duration=`
+(`id` wins if both are given). Frontend only (`static/target.js`):
+
+- **Duplicate check first**: `api/db/targets` from both telescopes, match
+  on name ignoring case/whitespace or within 5" of ra/dec (name match
+  wins, else nearest). A hit loads that target as `?id=N` would, rewrites
+  the address bar to `?id=N` and says why in the status line. A site
+  whose list can't be read is named in the status line, not fatal.
+- Otherwise the New target flow runs (now the named `startNewTarget()`),
+  then the What box and the When-box ticks/priority/duration are filled.
+  RA/Dec are shown sexagesimal like a loaded target. Nothing is written
+  until Save target; the query string is dropped via
+  `history.replaceState` so a reload doesn't redo it.
+- **Visibility before saving**: `visibilityQuery()` uses `ra=&dec=` for a
+  target that exists on neither telescope, so both plots (and the peer
+  horizon overlay) show for any unsaved new target, and redraw on RA/Dec
+  change. New target also hides a previously loaded target's plots now.
+- **Duration on first save**: Save target writes the scheduling row
+  (duration, request type) right after `target-create` succeeds on a site.
+
+Tested in headless Chrome (CDP) against a mock of both APIs, page served
+as D50 with SBT holding 8000-8120: new target landed on 8121 in four
+`new-target-id` calls with no writes before Save, Save issued
+`target-create` + `scheduling-save duration=600`; name and 2.8"-position
+duplicates loaded the existing target; `?id=&new=1` loaded the id. Not
+tried against the real daemons.
+
+Not done: write endpoints still accept GET (Filip's CSRF note in the
+request) - separate change.

@@ -446,6 +446,28 @@ document.getElementById ('target-form').addEventListener ('submit', async (ev) =
 				if (r.ok) {
 					siteData[site] = { exists: true, target: r.body, sinfo: '' };
 					results.push (`${SITES[site].label}: created`);
+					// Duration and request type live in the scheduling row,
+					// which Save scheduling can only write once the target
+					// exists - write them now so a filled-in new target
+					// doesn't need a second click.
+					const sinfo = {};
+					const duration = document.getElementById (`f-duration-${site}`).value;
+					const requestType = document.getElementById ('f-request-type').value;
+					if (duration)
+						sinfo.duration = duration;
+					if (requestType)
+						sinfo.type = requestType;
+					if (Object.keys (sinfo).length) {
+						try {
+							const sr = await fetchJson (apiUrl (site, `api/db/scheduling-save?id=${encodeURIComponent (currentId)}&sinfo=${encodeURIComponent (serializeSinfo (sinfo))}`));
+							if (sr.ok)
+								siteData[site].sinfo = sr.body.sinfo;
+							else
+								results.push (`${SITES[site].label} scheduling: ${sr.body.error || 'error'}`);
+						} catch (e) {
+							results.push (`${SITES[site].label} scheduling: unreachable (${e})`);
+						}
+					}
 				} else {
 					results.push (`${SITES[site].label}: create failed - ${r.body.error || 'error'}`);
 				}
@@ -465,45 +487,61 @@ document.getElementById ('target-form').addEventListener ('submit', async (ev) =
 
 // --- New target -------------------------------------------------------------
 
-document.getElementById ('new-target-btn').addEventListener ('click', async () => {
+async function startNewTarget () {
 	setStatus (loadStatusEl, true, 'reserving a new target id…');
+	currentId = null;
+	targetBoxesEl.hidden = true;
+	tarIdLabelEl.hidden = true;
+	document.getElementById ('sky-panel').hidden = true;
+	document.getElementById ('year-panel').hidden = true;
 
+	const freeIdOn = async (site, after) => {
+		const url = 'api/db/new-target-id' + (after !== null ? `?after=${after}` : '');
+		const r = await fetchJson (apiUrl (site, url));
+		if (!r.ok)
+			throw new Error (r.body.error || 'error');
+		return r.body.id;
+	};
+
+	// tar_id is allocated independently per database, so an id free here
+	// can be a real, unrelated target on the other site. Ask each site in
+	// turn for its smallest free id at or above the other's answer until
+	// both agree. Each answer skips a whole run of ids taken on that side,
+	// so this settles in a few rounds. The previous loop only asked this
+	// site, one hole at a time, and gave up after 8: this site's lowest
+	// holes are ids of purged targets, mostly still in use on the peer,
+	// so it failed nearly every time (see rts2db::newTargetId()).
 	let id = null;
-	let after = null; // see rts2db::newTargetId()'s doc comment - the
-	// scan is stateless, so re-asking with the same `after` (or none)
-	// after a collision just returns the identical candidate again,
-	// forever. Must advance `after` past each rejected id to make
-	// real progress - found live, see STATUS.md task 10's "New target
-	// id doesn't work" writeup (this loop originally assumed the old
-	// nextval()-sequence backend, which handed out a fresh number on
-	// every call with no `after` needed at all).
-	for (let attempt = 0; attempt < 8 && id === null; attempt++) {
-		let candidate;
+	let candidate;
+	try {
+		candidate = await freeIdOn (currentSite, null);
+	} catch (e) {
+		setStatus (loadStatusEl, false, `cannot reserve an id: ${e.message || e}`);
+		return;
+	}
+	for (let round = 0; round < 50 && id === null; round++) {
+		let peerId;
 		try {
-			const url = 'api/db/new-target-id' + (after !== null ? `?after=${after}` : '');
-			const r = await fetchJson (apiUrl (currentSite, url));
-			if (!r.ok) {
-				setStatus (loadStatusEl, false, `cannot reserve an id: ${r.body.error || 'error'}`);
-				return;
+			peerId = await freeIdOn (otherSite (), candidate - 1);
+		} catch (e) {
+			// Peer can't allocate (unreachable, or not logged in there) -
+			// fall back to just checking whether the candidate exists there.
+			try {
+				const r = await fetchJson (apiUrl (otherSite (), `api/db/target?id=${candidate}`));
+				peerId = r.ok ? candidate + 1 : candidate;
+			} catch (e2) {
+				peerId = candidate; // other site unreachable - can't check, proceed with what we have
 			}
-			candidate = r.body.id;
-		} catch (e) {
-			setStatus (loadStatusEl, false, `cannot reserve an id: ${e}`);
-			return;
 		}
-
-		// tar_id sequences are independent per database - a fresh id from
-		// this site's sequence could already be a real, unrelated target
-		// on the other site. Check, and draw again (past this one - see
-		// above) if so.
+		if (peerId === candidate) {
+			id = candidate;
+			break;
+		}
 		try {
-			const r = await fetchJson (apiUrl (otherSite (), `api/db/target?id=${candidate}`));
-			if (!r.ok)
-				id = candidate; // not found there either - safe on both sides
-			else
-				after = candidate;
+			candidate = await freeIdOn (currentSite, peerId - 1);
 		} catch (e) {
-			id = candidate; // other site unreachable - can't check, proceed with what we have
+			setStatus (loadStatusEl, false, `cannot reserve an id: ${e.message || e}`);
+			return;
 		}
 	}
 
@@ -540,7 +578,9 @@ document.getElementById ('new-target-btn').addEventListener ('click', async () =
 	whatLogEl.innerHTML = '';
 	renderWhenBox ();
 	await renderScriptsBox ();
-});
+}
+
+document.getElementById ('new-target-btn').addEventListener ('click', startNewTarget);
 
 document.getElementById ('f-create-type').addEventListener ('change', (ev) => {
 	const elliptical = ev.target.value === 'elliptical';
@@ -829,9 +869,32 @@ function skyCompassAz (azLibnova) {
 	return (azLibnova + 180) % 360;
 }
 
+/** Query naming the target for the visibility endpoints: its id once it
+ * exists on either telescope, otherwise (a new, unsaved target) the RA/Dec
+ * typed in the What box, which both endpoints accept in place of an id.
+ * `anywhere` is true when every site can answer it (coordinates), false
+ * when only sites that have the target can. Null when there is nothing
+ * to plot yet. */
+function visibilityQuery () {
+	if (siteData.d50.exists || siteData.sbt.exists)
+		return { q: `id=${encodeURIComponent (currentId)}`, anywhere: false };
+	if (document.getElementById ('position-fields').hidden)
+		return null;
+	const ra = parseCoordinate (document.getElementById ('f-ra').value, true);
+	const dec = parseCoordinate (document.getElementById ('f-dec').value, false);
+	if (ra === null || dec === null)
+		return null;
+	return { q: `ra=${ra}&dec=${dec}`, anywhere: true };
+}
+
 async function loadVisibility () {
 	if (currentId === null)
 		return;
+	const vq = visibilityQuery ();
+	if (!vq) {
+		skyPanelEl.hidden = true;
+		return;
+	}
 	skyPanelEl.hidden = false;
 	setStatus (skyStatusEl, true, 'loading…');
 
@@ -840,7 +903,7 @@ async function loadVisibility () {
 	const points = Math.min (600, Math.max (120, Math.round (skyCanvas.clientWidth || 800)));
 	const date = skyDateEl.value;
 	const dateParam = date ? `&date=${encodeURIComponent (date)}` : '';
-	const localUrl = apiUrl (currentSite, `api/db/target-altitude?id=${encodeURIComponent (currentId)}${dateParam}&points=${points}`);
+	const localUrl = apiUrl (currentSite, `api/db/target-altitude?${vq.q}${dateParam}&points=${points}`);
 	const peer = otherSite ();
 	// D50 and SBT share one physical site (same weather station - see
 	// the cloud sensor's own "shared by both telescopes" note), so
@@ -849,8 +912,8 @@ async function loadVisibility () {
 	// the peer's own horizon curve is used from this - its target/Moon/
 	// Sun positions would just be a near-identical second copy of the
 	// same numbers.
-	const peerHasTarget = !!(siteData[peer] && siteData[peer].exists);
-	const peerUrl = apiUrl (peer, `api/db/target-altitude?id=${encodeURIComponent (currentId)}${dateParam}&points=${points}`);
+	const peerHasTarget = vq.anywhere || !!(siteData[peer] && siteData[peer].exists);
+	const peerUrl = apiUrl (peer, `api/db/target-altitude?${vq.q}${dateParam}&points=${points}`);
 
 	try {
 		// fetchJson() here returns { ok, body } - an API-level error comes
@@ -1216,6 +1279,11 @@ function yearDateString (noon) {
 async function loadYearVisibility () {
 	if (currentId === null)
 		return;
+	const vq = visibilityQuery ();
+	if (!vq) {
+		yearPanelEl.hidden = true;
+		return;
+	}
 	yearPanelEl.hidden = false;
 	setStatus (yearStatusEl, true, 'loading…');
 
@@ -1226,9 +1294,9 @@ async function loadYearVisibility () {
 	// fetched too (when it has this target at all) purely as an overlay,
 	// so a peer that is missing, doesn't have this target, or fails to
 	// answer just means no overlay, not a failed panel.
-	const peerHasTarget = !!(siteData[peer] && siteData[peer].exists);
-	const localUrl = apiUrl (currentSite, `api/db/target-visibility-year?id=${encodeURIComponent (currentId)}&year=${year}`);
-	const peerUrl = apiUrl (peer, `api/db/target-visibility-year?id=${encodeURIComponent (currentId)}&year=${year}`);
+	const peerHasTarget = vq.anywhere || !!(siteData[peer] && siteData[peer].exists);
+	const localUrl = apiUrl (currentSite, `api/db/target-visibility-year?${vq.q}&year=${year}`);
+	const peerUrl = apiUrl (peer, `api/db/target-visibility-year?${vq.q}&year=${year}`);
 
 	try {
 		const [localRes, peerRes] = await Promise.all ([
@@ -1558,11 +1626,150 @@ window.addEventListener ('resize', () => {
 	yearResizeTimer = setTimeout (drawYearVisibility, 200);
 });
 
+// A new, unsaved target is plotted from the RA/Dec in the form (see
+// visibilityQuery ()), so redraw when those change.
+for (const elId of ['f-ra', 'f-dec']) {
+	document.getElementById (elId).addEventListener ('change', () => {
+		if (currentId === null || siteData.d50.exists || siteData.sbt.exists)
+			return;
+		loadVisibility ();
+		loadYearVisibility ();
+	});
+}
+
+// --- Prefilled new target (?new=1&name=...&ra=...&dec=...) ------------------
+//
+// Lets another page link a "schedule this" button to the editor - asked
+// for by the D50 transient list (rts2_target_prefill_request.md). The
+// link only fills the form; nothing is written until Save target, so a
+// logged-in person confirms every target.
+
+/** Target names compared the way people write them: "AT 2026adfv" and
+ * "at2026ADFV" are the same object. */
+function normalizeName (name) {
+	return (name || '').toLowerCase ().replace (/\s+/g, '');
+}
+
+/** Great-circle separation in arcsec, all arguments in degrees. */
+function separationArcsec (ra1, dec1, ra2, dec2) {
+	const r = Math.PI / 180;
+	const a = Math.sin ((dec2 - dec1) * r / 2) ** 2
+		+ Math.cos (dec1 * r) * Math.cos (dec2 * r) * Math.sin ((ra2 - ra1) * r / 2) ** 2;
+	return 2 * Math.asin (Math.min (1, Math.sqrt (a))) / r * 3600;
+}
+
+const DUPLICATE_RADIUS_ARCSEC = 5;
+
+/** Looks for an existing target on either telescope with the same name or
+ * within DUPLICATE_RADIUS_ARCSEC of ra/dec. Returns { match, why,
+ * unchecked }: the best match (a name match wins over the nearest
+ * position match) or null, and the labels of sites whose list could not
+ * be read. */
+async function findDuplicate (name, ra, dec) {
+	const wanted = normalizeName (name);
+	const lists = await Promise.all (['d50', 'sbt'].map (async (site) => {
+		try {
+			const r = await fetchJson (apiUrl (site, 'api/db/targets'));
+			return r.ok ? r.body : null;
+		} catch (e) {
+			return null;
+		}
+	}));
+
+	let byName = null;
+	let byPos = null;
+	let bestSep = Infinity;
+	const unchecked = [];
+	['d50', 'sbt'].forEach ((site, i) => {
+		if (!lists[i]) {
+			unchecked.push (SITES[site].label);
+			return;
+		}
+		for (const t of lists[i]) {
+			if (!byName && wanted !== '' && normalizeName (t.name) === wanted)
+				byName = { match: t, why: `same name, at ${SITES[site].label}` };
+			if (ra !== null && dec !== null && typeof t.ra === 'number' && typeof t.dec === 'number') {
+				const sep = separationArcsec (ra, dec, t.ra, t.dec);
+				if (sep <= DUPLICATE_RADIUS_ARCSEC && sep < bestSep) {
+					bestSep = sep;
+					byPos = { match: t, why: `${sep.toFixed (1)}" away, at ${SITES[site].label}` };
+				}
+			}
+		}
+	});
+	const found = byName || byPos;
+	return { match: found ? found.match : null, why: found ? found.why : '', unchecked };
+}
+
+async function prefillNewTarget (qs) {
+	const ra = qs.has ('ra') ? parseCoordinate (qs.get ('ra'), true) : null;
+	const dec = qs.has ('dec') ? parseCoordinate (qs.get ('dec'), false) : null;
+
+	setStatus (loadStatusEl, true, 'checking whether this target already exists…');
+	const dup = await findDuplicate (qs.get ('name'), ra, dec);
+	if (dup.match) {
+		history.replaceState (null, '', `${location.pathname}?id=${dup.match.id}`);
+		document.getElementById ('load-id').value = dup.match.id;
+		await loadTarget (dup.match.id);
+		setStatus (loadStatusEl, true, `already exists as target ${dup.match.id} "${dup.match.name}" (${dup.why}) - loaded it instead of creating a new one`);
+		return;
+	}
+
+	await startNewTarget ();
+	if (currentId === null)
+		return; // id reservation failed, status line already says why
+
+	const fill = (elId, key) => {
+		if (qs.has (key))
+			document.getElementById (elId).value = qs.get (key);
+	};
+	fill ('f-name', 'name');
+	fill ('f-comment', 'comment');
+	fill ('f-info', 'info');
+	// Shown the way a loaded target shows them; an unparseable value is
+	// left as given so the person sees what the link sent.
+	fill ('f-ra', 'ra');
+	fill ('f-dec', 'dec');
+	if (ra !== null)
+		document.getElementById ('f-ra').value = decToSexagesimal (ra, true, 3);
+	if (dec !== null)
+		document.getElementById ('f-dec').value = decToSexagesimal (dec, false, 1);
+
+	const sites = (qs.get ('site') || '').toLowerCase ().split (',').map ((x) => x.trim ());
+	for (const site of ['d50', 'sbt']) {
+		const cb = document.getElementById (`f-enabled-${site}`);
+		if (!cb || cb.disabled || !sites.includes (site))
+			continue;
+		cb.checked = true;
+		if (qs.has ('priority'))
+			document.getElementById (`f-priority-${site}`).value = qs.get ('priority');
+		if (qs.has ('duration'))
+			document.getElementById (`f-duration-${site}`).value = qs.get ('duration');
+	}
+
+	// A reload must not reserve another id and refill the form.
+	history.replaceState (null, '', location.pathname);
+
+	let note = `new target - id ${currentId} reserved and filled in from the link; check it and click Save target`;
+	const unreadable = (qs.has ('ra') && ra === null) || (qs.has ('dec') && dec === null);
+	if (unreadable)
+		note += ' - RA/Dec from the link could not be read, please fix';
+	if (dup.unchecked.length)
+		note += ` - could not check ${dup.unchecked.join (' and ')} for an existing target`;
+	setStatus (loadStatusEl, !unreadable, note);
+
+	await loadVisibility ();
+	await loadYearVisibility ();
+}
+
 // Support ?id=N in the URL so a link (e.g. from a future target-list
 // view) can jump straight to a target instead of requiring the id to be
-// typed in by hand.
-const preselectId = new URLSearchParams (location.search).get ('id');
+// typed in by hand. ?new=1 is the prefilled new target above.
+const startParams = new URLSearchParams (location.search);
+const preselectId = startParams.get ('id');
 if (preselectId) {
 	document.getElementById ('load-id').value = preselectId;
 	loadTarget (preselectId);
+} else if (startParams.get ('new') === '1') {
+	prefillNewTarget (startParams);
 }
