@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Target List</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<header>
+		<h1>Target List</h1>
+		<span class="header-links">
+			<a href="target.html" class="back-link">target editor</a>
+			<a href="index.html" class="back-link">device monitor</a>
+		</span>
+	</header>
+
+	<section class="panel">
+		<form id="filter-form" class="inline-form list-filters">
+			<label>Search <input id="q" type="text" placeholder="name / comment words, id, or 8000-8999"></label>
+			<label>Near RA <input id="near-ra" type="text" size="12" placeholder="HH:MM:SS or deg"></label>
+			<label>Dec <input id="near-dec" type="text" size="12" placeholder="&plusmn;DD:MM:SS or deg"></label>
+			<label>Radius (&prime;) <input id="near-r" type="number" min="0" step="any" value="10" class="narrow"></label>
+			<label>Enabled
+				<select id="enabled">
+					<option value="any">on either telescope</option>
+					<option value="d50">on D50</option>
+					<option value="sbt">on SBT</option>
+					<option value="both">on both</option>
+					<option value="none">nowhere</option>
+					<option value="all">don't care</option>
+				</select>
+			</label>
+			<label>Type <select id="type"><option value="">all</option></select></label>
+			<label class="check-label"><input id="eligible" type="checkbox"> scheduled only</label>
+			<button type="button" id="reload-btn">Reload</button>
+		</form>
+		<p class="hint">
+			Both telescopes, merged by target ID. <b>On</b>: <span class="on-sched">&#9679;</span>
+			enabled and picked up by the scheduler, <span class="on-idle">&#9675;</span> enabled but
+			not a type/ID the scheduler looks at (it takes type <code>O</code> with ID 1000-49999, and
+			type <code>G</code> until first observed). &ldquo;Scheduled only&rdquo; keeps targets the
+			scheduler would consider on at least one telescope. Click a column heading to sort, a row
+			to open it in the editor.
+		</p>
+		<div id="list-status" class="status-line"></div>
+	</section>
+
+	<section class="panel list-panel">
+		<div id="list-summary" class="list-summary"></div>
+		<div class="list-scroll">
+			<table id="target-table" class="target-table">
+				<thead></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		<button type="button" id="show-all-btn" class="show-all-btn" hidden></button>
+	</section>
+
+	<script src="targets.js"></script>
+</body>
+</html>

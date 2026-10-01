@@ -9,6 +9,7 @@
 #include "rts2db/observationset.h"
 #include "rts2db/imageset.h"
 #include "rts2db/scheduling.h"
+#include "rts2db/targetlist.h"
 #include "rts2db/targetscripts.h"
 #include "rts2db/records.h"
 #include "objectcheck.h"
@@ -144,6 +145,48 @@ void rts2web::dbListTargets (std::ostringstream &os)
 		jsonNumber (pos.ra, os);
 		os << ",\"dec\":";
 		jsonNumber (pos.dec, os);
+		os << "}";
+	}
+	os << "]";
+}
+
+void rts2web::dbTargetList (std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::TargetSummarySet ts;
+	ts.load ();
+
+	os << "[";
+	bool first = true;
+	for (const rts2db::TargetSummary &t : ts)
+	{
+		if (!first)
+			os << ",";
+		first = false;
+
+		os << "{\"id\":" << t.id << ",\"name\":";
+		jsonString (t.name.c_str (), os);
+		os << ",\"type\":";
+		char type[2] = { t.type, '\0' };
+		jsonString (type, os);
+		os << ",\"comment\":";
+		jsonString (t.comment.c_str (), os);
+		os << ",\"ra\":";
+		jsonNumber (t.ra, os);
+		os << ",\"dec\":";
+		jsonNumber (t.dec, os);
+		os << ",\"enabled\":" << (t.enabled ? "true" : "false");
+		os << ",\"priority\":";
+		if (t.hasPriority)
+			os << t.priority;
+		else
+			os << "null";
+		os << ",\"sinfo\":";
+		jsonString (t.sinfo.c_str (), os);
+		os << ",\"obsCount\":" << t.obsCount;
+		os << ",\"lastObs\":";
+		jsonTime (t.lastObs, os);
 		os << "}";
 	}
 	os << "]";

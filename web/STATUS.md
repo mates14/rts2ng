@@ -2637,3 +2637,38 @@ tried against the real daemons.
 
 Not done: write endpoints still accept GET (Filip's CSRF note in the
 request) - separate change.
+
+### Target list (2026-09-30)
+
+Level zero of the program work (proposal in `programs.md`): one table of
+every target on both telescopes, so relative priorities and durations
+can be compared. Read-only; a row opens `target.html?id=N`.
+
+- **Backend**: new `GET /api/db/target-list` (`dbTargetList()`), backed by
+  `rts2db::TargetSummarySet` (`db/db/src/targetlist.ec`) - one joined
+  query over targets, scheduling (`DISTINCT ON`, since production's table
+  has no key on tar_id) and observations (count, max obs_start). Not
+  TargetSet: that would be a Target object plus extra queries per row
+  for ~16k targets. RA/Dec are the stored columns (null for elliptical),
+  comment is cut to 200 characters to keep the response small.
+  `/api/db/targets` is unchanged (target.js uses it).
+- **Frontend**: `static/targets.html` + `targets.js`, linked from the
+  device monitor and the target editor. Loads both sites, merges by
+  tar_id. Filters: words in name/comment, id or id range, cone around
+  RA/Dec (seconds optional), enabled on which telescope, type, and
+  "scheduled only". Sortable columns, per telescope: on, priority,
+  duration, observation count, last observation; plus the request type
+  (highlighted when D50 and SBT differ). Filters and sort live in the
+  query string, so a view can be linked. The summary line gives, per
+  telescope, the number of scheduled targets among those shown and
+  their summed duration.
+- **"Scheduled"** mirrors `sch/database.py`'s two queries: enabled type
+  `O` with tar_id 1000-49999, or enabled type `G` never observed.
+- Renders 500 rows, with a "Show all" button (15.6k rows take ~0.5 s).
+  A telescope that can't be reached is shown as unavailable, not as
+  "not on" it.
+
+Tested: the endpoint against the local dev database (121 targets); the
+page in headless Chrome against a mock serving ~13.6k targets per site
+(load ~0.7 s, filters, sort, URL state, cone search, one site down). Not
+yet tried against production data.

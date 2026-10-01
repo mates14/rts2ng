@@ -1164,17 +1164,22 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 	bool wantTarget = !strcmp (url, "/api/db/target");
 	bool wantObservations = !strcmp (url, "/api/db/observations");
 
-	if (!strcmp (url, "/api/db/targets"))
+	bool wantTargetList = !strcmp (url, "/api/db/target-list");
+
+	if (!strcmp (url, "/api/db/targets") || wantTargetList)
 	{
 		MHD_suspend_connection (connection);
-		workerPool->submit ([this, connection] ()
+		workerPool->submit ([this, connection, wantTargetList] ()
 		{
 			DbResult r;
 			r.connection = connection;
 			std::ostringstream os;
 			try
 			{
-				dbListTargets (os);
+				if (wantTargetList)
+					dbTargetList (os);
+				else
+					dbListTargets (os);
 				r.body = os.str ();
 				r.httpStatus = MHD_HTTP_OK;
 			}

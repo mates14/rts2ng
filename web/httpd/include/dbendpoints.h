@@ -35,6 +35,16 @@ namespace rts2web
 /** GET /api/db/targets - every target: id, name, type, current ra/dec. */
 void dbListTargets (std::ostringstream &os);
 
+/**
+ * GET /api/db/target-list - every target with what the target list page
+ * compares them by: [{id, name, type, comment, ra, dec, enabled,
+ * priority, sinfo, obsCount, lastObs}]. ra/dec are the stored columns
+ * (null when absent), priority null when unset, sinfo "" without a
+ * scheduling row, lastObs Unix time or null. One joined query - see
+ * rts2db/targetlist.h.
+ */
+void dbTargetList (std::ostringstream &os);
+
 /** GET /api/db/target?id=N - one target's full detail. Throws
  * rts2core::Error if id doesn't exist. */
 void dbGetTarget (int targetId, std::ostringstream &os);

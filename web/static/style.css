@@ -854,3 +854,167 @@ header h1 {
 	width: 100%;
 	height: 100%;
 }
+
+/* targets.html - target list */
+
+.header-links {
+	display: flex;
+	gap: 16px;
+}
+
+.list-filters {
+	flex-wrap: wrap;
+	margin-bottom: 12px;
+}
+
+.inline-form select {
+	font-size: 13px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font-family: inherit;
+	background: var(--panel-bg);
+}
+
+.inline-form input.narrow {
+	width: 6em;
+}
+
+.inline-form .check-label {
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+	color: var(--text);
+	padding-bottom: 7px;
+}
+
+.list-summary {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin-bottom: 8px;
+}
+
+/* The table scrolls inside this box, not with the page: a scroll
+ * container is what position: sticky on the header sticks to, and one is
+ * needed anyway for horizontal scrolling on a narrow screen. */
+.list-scroll {
+	overflow: auto;
+	max-height: calc(100vh - 140px);
+}
+
+.target-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.target-table th, .target-table td {
+	padding: 4px 8px;
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+}
+
+.target-table thead th {
+	position: sticky;
+	top: 0;
+	background: var(--panel-bg);
+	color: var(--text-muted);
+	font-size: 12px;
+	font-weight: 600;
+	vertical-align: bottom;
+}
+
+.target-table thead tr:nth-child(2) th {
+	top: 24px;
+}
+
+.target-table th.site-group {
+	text-align: center;
+	color: var(--text);
+	border-left: 1px solid var(--border);
+}
+
+.target-table .site-first {
+	border-left: 1px solid var(--border);
+}
+
+.target-table th.sortable {
+	cursor: pointer;
+	user-select: none;
+}
+
+.target-table th.sortable:hover {
+	color: var(--accent);
+}
+
+.target-table th.sorted-asc::after {
+	content: " \25B2";
+	font-size: 9px;
+}
+
+.target-table th.sorted-desc::after {
+	content: " \25BC";
+	font-size: 9px;
+}
+
+.target-table tbody tr {
+	cursor: pointer;
+}
+
+.target-table tbody tr:hover {
+	background: var(--bg);
+}
+
+.target-table td.num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.target-table td.center {
+	text-align: center;
+}
+
+.target-table td.mono {
+	font-family: var(--mono);
+	font-size: 12px;
+}
+
+.target-table td.name {
+	max-width: 24em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.target-table td.dim {
+	color: var(--text-muted);
+}
+
+.target-table td.absent {
+	color: var(--text-muted);
+	font-style: italic;
+	text-align: center;
+	font-size: 12px;
+}
+
+.target-table td.differs {
+	color: var(--warn);
+}
+
+.on-sched {
+	color: var(--good);
+}
+
+.on-idle {
+	color: var(--text-muted);
+}
+
+.show-all-btn {
+	margin-top: 10px;
+	font-size: 13px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	background: var(--panel-bg);
+	border-radius: 6px;
+	cursor: pointer;
+}
