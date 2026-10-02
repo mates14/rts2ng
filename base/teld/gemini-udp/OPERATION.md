@@ -484,8 +484,25 @@ the sensor being mounted differently, and is absorbed (learning only at CONFIRME
 CWD, a slipped clutch — shows up on both axes at the next rest, including right after a `position cwd`
 given with the telescope somewhere else.
 
-**Suggested start:** leave `imu_action` at WARN for some nights and watch `imu_error` against
-`imu_temp`; only switch to LOST once the false-alarm margin is known.
+**`imu_action`** (default REZERO): a confirmed disagreement makes the position LOST at once (tracking
+stops, moves are refused), then the driver runs `position imu rezero` on its own, once per episode. If
+the probe is conclusive the mount is re-zeroed there and comes back ASSUMED (the sky confirms later); if
+not, it stays LOST for a human. WARN only logs - on 2026-10-02 a 36° Dec slip in a flip was flagged 23 s
+after it happened and the night went on for 80 minutes on the wrong counters. An IMU re-zero is not
+limited by `rezero_max` (gravity measures the axes absolutely); only the counter window limits it.
+`rezero_max` still guards re-zeroes from sky evidence.
+
+**Magnetometer.** Calibration samples also keep the magnetometer (the median of each window - single
+corrupt raw samples are common). With 20 or more samples spread over 60° on both axes a 27-term model is
+fitted: every field source fixed to the base, to the RA-turning part or to the sensor, the mount's own
+steel included (physical "earth field + offsets" models were 10× worse). On SBT it predicted unseen poses
+to 1.5 µT with 0.4 µT noise. `position imu` lets it vote between the positions gravity leaves open - the
+mirror pair, or the two ends of the valley near CWD - only on a clear margin; the position itself stays
+gravity's. `imu_mag_error` shows it at every rest check; it does not raise alarms (yet).
+
+**Stops during a probe.** While `position imu` runs, stops the framework makes on its own (every refused
+move or correction while the position is LOST makes one) are ignored; a client's `stop` or
+`position abort` ends it.
 
 **`position imu [rezero]` — where the axes are, from gravity alone.** One reading fits two mirror-image
 axis positions; a known RA-axis step (`imu_probe_step`, 3°, made in counter ticks with `:MP#`, which stay

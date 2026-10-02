@@ -516,6 +516,11 @@ ImuMountModel::ImuMountModel ()
 	fitRms = NAN;
 	nFit = 0;
 	fullModel = false;
+	magFitted = false;
+	for (double &c : magCoef)
+		c = 0;
+	magFitRms = NAN;
+	nMagFit = 0;
 }
 
 void ImuMountModel::setLatitude (double latDeg)
@@ -944,6 +949,92 @@ std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveJoint (const double
 	return out;
 }
 
+namespace
+{
+	void magBasis (double raAxis, double decAxis, double b[9])
+	{
+		double cr = cos (raAxis * DEG), sr = sin (raAxis * DEG), cd = cos (decAxis * DEG), sd = sin (decAxis * DEG);
+		double r[3] = {1, cr, sr}, d[3] = {1, cd, sd};
+		for (int i = 0; i < 3; i++)
+			for (int j = 0; j < 3; j++)
+				b[i * 3 + j] = r[i] * d[j];
+	}
+}
+
+bool ImuMountModel::fitMag (const std::vector<CalSample> &samples, int magMinSamples, double minSpanDeg)
+{
+	magFitted = false;
+	magFitRms = NAN;
+	std::vector<const CalSample *> use;
+	double raLo = INFINITY, raHi = -INFINITY, decLo = INFINITY, decHi = -INFINITY;
+	for (const auto &cs : samples)
+		if (cs.magValid)
+		{
+			use.push_back (&cs);
+			raLo = std::min (raLo, cs.raAxis);
+			raHi = std::max (raHi, cs.raAxis);
+			decLo = std::min (decLo, cs.decAxis);
+			decHi = std::max (decHi, cs.decAxis);
+		}
+	nMagFit = use.size ();
+	if ((int) use.size () < magMinSamples || raHi - raLo < minSpanDeg || decHi - decLo < minSpanDeg)
+		return false;
+
+	// the three axes share the design matrix: one normal matrix, three right-hand sides
+	std::vector<double> A (81, 0);
+	std::vector<double> rhs[3] = {std::vector<double> (9, 0), std::vector<double> (9, 0), std::vector<double> (9, 0)};
+	for (const auto *cs : use)
+	{
+		double b[9];
+		magBasis (cs->raAxis, cs->decAxis, b);
+		for (int i = 0; i < 9; i++)
+		{
+			for (int j = 0; j < 9; j++)
+				A[i * 9 + j] += b[i] * b[j];
+			for (int k = 0; k < 3; k++)
+				rhs[k][i] += b[i] * cs->mag[k];
+		}
+	}
+	for (int k = 0; k < 3; k++)
+	{
+		std::vector<double> x;
+		if (!solveLinear (A, rhs[k], 9, x))
+			return false;
+		for (int i = 0; i < 9; i++)
+			magCoef[k * 9 + i] = x[i];
+	}
+	magFitted = true;
+	double sum2 = 0;
+	for (const auto *cs : use)
+	{
+		double e = magErrorUT (cs->raAxis, cs->decAxis, cs->mag);
+		sum2 += e * e;
+	}
+	magFitRms = sqrt (sum2 / use.size ());
+	return true;
+}
+
+void ImuMountModel::predictMag (double raAxis, double decAxis, double out[3]) const
+{
+	double b[9];
+	magBasis (raAxis, decAxis, b);
+	for (int k = 0; k < 3; k++)
+	{
+		out[k] = 0;
+		for (int i = 0; i < 9; i++)
+			out[k] += magCoef[k * 9 + i] * b[i];
+	}
+}
+
+double ImuMountModel::magErrorUT (double raAxis, double decAxis, const double mag[3]) const
+{
+	if (!magFitted)
+		return NAN;
+	double p[3];
+	predictMag (raAxis, decAxis, p);
+	return sqrt ((mag[0] - p[0]) * (mag[0] - p[0]) + (mag[1] - p[1]) * (mag[1] - p[1]) + (mag[2] - p[2]) * (mag[2] - p[2]));
+}
+
 std::string ImuMountModel::describe () const
 {
 	if (!fitted)
@@ -954,5 +1045,10 @@ std::string ImuMountModel::describe () const
 		fullModel ? "full" : "orientation-only", nFit, fitRms, raSign > 0 ? "+" : "-", decSign > 0 ? "+" : "-",
 		bias[0], bias[1], bias[2], scale,
 		M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]);
-	return buf;
+	std::string out = buf;
+	if (magFitted)
+		snprintf (buf, sizeof (buf), "; magnetometer fit of %d samples, rms %.2f uT", nMagFit, magFitRms);
+	else
+		snprintf (buf, sizeof (buf), "; magnetometer not fitted (%d samples)", nMagFit);
+	return out + buf;
 }

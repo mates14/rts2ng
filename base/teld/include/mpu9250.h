@@ -153,6 +153,8 @@ class ImuMountModel
 		{
 			double raAxis, decAxis;	// deg, from the counters
 			double acc[3];		// g, averaged at rest
+			bool magValid = false;
+			double mag[3] = {0, 0, 0};	// uT, raw chip axes, window median
 		};
 
 		ImuMountModel ();
@@ -163,6 +165,24 @@ class ImuMountModel
 		double rms () const { return fitRms; }		// deg, of the last fit
 		int fitSamples () const { return nFit; }
 		std::string describe () const;
+
+		/**
+		 * The magnetometer, as the sum of every field source fixed to the
+		 * base, to the RA-turning part or to the sensor - the mount's own
+		 * steel included - which in the sensor frame is linear in
+		 * {1, cos ra, sin ra} x {1, cos dec, sin dec}: 9 terms per axis, 27
+		 * in all, a linear least squares fit. Physical models (earth field
+		 * + offsets) left 10-16 uT on SBT; this one 1.5 uT on poses it was
+		 * not fitted to, with 0.4 uT noise. Needs magMinSamples samples
+		 * spread over both axes; fitMag() says whether it got them.
+		 */
+		bool fitMag (const std::vector<CalSample> &samples, int magMinSamples = 20, double minSpanDeg = 60);
+		bool magValid () const { return magFitted; }
+		double magRms () const { return magFitRms; }	// uT
+		int magSamples () const { return nMagFit; }
+		void predictMag (double raAxis, double decAxis, double out[3]) const;
+		/** |measured - predicted|, uT */
+		double magErrorUT (double raAxis, double decAxis, const double mag[3]) const;
 
 		/** fit to the samples; false (and invalid) with fewer than 3 */
 		bool fit (const std::vector<CalSample> &samples, int fullModelFrom = 8);
@@ -218,6 +238,10 @@ class ImuMountModel
 		double fitRms;
 		int nFit;
 		bool fullModel;
+		bool magFitted;
+		double magCoef[27];
+		double magFitRms;
+		int nMagFit;
 
 		void upFromAxes (const double Mr[9], int rs, int ds, double raAxis, double decAxis, double out[3]) const;
 		double fitFrom (const std::vector<CalSample> &samples, double Mr[9], double b[3], double &s, int rs, int ds, bool full, int iterations) const;

@@ -205,6 +205,16 @@ class GeminiUDP:public Telescope
 		void checkPositionEvidence (const GeminiStatus &st);
 		void judgeStartup (const GeminiStatus &st);
 		void loadPositionState ();
+		// the saved reason, said once - it used to gain another "still lost
+		// from before the driver restart: " with every restart
+		std::string stillLostReason () const
+		{
+			static const std::string prefix = "still lost from before the driver restart: ";
+			std::string r = savedReason;
+			while (r.compare (0, prefix.size (), prefix) == 0)
+				r = r.substr (prefix.size ());
+			return prefix + r;
+		}
 		void savePositionState (const GeminiStatus *st);
 		int positionCommand (rts2core::Connection *conn);
 
@@ -528,7 +538,8 @@ class GeminiUDP:public Telescope
 		int imuDisagreeCount;
 		bool imuAlarm;
 
-		enum ImuAction { IMU_ACTION_NONE, IMU_ACTION_WARN, IMU_ACTION_LOST };
+		enum ImuAction { IMU_ACTION_NONE, IMU_ACTION_WARN, IMU_ACTION_LOST, IMU_ACTION_REZERO };
+		bool imuAutoRezeroTried;	// one automatic position imu rezero per disagreement episode
 		enum ImuLearn { IMU_LEARN_OFF, IMU_LEARN_CONFIRMED, IMU_LEARN_ASSUMED };
 
 		rts2core::ValueBool *imuConnectedValue;
@@ -541,6 +552,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueDouble *imuRaAxisErrValue;
 		rts2core::ValueDouble *imuDecAxisErrValue;
 		rts2core::ValueDouble *imuAxisCondValue;
+		rts2core::ValueDouble *imuMagErrorValue;
 		rts2core::ValueBool *imuAlarmValue;
 		rts2core::ValueSelection *imuActionValue;
 		rts2core::ValueDouble *imuMaxErrorValue;
@@ -597,7 +609,9 @@ class GeminiUDP:public Telescope
 		void runImuProbe (const GeminiStatus &st);
 		void setImuProbeState (ImuProbeState newState);
 		void abortImuProbe (const std::string &why);
-		bool imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err);
+		bool imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err, double *mag = nullptr);
+		bool imuProbeMag1Valid;
+		double imuProbeMag1[3];		// magnetometer at the first reading
 		bool imuProbeSendMove (int32_t ra, int32_t dec);
 		bool imuProbeArrived (const GeminiStatus &st);
 		void evaluateImuProbe (const GeminiStatus &st, const double acc[3]);
@@ -807,6 +821,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuWasConnected = false;
 	imuDisagreeCount = 0;
 	imuAlarm = false;
+	imuAutoRezeroTried = false;
 
 	imuProbeState = IMUPROBE_IDLE;
 	imuProbeSince = 0;
@@ -819,6 +834,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuProbeStopTries = 0;
 	imuOperatorStop = false;
 	imuStopIgnoredLogAt = 0;
+	imuProbeMag1Valid = false;
 	imuProbeRa1 = imuProbeDec1 = NAN;
 	imuProbeAcc1[0] = imuProbeAcc1[1] = imuProbeAcc1[2] = NAN;
 	imuProbeRa1Ticks = imuProbeDec1Ticks = 0;
@@ -846,13 +862,15 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	createValue (imuRaAxisErrValue, "imu_ra_axis_err", "[deg] RA axis position from the IMU minus the counters, last rest check", false);
 	createValue (imuDecAxisErrValue, "imu_dec_axis_err", "[deg] Dec axis position from the IMU minus the counters, last rest check", false);
 	createValue (imuAxisCondValue, "imu_axis_cond", "[deg/deg] how much the split into imu_ra/dec_axis_err can move per degree of gravity error - large with the tube near the meridian plane, where only imu_error is meaningful", false);
+	createValue (imuMagErrorValue, "imu_mag_error", "[uT] magnetometer minus its model at the counters, last rest check (the model is in imu_calibration)", false);
 	createValue (imuAlarmValue, "imu_alarm", "the IMU disagrees with the axis counters by more than imu_max_error", false);
 	imuAlarmValue->setValueBool (false);
-	createValue (imuActionValue, "imu_action", "what a confirmed IMU disagreement does: NONE (shown only), WARN (logged and recorded as an incident), LOST (position_trust LOST - moves refused)", false, RTS2_VALUE_WRITABLE);
+	createValue (imuActionValue, "imu_action", "what a confirmed IMU disagreement does: NONE (shown only), WARN (logged and recorded as an incident), LOST (position_trust LOST - moves refused), REZERO (LOST, then position imu rezero on its own, once per episode - default)", false, RTS2_VALUE_WRITABLE);
 	imuActionValue->addSelVal ("NONE");
 	imuActionValue->addSelVal ("WARN");
 	imuActionValue->addSelVal ("LOST");
-	imuActionValue->setValueInteger (IMU_ACTION_WARN);
+	imuActionValue->addSelVal ("REZERO");
+	imuActionValue->setValueInteger (IMU_ACTION_REZERO);
 	createValue (imuMaxErrorValue, "imu_max_error", "[deg] IMU vs counters disagreement that counts", false, RTS2_VALUE_WRITABLE);
 	imuMaxErrorValue->setValueDouble (2.0);
 	createValue (imuConfirmValue, "imu_confirm", "consecutive rest checks that must disagree before imu_action is taken", false, RTS2_VALUE_WRITABLE);
@@ -1740,7 +1758,7 @@ void GeminiUDP::judgeStartup (const GeminiStatus &st)
 		if (lastStartupCount > 1)
 			return;	// cannot happen without a boot, but never demote on it
 		if (carriedLost)
-			setPositionTrust (TRUST_LOST, "still lost from before the driver restart: " + savedReason);
+			setPositionTrust (TRUST_LOST, stillLostReason ());
 		else if (atCwd && savedHaveAxis && savedDecTicks != st.geometry.decHalf)
 			setPositionTrust (TRUST_LOST, "since the driver last ran, the mount's counters were reset to CWD - a cold or warm start nobody confirmed");
 		else
@@ -1764,7 +1782,7 @@ void GeminiUDP::judgeStartup (const GeminiStatus &st)
 
 	if (carriedLost)
 	{
-		setPositionTrust (TRUST_LOST, "still lost from before the driver restart: " + savedReason);
+		setPositionTrust (TRUST_LOST, stillLostReason ());
 		return;
 	}
 	if (positionLost ())
@@ -2290,7 +2308,10 @@ int GeminiUDP::beginRezero (double raErrDeg, double decErrDeg, const std::string
 		err = "the mount is parking or a safety recovery is running";
 		return -1;
 	}
-	if (std::max (fabs (raErrDeg), fabs (decErrDeg)) > rezeroMaxValue->getValueDouble ())
+	// gravity measures the axes absolutely, wherever they are: only the
+	// counter window below limits an IMU re-zero. rezero_max guards the sky
+	// path, where one bad solve must not swing the mount across the sky.
+	if (summary.compare (0, 4, "IMU:") != 0 && std::max (fabs (raErrDeg), fabs (decErrDeg)) > rezeroMaxValue->getValueDouble ())
 	{
 		err = "the error exceeds rezero_max";
 		return -1;
@@ -3833,12 +3854,14 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	imuRaAxisErrValue->setValueDouble (raErr);
 	imuDecAxisErrValue->setValueDouble (decErr);
 	imuAxisCondValue->setValueDouble (cond);
+	double magErr = av.magValid ? imuModel.magErrorUT (raAxis, decAxis, av.mag) : NAN;
+	imuMagErrorValue->setValueDouble (magErr);
 
 	// every rest check, with the compass, for working out what the
 	// magnetometer is good for
 	logStream (MESSAGE_DEBUG) << "GeminiUDP: IMU rest check at counters RA axis " << raAxis << ", Dec axis " << decAxis
 		<< " deg: acc " << av.acc[0] << " " << av.acc[1] << " " << av.acc[2] << " g, mag " << av.mag[0] << " " << av.mag[1] << " " << av.mag[2]
-		<< " uT (median, " << av.magOutliers << " of " << av.n << " samples off), temp " << av.temp << " C, error " << err << " deg" << sendLog;
+		<< " uT (median, " << av.magOutliers << " of " << av.n << " samples off; model " << magErr << " uT), temp " << av.temp << " C, error " << err << " deg" << sendLog;
 
 	learnImuSample (raAxis, decAxis, av, err);
 
@@ -3868,6 +3891,7 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	else
 	{
 		imuDisagreeCount = 0;
+		imuAutoRezeroTried = false;
 		if (imuAlarm)
 		{
 			imuAlarm = false;
@@ -3885,9 +3909,26 @@ void GeminiUDP::raiseImuAlarm (const std::string &detail)
 	imuAlarmValue->setValueBool (true);
 	sendValueAll (imuAlarmValue);
 
+	// REZERO: the safe and unattended answer. LOST at once stops tracking and
+	// blocks every move; then the probe finds where the axes truly are and
+	// re-zeroes there (ASSUMED - the sky confirms later), or, if it cannot
+	// tell, the position stays LOST for a human. On SBT a Dec slip of 36
+	// deg in a flip was seen 23 s after it happened; with WARN the night
+	// went on for 80 minutes on the wrong counters.
 	int action = imuActionValue->getValueInteger ();
-	if (action == IMU_ACTION_LOST && !positionLost ())
+	if ((action == IMU_ACTION_LOST || action == IMU_ACTION_REZERO) && !positionLost ())
+	{
 		setPositionTrust (TRUST_LOST, "IMU: " + detail);
+		if (action == IMU_ACTION_REZERO && !imuAutoRezeroTried)
+		{
+			imuAutoRezeroTried = true;
+			std::string err;
+			if (beginImuProbe (true, err))
+				logStream (MESSAGE_ERROR) << "GeminiUDP: IMU: automatic position imu rezero not started: " << err << " - the position stays LOST" << sendLog;
+			else
+				logStream (MESSAGE_WARNING) << "GeminiUDP: IMU: running position imu rezero on its own" << sendLog;
+		}
+	}
 	else if (action != IMU_ACTION_NONE)
 	{
 		// WARN, or LOST with the position already lost: just say so
@@ -3934,7 +3975,7 @@ void GeminiUDP::publishImuRaw (const ImuStatus &is)
 // counters (imu_learn), the pose is new (imu_learn_spacing from every sample
 // already there), and - once calibrated - it agrees with the calibration:
 // a disagreement is exactly what the check is for, and must not be learnt
-// away. The oldest sample makes room past 60.
+// away. The oldest sample makes room past 150.
 void GeminiUDP::learnImuSample (double raAxis, double decAxis, const ImuAverage &av, double errDeg)
 {
 	int mode = imuLearnValue->getValueInteger ();
@@ -3955,8 +3996,12 @@ void GeminiUDP::learnImuSample (double raAxis, double decAxis, const ImuAverage 
 	cs.decAxis = decAxis;
 	for (int i = 0; i < 3; i++)
 		cs.acc[i] = av.acc[i];
+	cs.magValid = av.magValid;
+	for (int i = 0; i < 3; i++)
+		cs.mag[i] = av.mag[i];
 	imuCal.push_back (cs);
-	while (imuCal.size () > 60)
+	// the 27-term magnetometer model wants many poses - room for a night's
+	while (imuCal.size () > 150)
 		imuCal.erase (imuCal.begin ());
 
 	logStream (MESSAGE_INFO) << "GeminiUDP: IMU calibration sample " << imuCal.size () << " at RA axis " << raAxis << ", Dec axis " << decAxis
@@ -3969,6 +4014,7 @@ void GeminiUDP::refitImu ()
 {
 	bool was = imuCalibrated;
 	imuModel.fit (imuCal);
+	imuModel.fitMag (imuCal);
 
 	double raLo = INFINITY, raHi = -INFINITY, decLo = INFINITY, decHi = -INFINITY;
 	for (const auto &cs : imuCal)
@@ -4007,7 +4053,7 @@ void GeminiUDP::refitImu ()
 	}
 }
 
-// "sample <RA axis deg> <Dec axis deg> <ax> <ay> <az>" per line, the fit is
+// "sample <RA axis deg> <Dec axis deg> <ax> <ay> <az> [<mx> <my> <mz>]" per line, the fits are
 // redone from them at load - the samples are the calibration, the fitted
 // numbers only follow from them
 void GeminiUDP::loadImuCalibration ()
@@ -4020,8 +4066,13 @@ void GeminiUDP::loadImuCalibration ()
 		while (std::getline (f, line))
 		{
 			ImuMountModel::CalSample cs;
-			if (sscanf (line.c_str (), "sample %lf %lf %lf %lf %lf", &cs.raAxis, &cs.decAxis, &cs.acc[0], &cs.acc[1], &cs.acc[2]) == 5)
+			int n = sscanf (line.c_str (), "sample %lf %lf %lf %lf %lf %lf %lf %lf", &cs.raAxis, &cs.decAxis, &cs.acc[0], &cs.acc[1], &cs.acc[2],
+				&cs.mag[0], &cs.mag[1], &cs.mag[2]);
+			if (n == 5 || n == 8)
+			{
+				cs.magValid = n == 8;
 				imuCal.push_back (cs);
+			}
 		}
 	}
 	refitImu ();
@@ -4045,11 +4096,16 @@ void GeminiUDP::saveImuCalibration ()
 			}
 			return;
 		}
-		f << "# rts2-teld-gemini-udp-imu calibration, saved " << (long) time (nullptr) << ": sample <RA axis deg> <Dec axis deg> <ax> <ay> <az> [g]\n";
+		f << "# rts2-teld-gemini-udp-imu calibration, saved " << (long) time (nullptr) << ": sample <RA axis deg> <Dec axis deg> <ax> <ay> <az> [g] [<mx> <my> <mz> uT, raw chip axes]\n";
 		f << "# " << imuModel.describe () << "\n";
 		f << std::setprecision (8);
 		for (const auto &cs : imuCal)
-			f << "sample " << cs.raAxis << " " << cs.decAxis << " " << cs.acc[0] << " " << cs.acc[1] << " " << cs.acc[2] << "\n";
+		{
+			f << "sample " << cs.raAxis << " " << cs.decAxis << " " << cs.acc[0] << " " << cs.acc[1] << " " << cs.acc[2];
+			if (cs.magValid)
+				f << " " << cs.mag[0] << " " << cs.mag[1] << " " << cs.mag[2];
+			f << "\n";
+		}
 	}
 	rename (tmp.c_str (), imuCalibrationPath);
 }
@@ -4183,7 +4239,7 @@ bool GeminiUDP::imuProbeArrived (const GeminiStatus &st)
 	return true;
 }
 
-bool GeminiUDP::imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err)
+bool GeminiUDP::imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err, double *mag)
 {
 	ImuAverage av;
 	if (!imu->average (imuWindowValue->getValueDouble (), 5, av))
@@ -4201,6 +4257,11 @@ bool GeminiUDP::imuProbeMeasure (const GeminiStatus &st, double acc[3], std::str
 	}
 	for (int i = 0; i < 3; i++)
 		acc[i] = av.acc[i];
+	if (mag)
+	{
+		for (int i = 0; i < 3; i++)
+			mag[i] = av.magValid ? av.mag[i] : NAN;
+	}
 	logStream (MESSAGE_INFO) << "GeminiUDP: position imu reading at counters RA axis " << st.raAxisTicks / st.geometry.ticksPerDeg ()
 		<< ", Dec axis " << st.decAxisTicks / st.geometry.decTicksPerDeg () << " deg: acc " << av.acc[0] << " " << av.acc[1] << " " << av.acc[2]
 		<< " g (n=" << av.n << ", scatter " << av.accStd << " g), mag " << av.mag[0] << " " << av.mag[1] << " " << av.mag[2] << " uT" << sendLog;
@@ -4292,7 +4353,8 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 
 			double acc[3];
 			std::string err;
-			if (!imuProbeMeasure (st, acc, err))
+			double mag[3];
+			if (!imuProbeMeasure (st, acc, err, mag))
 			{
 				logStream (MESSAGE_DEBUG) << "GeminiUDP: position imu: " << err << ", waiting" << sendLog;
 				imuProbeStillSince = NAN;
@@ -4306,6 +4368,8 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 			}
 
 			memcpy (imuProbeAcc1, acc, sizeof (acc));
+			memcpy (imuProbeMag1, mag, sizeof (mag));
+			imuProbeMag1Valid = !std::isnan (mag[0]);
 			imuProbeRa1Ticks = st.raAxisTicks;
 			imuProbeDec1Ticks = st.decAxisTicks;
 			imuProbeRa1 = st.raAxisTicks / st.geometry.ticksPerDeg ();
@@ -4373,11 +4437,65 @@ void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 	auto cands = imuModel.solveJoint (imuProbeAcc1, acc2, dRa, dDec, maxErr);
 	double noise = std::max (imuModel.rms (), 0.05);
 
+	// The compass votes between the fits gravity leaves in the running: the
+	// mirror pair, or the two ends of the valley near CWD. Only a clear vote
+	// counts - the winner fits its model, every other runner misses by a
+	// margin - and it only removes candidates: the position itself, and its
+	// uncertainty, stay gravity's.
+	std::vector<double> magErrs;
+	bool magOk = imuModel.magValid () && imuProbeMag1Valid;
+	for (const auto &c : cands)
+		magErrs.push_back (magOk ? imuModel.magErrorUT (c.raAxis, c.decAxis, imuProbeMag1) : NAN);
+	std::string magVote;
+	if (magOk && cands.size () >= 2)
+	{
+		double fitLimit = std::max (3 * imuModel.magRms (), 4.0), margin = std::max (3 * imuModel.magRms (), 5.0);
+		std::vector<size_t> running;
+		for (size_t i = 0; i < cands.size (); i++)
+			if (cands[i].errDeg < std::max (3 * cands[0].errDeg, 0.5))
+				running.push_back (i);
+		if (running.size () >= 2)
+		{
+			size_t best = running[0];
+			for (size_t i : running)
+				if (magErrs[i] < magErrs[best])
+					best = i;
+			bool clear = magErrs[best] <= fitLimit;
+			for (size_t i : running)
+				if (i != best && !(magErrs[i] >= magErrs[best] + margin))
+					clear = false;
+			char vb[120];
+			snprintf (vb, sizeof (vb), "; compass %s RA axis %.2f Dec axis %.2f (%.1f uT, the others %.1f+ uT)", clear ? "picks" : "cannot decide, would pick",
+				cands[best].raAxis, cands[best].decAxis, magErrs[best], margin + magErrs[best]);
+			magVote = vb;
+			if (clear)
+			{
+				std::vector<ImuMountModel::AxisSolution> kept;
+				std::vector<double> keptMag;
+				kept.push_back (cands[best]);
+				keptMag.push_back (magErrs[best]);
+				for (size_t i = 0; i < cands.size (); i++)
+					if (std::find (running.begin (), running.end (), i) == running.end ())
+					{
+						kept.push_back (cands[i]);
+						keptMag.push_back (magErrs[i]);
+					}
+				cands = kept;
+				magErrs = keptMag;
+			}
+		}
+	}
+
 	std::ostringstream os;
 	os << std::fixed << std::setprecision (2);
-	for (const auto &c : cands)
+	for (size_t i = 0; i < cands.size (); i++)
+	{
+		const auto &c = cands[i];
 		os << "; fit RA axis " << c.raAxis << " Dec axis " << c.decAxis << ": " << c.errDeg << " deg, +-" << c.condDeg * noise;
-	std::string detail = os.str ();
+		if (!std::isnan (magErrs[i]))
+			os << ", compass " << std::setprecision (1) << magErrs[i] << " uT" << std::setprecision (2);
+	}
+	std::string detail = os.str () + magVote;
 
 	bool fits = !cands.empty () && cands[0].errDeg <= maxErr / 2;
 	bool unique = cands.size () < 2 || cands[1].errDeg >= std::max (3 * cands[0].errDeg, 0.5);

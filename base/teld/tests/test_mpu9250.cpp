@@ -152,6 +152,66 @@ int main ()
 	// W side, Dec axis = Dec + 90, RA axis = 90 - HA: HA 0, Dec 0 culminates at 90 - lat
 	assert (fabs (m.tubeAltitude (90, 90) - (90 - lat)) < 0.01);
 
+	// the magnetometer model: a field made of a sensor-fixed offset, a field
+	// riding on the RA-turning part and the earth field, as the real one
+	// is; fitted on one set of poses, tested on others, and good enough to
+	// pick the true one of the two gravity solutions
+	{
+		auto trueMag = [&] (double mra, double mdec, double out[3])
+		{
+			double ang1 = (mra - 90) * DEG, ang2 = (180 - mdec) * DEG;
+			double ca = cos (ang1), sa = sin (ang1), cd = cos (ang2), sdd = sin (ang2);
+			double earth[3] = {-20, 3, -45};		// mount frame
+			double ride[3] = {30, -60, 10};			// frame turning with the RA axis
+			double e1[3] = {ca * earth[0] + sa * earth[1], -sa * earth[0] + ca * earth[1], earth[2]};	// Rz^T earth
+			double f[3] = {e1[0] + ride[0], e1[1] + ride[1], e1[2] + ride[2]};
+			double tube[3] = {cd * f[0] - sdd * f[2], f[1], sdd * f[0] + cd * f[2]};		// Ry^T f
+			double hard[3] = {125, -46, 187};
+			for (int i = 0; i < 3; i++)
+				out[i] = R[i] * tube[0] + R[3 + i] * tube[1] + R[6 + i] * tube[2] + hard[i];
+		};
+		std::normal_distribution<double> mnoise (0, 0.4);
+		std::vector<ImuMountModel::CalSample> magCal = cal;
+		for (int i = 0; i < 30; i++)
+		{
+			ImuMountModel::CalSample cs;
+			cs.raAxis = ra (rng);
+			cs.decAxis = dec (rng);
+			trueAcc (lat, R, bias, gain, cs.raAxis, cs.decAxis, cs.acc);
+			magCal.push_back (cs);
+		}
+		for (auto &cs : magCal)
+		{
+			trueMag (cs.raAxis, cs.decAxis, cs.mag);
+			for (int j = 0; j < 3; j++)
+				cs.mag[j] += mnoise (rng);
+			cs.magValid = true;
+		}
+		ImuMountModel mm;
+		mm.setLatitude (lat);
+		assert (mm.fit (magCal));
+		assert (mm.fitMag (magCal));
+		printf ("%s\n", mm.describe ().c_str ());
+		int right = 0, total = 0;
+		double worstMag = 0;
+		for (int i = 0; i < 50; i++)
+		{
+			double pr = ra (rng), pd = dec (rng), pa[3], mg[3];
+			trueAcc (lat, R, bias, gain, pr, pd, pa);
+			trueMag (pr, pd, mg);
+			worstMag = std::max (worstMag, mm.magErrorUT (pr, pd, mg));
+			auto sols = mm.solveAll (pa, 0.5);
+			if (sols.size () != 2)
+				continue;
+			total++;
+			int pick = mm.magErrorUT (sols[0].raAxis, sols[0].decAxis, mg) < mm.magErrorUT (sols[1].raAxis, sols[1].decAxis, mg) ? 0 : 1;
+			if (fabs (sols[pick].raAxis - pr) < 0.5 && fabs (sols[pick].decAxis - pd) < 0.5)
+				right++;
+		}
+		printf ("magnetometer: worst %.2f uT on unseen poses, picked the true gravity solution %d of %d\n", worstMag, right, total);
+		assert (worstMag < 3 && right == total && total > 30);
+	}
+
 	// raw line parsing
 	ImuSample smp;
 	assert (parseMpu9250Raw ("-180 132 16441 -160 70 20 2134 83 -201 -278 0", smp));
