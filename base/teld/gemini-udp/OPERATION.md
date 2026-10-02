@@ -450,3 +450,39 @@ contradicts the expectations.
 2. If the samples disagree systematically with declination, check the astrometry script convention
    (section 5).
 3. When comfortable, run one `position rezero` by hand on real evidence, then switch `rezero_auto` on.
+
+---
+
+## 9. The IMU variant: `rts2-teld-gemini-udp-imu`
+
+The same driver, built from `gemini_udp_imu.cpp`, plus the MPU-9250 USB sensor
+(`mpu9250_nano_report.md`) mounted on the tube. Run it instead of `rts2-teld-gemini-udp` with
+`--imu /dev/ttyUSB0` (the user needs the `dialout` group; a `/dev/serial/by-id/...` name survives
+replugging). Without `--imu` it behaves exactly like the plain driver. It uses the same position and
+incident files.
+
+**What it checks.** Gravity seen by the accelerometer depends only on where the two axes physically
+are. Whenever the axes have been still for `imu_settle` s (tracking counts as still), every
+`imu_interval` s, the driver averages `imu_window` s of readings and compares the measured "up" with
+what the counters predict: `imu_error` (total, degrees) and its split `imu_ra_axis_err` /
+`imu_dec_axis_err`. The split is unreliable with the tube near the meridian plane (`imu_axis_cond`
+large); `imu_error` is always meaningful. `imu_confirm` checks in a row above `imu_max_error` (2°)
+raise `imu_alarm` and do `imu_action`: NONE, WARN (default: logged + incident line) or LOST.
+
+**Calibration is learnt, not configured.** The sensor's orientation, bias and gain are fitted from rest
+samples taken while `position_trust` is CONFIRMED (astrometry agreed), one per pose at least
+`imu_learn_spacing` (5°) from the others, kept in `--imu-calibration`
+(default `/var/log/rts2/gemini-udp-imu.cal`). The check acts only once `imu_calibrated` is true:
+`imu_cal_min_samples` (8) samples covering `imu_cal_min_span` (30°) on both axes, fit residual below
+`imu_cal_max_rms` (0.5°). `imu_calibration` shows the fit. To calibrate by daylight after a start you
+trust, set `imu_learn` to ASSUMED and slew around the sky; set it back to CONFIRMED afterwards. After
+moving the sensor, `imu_cal_reset = true`.
+
+What it can and cannot see: a Dec counter error that was already there at calibration time looks like
+the sensor being mounted differently, and is absorbed (learning only at CONFIRMED keeps it below
+`rezero_min`). Anything that happens to the counters *after* calibration — a cold start away from
+CWD, a slipped clutch — shows up on both axes at the next rest, including right after a `position cwd`
+given with the telescope somewhere else.
+
+**Suggested start:** leave `imu_action` at WARN for some nights and watch `imu_error` against
+`imu_temp`; only switch to LOST once the false-alarm margin is known.

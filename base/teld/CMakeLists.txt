@@ -9,6 +9,7 @@ add_library(base_teld STATIC
 	src/tellx200.cpp
 	src/gem.cpp
 	src/geminicaringloop.cpp
+	src/mpu9250.cpp
 	src/tpointmodel.cpp
 	src/tpointmodelterm.cpp
 )
