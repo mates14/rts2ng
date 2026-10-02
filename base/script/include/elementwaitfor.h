@@ -53,7 +53,7 @@ class ElementWaitFor:public Element
 class ElementSleep:public Element
 {
 	public:
-		ElementSleep (Script * _script, double _sec):Element (_script) { sec = _sec; }
+		ElementSleep (Script * _script, double _sec):Element (_script) { sec = _sec; sleeping = false; expired = false; }
 		virtual int defnextCommand (rts2core::DevClient * client, rts2core::Command ** new_command, char new_device[DEVICE_NAME_SIZE]);
 		virtual int idle ();
 
@@ -61,6 +61,9 @@ class ElementSleep:public Element
 		virtual void printJson (std::ostream &os);
 	private:
 		double sec;
+		// timer armed / timer expired - reset when the element is left, so sleep works again in for cycles
+		bool sleeping;
+		bool expired;
 };
 
 /**

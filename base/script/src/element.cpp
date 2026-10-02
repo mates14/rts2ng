@@ -103,7 +103,7 @@ void Element::setIdleTimeout (double sec)
 {
 	idleTimeout.tv_sec = (long int) floor (sec);
 	idleTimeout.tv_usec =
-		(long int) ((sec - (double) nextIdle.tv_sec) * USEC_SEC);
+		(long int) ((sec - (double) idleTimeout.tv_sec) * USEC_SEC);
 	// and set nextIdle appropriatly
 	gettimeofday (&nextIdle, NULL);
 	timeradd (&idleTimeout, &nextIdle, &nextIdle);

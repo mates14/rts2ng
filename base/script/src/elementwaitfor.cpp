@@ -59,18 +59,31 @@ int ElementWaitFor::idle ()
 
 int ElementSleep::defnextCommand (rts2core::DevClient * client, rts2core::Command ** new_command, char new_device[DEVICE_NAME_SIZE])
 {
-	if (!std::isnan (sec))
+	if (std::isnan (sec))
+		return NEXT_COMMAND_NEXT;
+	// classic used to set sec to NAN in idle, which broke sleep in cycles;
+	// removing that (d9a0cc579) made sleep never end. Track the state instead.
+	if (expired)
+	{
+		sleeping = false;
+		expired = false;
+		return NEXT_COMMAND_NEXT;
+	}
+	// arm only once - nextCommand can be called repeatedly while sleeping,
+	// rearming would postpone the end of the sleep
+	if (!sleeping)
 	{
 		// this caused idle to be called after sec..
 		// Element keep care that it will not be called before sec expires
 		setIdleTimeout (sec);
-		return NEXT_COMMAND_KEEP;
+		sleeping = true;
 	}
-	return NEXT_COMMAND_NEXT;
+	return NEXT_COMMAND_KEEP;
 }
 
 int ElementSleep::idle ()
 {
+	expired = true;
 	return NEXT_COMMAND_NEXT;
 }
 
