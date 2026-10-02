@@ -506,6 +506,13 @@ goes on; counters off: re-zeroed; probe inconclusive: stays locked for a human. 
 On 2026-10-02 a flip that stalled 3° short in Dec left the mount locked for the rest of the night
 although nothing had slipped.
 
+**A move that stops short** (an execution fault - on SBT mostly a flip whose Dec axis stalls): with the
+IMU available (`imu_auto_verify`), it is not an incident at first. The move recovery stops the mount, and
+once the axes rest the IMU compares gravity with the counters right there: within `imu_stall_tolerance`
+(0.5°) it is a plain stall and the recovery goes on (park at CWD, re-send the target); a larger
+difference, a pose too close to the merge line to judge, or no quiet reading within 60 s, and it is the
+safety incident after all (then the auto-verify above).
+
 **Stops during a probe.** While `position imu` runs, stops the framework makes on its own (every refused
 move or correction while the position is LOST makes one) are ignored; a client's `stop` or
 `position abort` ends it.

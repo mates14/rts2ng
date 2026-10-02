@@ -587,6 +587,19 @@ class GeminiUDP:public Telescope
 		std::vector<double> imuAutoVerifyAt;
 		void startImuAutoVerify ();
 
+		// a move that stopped short: the IMU checks the counters where it
+		// stopped, before the recovery retries - see checkSafety()
+		rts2core::ValueDouble *imuStallToleranceValue;
+		bool imuStallCheckPending;
+		double imuStallPendingSince;
+		double imuStallRestSince;
+		std::string imuStallReason;
+		bool imuStallCheckPossible () const { return imu && imuCalibrated && imuConnectedValue->getValueBool () && imuAutoVerifyValue->getValueBool (); }
+		// RECOVER_STOPPING: true when the recovery may go on (counters agree,
+		// or no check pending); false to keep waiting; an incident is raised
+		// here when they disagree or the check cannot be made
+		bool imuStallCheck (const GeminiStatus &st, bool atRest);
+
 		// ---- position imu: where the axes are, from gravity alone ----
 		// See beginImuProbe() for the scheme. Owns the axes while running,
 		// like a re-zero does.
@@ -880,6 +893,11 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuActionValue->setValueInteger (IMU_ACTION_REZERO);
 	createValue (imuAutoVerifyValue, "imu_auto_verify", "after a safety incident has parked and locked the mount, run position imu rezero on its own: counters fine - lock released, ASSUMED; off - re-zeroed; probe cannot tell - stays locked (at most 3 per 6 h)", false, RTS2_VALUE_WRITABLE);
 	imuAutoVerifyValue->setValueBool (true);
+	createValue (imuStallToleranceValue, "imu_stall_tolerance", "[deg] a move that stopped short is retried when gravity agrees with the counters this well where it stopped; otherwise it is a safety incident", false, RTS2_VALUE_WRITABLE);
+	imuStallToleranceValue->setValueDouble (0.5);
+	imuStallCheckPending = false;
+	imuStallPendingSince = 0;
+	imuStallRestSince = NAN;
 	createValue (imuMaxErrorValue, "imu_max_error", "[deg] IMU vs counters disagreement that counts", false, RTS2_VALUE_WRITABLE);
 	imuMaxErrorValue->setValueDouble (2.0);
 	createValue (imuConfirmValue, "imu_confirm", "consecutive rest checks that must disagree before imu_action is taken", false, RTS2_VALUE_WRITABLE);
@@ -2668,12 +2686,34 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// ---- a move ended nowhere near its target ----
 	// GeminiStatus::moveFailed is sticky until the next accepted goto, so
 	// it is latched here too and reported exactly once per move
+	// IMU variant: a move that stopped short with its counters probably
+	// intact (an execution fault - on SBT mostly a flip whose Dec axis
+	// stalls) goes to the move recovery instead, and the IMU checks the
+	// counters where it stopped before the retry (runMoveRecovery() ->
+	// imuStallCheck()). Disagreement, or no check possible, is the incident
+	// after all. Should no recovery start (budget spent, ...), the incident
+	// is raised here 10 s later.
 	if (st.moveFailed)
 	{
 		if (!moveFailReported)
 		{
 			moveFailReported = true;
+			if (st.moveExecutionFault && imuStallCheckPossible ())
+			{
+				imuStallCheckPending = true;
+				imuStallPendingSince = getNow ();
+				imuStallRestSince = NAN;
+				imuStallReason = st.moveFailReason;
+				logStream (MESSAGE_WARNING) << "GeminiUDP: " << st.moveFailReason << " - the IMU checks the counters where it stopped before the move is retried" << sendLog;
+				return;
+			}
 			triggerIncident ("move ended away from its target", st.moveFailReason, true);
+			return;
+		}
+		if (imuStallCheckPending && recoverState == RECOVER_IDLE && getNow () - imuStallPendingSince > 10.0)
+		{
+			imuStallCheckPending = false;
+			triggerIncident ("move ended away from its target", imuStallReason + " (no move recovery to check it in)", true);
 			return;
 		}
 	}
@@ -3165,6 +3205,13 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 			}
 			atRest = restStableCount >= 2;
 			double waited = getNow () - recoverSince;
+			if (imuStallCheckPending)
+			{
+				if (!imuStallCheck (st, atRest))
+					return;
+				if (recoverState != RECOVER_STOPPING)
+					return;		// the check ended it in an incident
+			}
 			if (!atRest && waited < STOP_REST_MAX_SEC)
 				return;
 			if (waited < STOP_SETTLE_SEC)
@@ -4005,6 +4052,55 @@ void GeminiUDP::startImuAutoVerify ()
 	imuAutoVerifyAt.push_back (now);
 	logStream (MESSAGE_WARNING) << "GeminiUDP: IMU: checking the position on its own after the incident (position imu rezero, " << imuAutoVerifyAt.size () << " of 3 in 6 h)" << sendLog;
 	appendIncidentLine ("IMU auto-verify started after the incident");
+}
+
+bool GeminiUDP::imuStallCheck (const GeminiStatus &st, bool atRest)
+{
+	auto fail = [&] (const std::string &why)
+	{
+		imuStallCheckPending = false;
+		recoverState = RECOVER_IDLE;
+		moveRecoveryValue->setValueCharArr ("IDLE");
+		sendValueAll (moveRecoveryValue);
+		triggerIncident ("move ended away from its target", imuStallReason + " - " + why, true);
+		return false;
+	};
+	double waited = getNow () - imuStallPendingSince;
+	if (waited > 60.0)
+		return fail ("the IMU could not check the counters within 60 s");
+	if (!atRest)
+	{
+		imuStallRestSince = NAN;
+		return false;
+	}
+	if (std::isnan (imuStallRestSince))
+		imuStallRestSince = getNow ();
+	if (getNow () - imuStallRestSince < imuSettleValue->getValueDouble () + imuWindowValue->getValueDouble ())
+		return false;
+
+	ImuAverage av;
+	double g = 0;
+	if (imu->average (imuWindowValue->getValueDouble (), 5, av))
+		g = sqrt (av.acc[0] * av.acc[0] + av.acc[1] * av.acc[1] + av.acc[2] * av.acc[2]);
+	if (av.n == 0 || av.accStd > 0.01 || av.gyroStd > 0.5 || g < 0.85 || g > 1.15)
+	{
+		imuStallRestSince = getNow () - imuSettleValue->getValueDouble ();	// try the next window
+		return false;
+	}
+	double raAxis = st.raAxisTicks / st.geometry.ticksPerDeg (), decAxis = st.decAxisTicks / st.geometry.decTicksPerDeg ();
+	double err = imuModel.errorDeg (raAxis, decAxis, av.acc);
+	double sr, sd, cond = NAN;
+	imuModel.solveAxes (av.acc, raAxis, decAxis, sr, sd, cond);
+	char buf[200];
+	snprintf (buf, sizeof (buf), "IMU at the stop: %.2f deg from the counters (tolerance %.2f, conditioning %.1f)", err, imuStallToleranceValue->getValueDouble (), cond);
+	if (!(cond <= 3.0))
+		return fail (std::string (buf) + " - too close to the merge line to tell");
+	if (!(err <= imuStallToleranceValue->getValueDouble ()))
+		return fail (buf);
+	imuStallCheckPending = false;
+	logStream (MESSAGE_WARNING) << "GeminiUDP: " << buf << " - a plain stall, the counters are sound; retrying the move" << sendLog;
+	appendIncidentLine (std::string ("move stalled, retried: ") + imuStallReason + "; " + buf);
+	return true;
 }
 
 void GeminiUDP::publishImuRaw (const ImuStatus &is)
