@@ -580,6 +580,7 @@ class GeminiUDP:public Telescope
 		int32_t imuProbeLastRa, imuProbeLastDec;
 		int32_t imuProbeTargetRa, imuProbeTargetDec;
 		int imuProbeStableCount;
+		int imuProbeStopTries;		// 135 + :Q# rounds sent to stop the worm
 		double imuProbeRa1, imuProbeDec1, imuProbeAcc1[3];	// first reading: counters (axis deg) and gravity
 		int32_t imuProbeRa1Ticks, imuProbeDec1Ticks;
 		rts2core::ValueString *imuProbeStateValue;
@@ -813,6 +814,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuProbeLastRa = imuProbeLastDec = 0;
 	imuProbeTargetRa = imuProbeTargetDec = 0;
 	imuProbeStableCount = 0;
+	imuProbeStopTries = 0;
 	imuProbeRa1 = imuProbeDec1 = NAN;
 	imuProbeAcc1[0] = imuProbeAcc1[1] = imuProbeAcc1[2] = NAN;
 	imuProbeRa1Ticks = imuProbeDec1Ticks = 0;
@@ -4071,6 +4073,8 @@ int GeminiUDP::beginImuProbe (bool rezero, std::string &err)
 		<< step << " deg, reading again" << sendLog;
 	stopTracking ("position imu");	// before the state changes - stopMove() aborts a running probe
 	caring->requestAbort ();
+	caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
+	imuProbeStopTries = 0;
 	imuProbeResultValue->setValueCharArr ("running");
 	setImuProbeState (IMUPROBE_STOPPING);
 	return 0;
@@ -4163,15 +4167,49 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 	switch (imuProbeState)
 	{
 		case IMUPROBE_STOPPING:
-			if (elapsed < 3.0 || st.moveRate == 'S' || st.moveRate == 'C')
+		{
+			// The worm only stops for 135 followed by :Q# (the order
+			// goto_prestop STOP_TRACKING uses): :Q# first and 135 after left
+			// SBT tracking at sidereal, 'T', with 130 reading back 135. 135
+			// went into the queue at the start; 3 s on, it is surely out.
+			if (elapsed > 40.0)
 			{
-				if (elapsed > 30.0)
-					abortImuProbe ("the mount did not stop");
+				abortImuProbe ("the RA axis did not stop - the worm keeps tracking");
 				return;
 			}
-			caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
-			setImuProbeState (IMUPROBE_FIRST);
+			if (elapsed < 3.0 || st.moveRate == 'S' || st.moveRate == 'C')
+				return;
+			if (imuProbeStopTries == 0 || (imuProbeStopTries == 1 && elapsed > 20.0))
+			{
+				if (imuProbeStopTries == 1)
+					caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
+				else
+				{
+					std::string reply;
+					caring->sendRawSync (":Q#", reply, 3.0);
+				}
+				imuProbeStopTries++;
+				imuProbeStableCount = 0;
+				return;
+			}
+			if (imuProbeStopTries == 2 && elapsed > 23.0 && imuProbeStableCount == 0)
+			{
+				std::string reply;
+				caring->sendRawSync (":Q#", reply, 3.0);
+				imuProbeStopTries++;
+			}
+			// still: the RA axis within 3 ticks over a poll - a tracking one
+			// runs ~160 ticks per 0.5 s on SBT
+			if (!newSample)
+				return;
+			bool still = abs (st.raAxisTicks - imuProbeLastRa) <= 3 && abs (st.decAxisTicks - imuProbeLastDec) <= 3;
+			imuProbeLastRa = st.raAxisTicks;
+			imuProbeLastDec = st.decAxisTicks;
+			imuProbeStableCount = still ? imuProbeStableCount + 1 : 0;
+			if (imuProbeStableCount >= 2)
+				setImuProbeState (IMUPROBE_FIRST);
 			return;
+		}
 
 		case IMUPROBE_FIRST:
 		case IMUPROBE_SECOND:
