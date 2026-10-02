@@ -567,6 +567,34 @@ class GeminiUDP:public Telescope
 		void saveImuCalibration ();
 		void raiseImuAlarm (const std::string &detail);
 		std::string imuSummary ();
+
+		// ---- position imu: where the axes are, from gravity alone ----
+		// See beginImuProbe() for the scheme. Owns the axes while running,
+		// like a re-zero does.
+		enum ImuProbeState { IMUPROBE_IDLE, IMUPROBE_STOPPING, IMUPROBE_FIRST, IMUPROBE_STEPPING, IMUPROBE_SECOND, IMUPROBE_RETURNING };
+		ImuProbeState imuProbeState;
+		double imuProbeSince;
+		bool imuProbeRezero;		// "position imu rezero": act on the result
+		double imuProbeStillSince;	// getNow() since when the counters have not changed; NAN while they do
+		double imuProbeLastSample;
+		int32_t imuProbeLastRa, imuProbeLastDec;
+		int32_t imuProbeTargetRa, imuProbeTargetDec;
+		int imuProbeStableCount;
+		double imuProbeRa1, imuProbeDec1, imuProbeAcc1[3];	// first reading: counters (axis deg) and gravity
+		int32_t imuProbeRa1Ticks, imuProbeDec1Ticks;
+		rts2core::ValueString *imuProbeStateValue;
+		rts2core::ValueDouble *imuProbeStepValue;
+		rts2core::ValueString *imuProbeResultValue;
+
+		bool imuProbeBusy () const { return imuProbeState != IMUPROBE_IDLE; }
+		int beginImuProbe (bool rezero, std::string &err);
+		void runImuProbe (const GeminiStatus &st);
+		void setImuProbeState (ImuProbeState newState);
+		void abortImuProbe (const std::string &why);
+		bool imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err);
+		bool imuProbeSendMove (int32_t ra, int32_t dec);
+		bool imuProbeArrived (const GeminiStatus &st);
+		void finishImuProbe (const GeminiStatus &st, const double acc2[3]);
 };
 
 }
@@ -772,6 +800,23 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuWasConnected = false;
 	imuDisagreeCount = 0;
 	imuAlarm = false;
+
+	imuProbeState = IMUPROBE_IDLE;
+	imuProbeSince = 0;
+	imuProbeRezero = false;
+	imuProbeStillSince = NAN;
+	imuProbeLastSample = 0;
+	imuProbeLastRa = imuProbeLastDec = 0;
+	imuProbeTargetRa = imuProbeTargetDec = 0;
+	imuProbeStableCount = 0;
+	imuProbeRa1 = imuProbeDec1 = NAN;
+	imuProbeAcc1[0] = imuProbeAcc1[1] = imuProbeAcc1[2] = NAN;
+	imuProbeRa1Ticks = imuProbeDec1Ticks = 0;
+	createValue (imuProbeStateValue, "imu_probe_state", "position imu in progress: IDLE, STOPPING, FIRST, STEPPING, SECOND, RETURNING", false);
+	imuProbeStateValue->setValueCharArr ("IDLE");
+	createValue (imuProbeStepValue, "imu_probe_step", "[deg] RA axis step position imu takes between its two gravity readings", false, RTS2_VALUE_WRITABLE);
+	imuProbeStepValue->setValueDouble (3.0);
+	createValue (imuProbeResultValue, "imu_probe_result", "what the last position imu found", false);
 
 	createValue (imuConnectedValue, "imu_connected", "the IMU (--imu) answers with data", false);
 	imuConnectedValue->setValueBool (false);
@@ -1156,9 +1201,9 @@ int GeminiUDP::setTracking (int track, bool addTrackingTimer, bool send, const c
 {
 	// tracking walks the RA axis towards a western limit that is only where
 	// the counters say it is
-	if (track && (positionLost () || rezeroState != REZERO_IDLE))
+	if (track && (positionLost () || rezeroState != REZERO_IDLE || imuProbeBusy ()))
 	{
-		logStream (MESSAGE_ERROR) << "GeminiUDP: tracking refused, " << (positionLost () ? "the mount position is LOST" : "a re-zero is in progress") << sendLog;
+		logStream (MESSAGE_ERROR) << "GeminiUDP: tracking refused, " << (positionLost () ? "the mount position is LOST" : imuProbeBusy () ? "position imu is running" : "a re-zero is in progress") << sendLog;
 		return -1;
 	}
 	if (caring)
@@ -1320,7 +1365,7 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 	if (!std::isnan (st.trackingSecToWestLimit))
 	{
 		if (!trackingLimitWarned && pendingLimitAction == LIMIT_ACTION_NONE && !limitActionInFlight
-			&& isTracking () && (getState () & TEL_MASK_MOVING) != TEL_MOVING && !positionLost () && rezeroState == REZERO_IDLE)
+			&& isTracking () && (getState () & TEL_MASK_MOVING) != TEL_MOVING && !positionLost () && rezeroState == REZERO_IDLE && !imuProbeBusy ())
 		{
 			GeminiLimitDecision decision = decideTrackingLimit (st.geometry, st.raAxisTicks, st.decAxisTicks, st.ra,
 				st.trackingSecToWestLimit, flipAmbiguityMarginValue->getValueDouble ());
@@ -1601,7 +1646,7 @@ void GeminiUDP::setPositionTrust (PositionTrust trust, const std::string &reason
 // interface, or a power cycle hidden inside a communication gap.
 void GeminiUDP::checkPositionEvidence (const GeminiStatus &st)
 {
-	if (st.moveInProgress || st.parking || rezeroState != REZERO_IDLE)
+	if (st.moveInProgress || st.parking || rezeroState != REZERO_IDLE || imuProbeBusy ())
 		lastMotionAt = getNow ();
 
 	if (!st.axisValid || !st.geometry.valid || st.axisTimestamp == lastAxisSampleTimestamp)
@@ -1791,7 +1836,9 @@ int GeminiUDP::commandAuthorized (rts2core::Connection *conn)
 //                                 from the boot menu, or by rebooting a running mount
 //   position rezero               re-zero now from the astrometric evidence collected so far
 //                                 (see recordSkyEvidence()), without waiting for it to qualify
-//   position abort                abort a re-zero that has not reached its cold start yet
+//   position abort                abort a re-zero that has not reached its cold start yet, or a position imu
+//   position imu [rezero]         where the axes are from gravity alone (IMU variant, see beginImuProbe()):
+//                                 report, or re-zero to it
 int GeminiUDP::positionCommand (rts2core::Connection *conn)
 {
 	if (caring == nullptr)
@@ -1820,6 +1867,28 @@ int GeminiUDP::positionCommand (rts2core::Connection *conn)
 
 	if (rezeroState != REZERO_IDLE && strcasecmp (what, "abort"))
 		return refuse ("a re-zero is in progress - \"position abort\" first");
+	if (imuProbeBusy () && strcasecmp (what, "abort"))
+		return refuse ("position imu is in progress - \"position abort\" first");
+
+	if (!strcasecmp (what, "imu"))
+	{
+		bool rezero = false;
+		if (!conn->paramEnd ())
+		{
+			char *mode;
+			if (conn->paramNextString (&mode) || !conn->paramEnd () || strcasecmp (mode, "rezero"))
+				return DEVDEM_E_PARAMSNUM;
+			rezero = true;
+		}
+		std::string err;
+		if (beginImuProbe (rezero, err))
+		{
+			logStream (MESSAGE_ERROR) << "GeminiUDP: position imu refused: " << err << sendLog;
+			conn->sendCommandEnd (DEVDEM_E_PARAMSVAL, err.c_str ());
+			return -1;
+		}
+		return 0;
+	}
 
 	if (!strcasecmp (what, "rezero"))
 	{
@@ -1854,8 +1923,13 @@ int GeminiUDP::positionCommand (rts2core::Connection *conn)
 	{
 		if (!conn->paramEnd ())
 			return DEVDEM_E_PARAMSNUM;
+		if (imuProbeBusy ())
+		{
+			abortImuProbe ("aborted by operator");
+			return 0;
+		}
 		if (rezeroState == REZERO_IDLE)
-			return refuse ("no re-zero in progress");
+			return refuse ("no re-zero or position imu in progress");
 		if (rezeroState == REZERO_REBOOTING)
 			return refuse ("the re-zero cold start has already been sent");
 		abortRezero ("aborted by operator");
@@ -1931,7 +2005,7 @@ int GeminiUDP::positionCommand (rts2core::Connection *conn)
 		return 0;
 	}
 
-	return refuse ("expected: position [ok | lost | unmoved | cwd [warm] | rezero | abort]");
+	return refuse ("expected: position [ok | lost | unmoved | cwd [warm] | rezero | imu [rezero] | abort]");
 }
 
 // ---- re-zero from the sky ----
@@ -2451,7 +2525,7 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 
 	rts2_status_t moving = getState () & TEL_MASK_MOVING;
 	bool weCommandedMovement = (moving == TEL_MOVING || moving == TEL_PARKING) || st.moveInProgress
-		|| rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || st.parking;
+		|| rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || st.parking || imuProbeBusy ();
 	if (weCommandedMovement)
 		lastCommandedMotionAt = getNow ();
 
@@ -2645,6 +2719,8 @@ void GeminiUDP::triggerIncident (const char *condition, const std::string &detai
 
 	if (rezeroState != REZERO_IDLE && rezeroState != REZERO_REBOOTING)
 		abortRezero ("safety incident");
+	if (imuProbeBusy ())
+		abortImuProbe ("safety incident");
 
 	// stopTracking() calls stopMove() for us, which is requestAbort() -
 	// but ask for the abort explicitly too: whatever is going on, the one
@@ -2911,7 +2987,7 @@ bool GeminiUDP::altitudeSafe (double raDeg, double decDeg, double marginDeg)
 // the framework's target to re-send after the CWD park.
 bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
 {
-	if (caring == nullptr || positionLost () || rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE)
+	if (caring == nullptr || positionLost () || rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || imuProbeBusy ())
 		return false;
 	if (moveRetries >= moveRetriesValue->getValueInteger ())
 	{
@@ -3034,9 +3110,9 @@ int GeminiUDP::startResync ()
 			<< ") - \"position ok\", \"position unmoved\" or \"position cwd\" first" << sendLog;
 		return -1;
 	}
-	if (rezeroState != REZERO_IDLE)
+	if (rezeroState != REZERO_IDLE || imuProbeBusy ())
 	{
-		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, a re-zero is in progress" << sendLog;
+		logStream (MESSAGE_ERROR) << "GeminiUDP: move refused, " << (imuProbeBusy () ? "position imu" : "a re-zero") << " is in progress" << sendLog;
 		return -1;
 	}
 
@@ -3083,9 +3159,9 @@ bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label, GeminiCa
 {
 	if (caring == nullptr)
 		return false;
-	if (positionLost () || rezeroState != REZERO_IDLE)
+	if (positionLost () || rezeroState != REZERO_IDLE || imuProbeBusy ())
 	{
-		logStream (MESSAGE_ERROR) << "GeminiUDP: " << label << " refused: " << (positionLost () ? "the mount position is LOST" : "a re-zero is in progress") << sendLog;
+		logStream (MESSAGE_ERROR) << "GeminiUDP: " << label << " refused: " << (positionLost () ? "the mount position is LOST" : imuProbeBusy () ? "position imu is running" : "a re-zero is in progress") << sendLog;
 		return false;
 	}
 
@@ -3289,6 +3365,8 @@ int GeminiUDP::stopMove ()
 	}
 	if (rezeroState != REZERO_IDLE && rezeroState != REZERO_REBOOTING)
 		abortRezero ("stop command");
+	if (imuProbeBusy ())
+		abortImuProbe ("stop command");
 	if (caring)
 		caring->requestAbort ();
 	return 0;
@@ -3305,9 +3383,9 @@ int GeminiUDP::startPark ()
 		logStream (MESSAGE_ERROR) << "GeminiUDP: park refused, the mount position is LOST (" << positionReasonValue->getValue () << ")" << sendLog;
 		return -1;
 	}
-	if (rezeroState != REZERO_IDLE)
+	if (rezeroState != REZERO_IDLE || imuProbeBusy ())
 	{
-		logStream (MESSAGE_ERROR) << "GeminiUDP: park refused, a re-zero is in progress" << sendLog;
+		logStream (MESSAGE_ERROR) << "GeminiUDP: park refused, " << (imuProbeBusy () ? "position imu" : "a re-zero") << " is in progress" << sendLog;
 		return -1;
 	}
 	// gemini2ser.cpp's startPark() calls stopMove() first - requestPark()
@@ -3633,7 +3711,7 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	imuPrevAxisTs = st.axisTimestamp;
 
 	bool busy = st.moveInProgress || st.parking || st.moveRate == 'S' || st.moveRate == 'C'
-		|| rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE
+		|| rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || imuProbeBusy ()
 		|| safetyState == SAFETY_STOPPING || safetyState == SAFETY_PARKING;
 	if (busy || !still)
 	{
@@ -3688,6 +3766,12 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	imuRaAxisErrValue->setValueDouble (raErr);
 	imuDecAxisErrValue->setValueDouble (decErr);
 	imuAxisCondValue->setValueDouble (cond);
+
+	// every rest check, with the compass, for working out what the
+	// magnetometer is good for
+	logStream (MESSAGE_DEBUG) << "GeminiUDP: IMU rest check at counters RA axis " << raAxis << ", Dec axis " << decAxis
+		<< " deg: acc " << av.acc[0] << " " << av.acc[1] << " " << av.acc[2] << " g, mag " << av.mag[0] << " " << av.mag[1] << " " << av.mag[2]
+		<< " uT, temp " << av.temp << " C, error " << err << " deg" << sendLog;
 
 	learnImuSample (raAxis, decAxis, av, err);
 
@@ -3912,6 +3996,344 @@ std::string GeminiUDP::imuSummary ()
 	return os.str ();
 }
 
+// ---- position imu ----
+//
+// Where the axes physically are, from gravity alone - for when the counters
+// cannot be believed. One gravity reading fixes the two axis angles only up
+// to a mirror pair (ImuMountModel::solveAll()); a known step of the RA axis
+// tells the pair apart, because a step that turns gravity one way at the true
+// pose turns it the other way at the mirror one. Steps are made in counter
+// ticks (:MP#): a counter that is off by a constant still counts steps right.
+//  1. stop, worm off, wait for the axes to be still, read gravity
+//  2. step the RA axis by imu_probe_step, wait, read gravity again
+//  3. score every candidate on both readings; the best has to fit and the
+//     other has to be clearly worse
+//  4. report the counter error (true minus counters); with "rezero" act on
+//     it: re-zero through the same path as the sky evidence, or - when the
+//     counters are right after all - take them as ASSUMED
+//  5. without a re-zero, step back to where it started
+// The error is relative to the counters the IMU was calibrated against (see
+// ImuMountModel): learning only at CONFIRMED keeps that within rezero_min.
+int GeminiUDP::beginImuProbe (bool rezero, std::string &err)
+{
+	if (imu == nullptr)
+	{
+		err = "no IMU (--imu)";
+		return -1;
+	}
+	if (!imuCalibrated)
+	{
+		err = "the IMU is not calibrated (imu_calibrated)";
+		return -1;
+	}
+	if (!imuConnectedValue->getValueBool ())
+	{
+		err = "the IMU is not delivering data";
+		return -1;
+	}
+	if (caring == nullptr)
+	{
+		err = "no mount connection";
+		return -1;
+	}
+	GeminiStatus st = caring->getStatus ();
+	if (!st.valid || !st.startupComplete || !st.axisValid || !st.geometry.valid)
+	{
+		err = "the mount is not up, or its axis position and geometry have not been read";
+		return -1;
+	}
+	if (rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || st.parking || safetyState == SAFETY_STOPPING || safetyState == SAFETY_PARKING)
+	{
+		err = "a re-zero, move recovery, park or safety recovery is running";
+		return -1;
+	}
+	double step = imuProbeStepValue->getValueDouble ();
+	if (!(step >= 0.5 && step <= 20))
+	{
+		err = "imu_probe_step must be 0.5 to 20 deg";
+		return -1;
+	}
+
+	imuProbeRezero = rezero;
+	logStream (MESSAGE_WARNING) << "GeminiUDP: position imu" << (rezero ? " rezero" : "") << ": stopping, reading gravity, stepping the RA axis by "
+		<< step << " deg, reading again" << sendLog;
+	stopTracking ("position imu");	// before the state changes - stopMove() aborts a running probe
+	caring->requestAbort ();
+	imuProbeResultValue->setValueCharArr ("running");
+	setImuProbeState (IMUPROBE_STOPPING);
+	return 0;
+}
+
+void GeminiUDP::setImuProbeState (ImuProbeState newState)
+{
+	static const char *names[] = { "IDLE", "STOPPING", "FIRST", "STEPPING", "SECOND", "RETURNING" };
+	imuProbeState = newState;
+	imuProbeSince = getNow ();
+	imuProbeStableCount = 0;
+	imuProbeStillSince = NAN;
+	imuProbeStateValue->setValueCharArr (names[newState]);
+	sendValueAll (imuProbeStateValue);
+}
+
+void GeminiUDP::abortImuProbe (const std::string &why)
+{
+	if (caring && (imuProbeState == IMUPROBE_STEPPING || imuProbeState == IMUPROBE_RETURNING))
+		caring->requestAbort ();
+	setImuProbeState (IMUPROBE_IDLE);
+	imuProbeResultValue->setValueCharArr (("aborted: " + why).c_str ());
+	sendValueAll (imuProbeResultValue);
+	logStream (MESSAGE_WARNING) << "GeminiUDP: position imu aborted: " << why << sendLog;
+}
+
+bool GeminiUDP::imuProbeSendMove (int32_t ra, int32_t dec)
+{
+	char cmd[64];
+	snprintf (cmd, sizeof (cmd), ":MP%d;%d#", ra, dec);
+	std::string reply;
+	if (!caring->sendRawSync (cmd, reply, 3.0) || reply != "1")
+	{
+		abortImuProbe (std::string ("the mount refused ") + cmd + ", reply \"" + reply + "\"");
+		return false;
+	}
+	imuProbeTargetRa = ra;
+	imuProbeTargetDec = dec;
+	return true;
+}
+
+// same arrival rule as the re-zero's REZERO_MOVING
+bool GeminiUDP::imuProbeArrived (const GeminiStatus &st)
+{
+	double tolerance = std::max (4.0, 5.0 / 3600.0 * st.geometry.ticksPerDeg ());
+	bool there = fabs ((double) st.raAxisTicks - imuProbeTargetRa) <= tolerance && fabs ((double) st.decAxisTicks - imuProbeTargetDec) <= tolerance
+		&& st.moveRate != 'S' && st.moveRate != 'C';
+	imuProbeStableCount = there ? imuProbeStableCount + 1 : 0;
+	if (imuProbeStableCount < 2)
+		return false;
+	// a positional move may leave the worm running
+	caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
+	return true;
+}
+
+bool GeminiUDP::imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err)
+{
+	ImuAverage av;
+	if (!imu->average (imuWindowValue->getValueDouble (), 5, av))
+	{
+		err = "no IMU data";
+		return false;
+	}
+	double g = sqrt (av.acc[0] * av.acc[0] + av.acc[1] * av.acc[1] + av.acc[2] * av.acc[2]);
+	if (av.accStd > 0.01 || av.gyroStd > 0.5 || g < 0.85 || g > 1.15)
+	{
+		char buf[120];
+		snprintf (buf, sizeof (buf), "IMU not still or implausible: |a| %.3f g, scatter %.4f g, %.2f deg/s", g, av.accStd, av.gyroStd);
+		err = buf;
+		return false;
+	}
+	for (int i = 0; i < 3; i++)
+		acc[i] = av.acc[i];
+	logStream (MESSAGE_INFO) << "GeminiUDP: position imu reading at counters RA axis " << st.raAxisTicks / st.geometry.ticksPerDeg ()
+		<< ", Dec axis " << st.decAxisTicks / st.geometry.decTicksPerDeg () << " deg: acc " << av.acc[0] << " " << av.acc[1] << " " << av.acc[2]
+		<< " g (n=" << av.n << ", scatter " << av.accStd << " g), mag " << av.mag[0] << " " << av.mag[1] << " " << av.mag[2] << " uT" << sendLog;
+	return true;
+}
+
+void GeminiUDP::runImuProbe (const GeminiStatus &st)
+{
+	if (imuProbeState == IMUPROBE_IDLE)
+		return;
+
+	double elapsed = getNow () - imuProbeSince;
+	bool newSample = st.axisValid && st.axisTimestamp != imuProbeLastSample;
+	if (newSample)
+		imuProbeLastSample = st.axisTimestamp;
+
+	switch (imuProbeState)
+	{
+		case IMUPROBE_STOPPING:
+			if (elapsed < 3.0 || st.moveRate == 'S' || st.moveRate == 'C')
+			{
+				if (elapsed > 30.0)
+					abortImuProbe ("the mount did not stop");
+				return;
+			}
+			caring->queueNativeSet (GEMINI_CMD_TRACK_TERRESTRIAL, (int32_t) 1);
+			setImuProbeState (IMUPROBE_FIRST);
+			return;
+
+		case IMUPROBE_FIRST:
+		case IMUPROBE_SECOND:
+		{
+			if (elapsed > 90.0)
+			{
+				abortImuProbe ("the axes did not come to rest for a gravity reading");
+				return;
+			}
+			if (!newSample)
+				return;
+			// the axes still, and for long enough to fill the averaging
+			// window after the settling time
+			bool still = abs (st.raAxisTicks - imuProbeLastRa) <= 1 && abs (st.decAxisTicks - imuProbeLastDec) <= 1;
+			imuProbeLastRa = st.raAxisTicks;
+			imuProbeLastDec = st.decAxisTicks;
+			if (!still)
+			{
+				imuProbeStillSince = NAN;
+				return;
+			}
+			if (std::isnan (imuProbeStillSince))
+				imuProbeStillSince = getNow ();
+			if (getNow () - imuProbeStillSince < imuSettleValue->getValueDouble () + imuWindowValue->getValueDouble ())
+				return;
+
+			double acc[3];
+			std::string err;
+			if (!imuProbeMeasure (st, acc, err))
+			{
+				logStream (MESSAGE_DEBUG) << "GeminiUDP: position imu: " << err << ", waiting" << sendLog;
+				imuProbeStillSince = NAN;
+				return;
+			}
+
+			if (imuProbeState == IMUPROBE_SECOND)
+			{
+				finishImuProbe (st, acc);
+				return;
+			}
+
+			memcpy (imuProbeAcc1, acc, sizeof (acc));
+			imuProbeRa1Ticks = st.raAxisTicks;
+			imuProbeDec1Ticks = st.decAxisTicks;
+			imuProbeRa1 = st.raAxisTicks / st.geometry.ticksPerDeg ();
+			imuProbeDec1 = st.decAxisTicks / st.geometry.decTicksPerDeg ();
+
+			// towards whichever side of the counters' window has more room
+			const GeminiAxisGeometry &g = st.geometry;
+			int32_t step = (int32_t) lround (imuProbeStepValue->getValueDouble () * g.ticksPerDeg ());
+			int32_t target = st.raAxisTicks - g.westLimit > g.eastLimit - st.raAxisTicks ? st.raAxisTicks - step : st.raAxisTicks + step;
+			if (!(g.westLimit < target && target < g.eastLimit))
+			{
+				abortImuProbe ("no room for the RA step inside the safety limits (by the counters)");
+				return;
+			}
+			if (!imuProbeSendMove (target, st.decAxisTicks))
+				return;
+			setImuProbeState (IMUPROBE_STEPPING);
+			return;
+		}
+
+		case IMUPROBE_STEPPING:
+		case IMUPROBE_RETURNING:
+			if (elapsed > 120.0)
+			{
+				abortImuProbe ("the RA axis did not reach the step target within 120 s");
+				return;
+			}
+			if (!newSample || !imuProbeArrived (st))
+				return;
+			if (imuProbeState == IMUPROBE_STEPPING)
+				setImuProbeState (IMUPROBE_SECOND);
+			else
+			{
+				setImuProbeState (IMUPROBE_IDLE);
+				logStream (MESSAGE_INFO) << "GeminiUDP: position imu finished, the RA axis is back where it started" << sendLog;
+			}
+			return;
+
+		default:
+			return;
+	}
+}
+
+void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
+{
+	double ra2 = st.raAxisTicks / st.geometry.ticksPerDeg ();
+	double dec2 = st.decAxisTicks / st.geometry.decTicksPerDeg ();
+	double dRa = ra2 - imuProbeRa1, dDec = dec2 - imuProbeDec1;
+	double maxErr = imuMaxErrorValue->getValueDouble ();
+	auto wrap = [] (double a) { return ln_range_degrees (a + 180.0) - 180.0; };
+
+	struct Scored { double ra, dec, e1, e2, score; };
+	std::vector<Scored> cands;
+	for (const auto &s : imuModel.solveAll (imuProbeAcc1, 3 * maxErr))
+	{
+		double e2 = imuModel.errorDeg (s.raAxis + dRa, s.decAxis + dDec, acc2);
+		cands.push_back (Scored {s.raAxis, s.decAxis, s.errDeg, e2, sqrt ((s.errDeg * s.errDeg + e2 * e2) / 2)});
+	}
+	std::sort (cands.begin (), cands.end (), [] (const Scored &a, const Scored &b) { return a.score < b.score; });
+
+	std::ostringstream os;
+	os << std::fixed << std::setprecision (2);
+	for (const auto &c : cands)
+		os << "; candidate RA axis " << c.ra << " Dec axis " << c.dec << " fits " << c.e1 << " / " << c.e2 << " deg";
+	std::string detail = os.str ();
+
+	bool fits = !cands.empty () && cands[0].score <= maxErr / 2;
+	bool unique = cands.size () < 2 || cands[1].score >= std::max (3 * cands[0].score, 0.5);
+	char buf[300];
+	if (!fits || !unique)
+	{
+		snprintf (buf, sizeof (buf), "inconclusive: %s", cands.empty () ? "gravity fits no axis position (calibration or sensor problem?)"
+			: !fits ? "the best candidate does not fit both readings" : "two candidates fit both readings");
+		imuProbeResultValue->setValueCharArr (buf);
+		sendValueAll (imuProbeResultValue);
+		logStream (MESSAGE_ERROR) << "GeminiUDP: position imu " << buf << detail << sendLog;
+		if (!imuProbeSendMove (imuProbeRa1Ticks, imuProbeDec1Ticks))
+			return;
+		setImuProbeState (IMUPROBE_RETURNING);
+		return;
+	}
+
+	// the error from both readings, each refined from its own reading
+	const Scored &b = cands[0];
+	double r1 = b.ra, d1 = b.dec, r2 = b.ra + dRa, d2 = b.dec + dDec, cond;
+	double rr, dd;
+	if (imuModel.solveAxes (imuProbeAcc1, r1, d1, rr, dd, cond))
+	{
+		r1 = rr;
+		d1 = dd;
+	}
+	if (imuModel.solveAxes (acc2, r2, d2, rr, dd, cond))
+	{
+		r2 = rr;
+		d2 = dd;
+	}
+	double raErr = (wrap (r1 - imuProbeRa1) + wrap (r2 - ra2)) / 2;
+	double decErr = (wrap (d1 - imuProbeDec1) + wrap (d2 - dec2)) / 2;
+
+	snprintf (buf, sizeof (buf), "counters off by RA axis %+.3f, Dec axis %+.3f deg (true minus counters; fit %.2f deg, next candidate %.2f deg)",
+		raErr, decErr, b.score, cands.size () > 1 ? cands[1].score : NAN);
+	imuProbeResultValue->setValueCharArr (buf);
+	sendValueAll (imuProbeResultValue);
+	logStream (MESSAGE_WARNING) << "GeminiUDP: position imu: " << buf << detail << sendLog;
+
+	if (imuProbeRezero)
+	{
+		if (std::max (fabs (raErr), fabs (decErr)) < rezeroMinValue->getValueDouble ())
+		{
+			if (positionTrust != TRUST_CONFIRMED)
+				setPositionTrust (TRUST_ASSUMED, std::string ("IMU: gravity agrees with the counters (") + buf + ")");
+		}
+		else
+		{
+			// the re-zero moves the axes itself; it must not find a probe running
+			setImuProbeState (IMUPROBE_IDLE);
+			std::string err;
+			if (beginRezero (raErr, decErr, std::string ("IMU: ") + buf, err))
+			{
+				logStream (MESSAGE_ERROR) << "GeminiUDP: position imu rezero refused: " << err << sendLog;
+				imuProbeResultValue->setValueCharArr ((std::string (buf) + " - re-zero refused: " + err).c_str ());
+				sendValueAll (imuProbeResultValue);
+			}
+			return;
+		}
+	}
+
+	if (!imuProbeSendMove (imuProbeRa1Ticks, imuProbeDec1Ticks))
+		return;
+	setImuProbeState (IMUPROBE_RETURNING);
+}
+
 int GeminiUDP::idle ()
 {
 	if (caring)
@@ -3923,6 +4345,7 @@ int GeminiUDP::idle ()
 		runMoveRecovery (st);
 		checkMoveCorrection (st);
 		checkImu (st);
+		runImuProbe (st);
 		// after applyStatus(), which is where an incident gets opened -
 		// so the first step of a recovery runs on the same tick that
 		// detected the problem, not a second later

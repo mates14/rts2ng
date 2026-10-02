@@ -91,6 +91,28 @@ int main ()
 	printf ("Dec counter +3: sensor says RA axis %+.3f, Dec axis %+.3f (cond %.2f)\n", sr - r, sd - (d + 3), cond);
 	assert (fabs (sr - r) < 0.3 && fabs (sd - d) < 0.3);
 
+	// with no prior: both mirror solutions come back, and a known RA step
+	// tells them apart - the second reading fits only the true one
+	{
+		double tr = 180 + 50, td = 180 + 70, a1[3], a2[3];
+		trueAcc (lat, R, bias, gain, tr, td, a1);
+		trueAcc (lat, R, bias, gain, tr + 3, td, a2);
+		auto sols = m.solveAll (a1, 0.5);
+		assert (sols.size () == 2);
+		int truth = -1;
+		for (size_t i = 0; i < sols.size (); i++)
+		{
+			double e2 = m.errorDeg (sols[i].raAxis + 3, sols[i].decAxis, a2);
+			printf ("candidate RA axis %.2f Dec axis %.2f: fits %.3f, after the RA step %.3f deg\n", sols[i].raAxis, sols[i].decAxis, sols[i].errDeg, e2);
+			if (e2 < 0.3)
+			{
+				assert (truth < 0);
+				truth = i;
+			}
+		}
+		assert (truth >= 0 && fabs (sols[truth].raAxis - tr) < 0.3 && fabs (sols[truth].decAxis - td) < 0.3);
+	}
+
 	// southern hemisphere / reversed counters: the fit finds the sense
 	std::vector<ImuMountModel::CalSample> rev = cal;
 	for (auto &cs : rev)

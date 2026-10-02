@@ -19,6 +19,7 @@
 
 #include "mpu9250.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -792,6 +793,41 @@ bool ImuMountModel::solveAxes (const double acc[3], double raAxis, double decAxi
 	raOut = x[0];
 	decOut = x[1];
 	return true;
+}
+
+std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double acc[3], double maxErrDeg) const
+{
+	std::vector<AxisSolution> out;
+	if (!fitted)
+		return out;
+	for (double r0 = 0; r0 < 360; r0 += 30)
+		for (double d0 = 0; d0 < 360; d0 += 30)
+		{
+			double r, d, cond;
+			if (!solveAxes (acc, r0, d0, r, d, cond))
+				continue;
+			r = fmod (fmod (r, 360.0) + 360.0, 360.0);
+			d = fmod (fmod (d, 360.0) + 360.0, 360.0);
+			double e = errorDeg (r, d, acc);
+			if (!(e <= maxErrDeg))
+				continue;
+			bool known = false;
+			for (auto &o : out)
+			{
+				double dr = fabs (fmod (o.raAxis - r + 540.0, 360.0) - 180.0), dd = fabs (fmod (o.decAxis - d + 540.0, 360.0) - 180.0);
+				if (dr < 1.0 && dd < 1.0)
+				{
+					known = true;
+					if (e < o.errDeg)
+						o = AxisSolution {r, d, e};
+					break;
+				}
+			}
+			if (!known)
+				out.push_back (AxisSolution {r, d, e});
+		}
+	std::sort (out.begin (), out.end (), [] (const AxisSolution &a, const AxisSolution &b) { return a.errDeg < b.errDeg; });
+	return out;
 }
 
 std::string ImuMountModel::describe () const

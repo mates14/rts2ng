@@ -486,3 +486,14 @@ given with the telescope somewhere else.
 
 **Suggested start:** leave `imu_action` at WARN for some nights and watch `imu_error` against
 `imu_temp`; only switch to LOST once the false-alarm margin is known.
+
+**`position imu [rezero]` — where the axes are, from gravity alone.** One reading fits two mirror-image
+axis positions; a known RA-axis step (`imu_probe_step`, 3°, made in counter ticks with `:MP#`, which stay
+right *relative* to each other even when their zero is off) turns gravity the opposite way at the two,
+so a second reading picks the true one. The driver stops (a parked mount is un-parked by the `:Q#`),
+reads, steps, reads, and reports in `imu_probe_result`: the counter error (true minus counters) and how
+well each candidate fitted. Plain `position imu` then steps back. `position imu rezero` acts on it: an
+error below `rezero_min` makes the position ASSUMED, a larger one runs the ordinary re-zero (the same
+cold start at CWD as for sky evidence). `position abort` stops it; moves, park and tracking are refused
+while it runs (`imu_probe_state`). Needs `imu_calibrated`. Every rest check is logged at debug level with
+the magnetometer, for working out what the compass is good for.

@@ -184,6 +184,15 @@ class ImuMountModel
 		 */
 		bool solveAxes (const double acc[3], double raAxis, double decAxis, double &raOut, double &decOut, double &condDeg) const;
 
+		/**
+		 * Every axis position that explains this gravity reading to within
+		 * maxErrDeg, best first - in general two, mirror images of each
+		 * other; one where they merge (tube in the meridian plane). Found
+		 * from a grid of starting points, so it needs no prior position.
+		 */
+		struct AxisSolution { double raAxis, decAxis, errDeg; };
+		std::vector<AxisSolution> solveAll (const double acc[3], double maxErrDeg) const;
+
 	private:
 		double zen[3];
 		double M[9];		// row-major, sensor axes in tube coordinates (columns)
