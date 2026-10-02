@@ -3288,35 +3288,30 @@ bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label, GeminiCa
 // Works out, for a given real sky target and the pier side Gemini actually
 // committed to, what the T-Point-corrected coordinates should be.
 //
-// The model's terms are evaluated in "unfolded" declination space (see
-// base/teld/gemini/gemini.cpp's startResync() and base/teld/src/gem.cpp's
-// GEM::sky2counts(), both already using this identity): the same real sky
-// point (ra, dec) can be encoded two ways - (ra, dec) itself, or (ra,
-// 180-dec / -180-dec) - and which encoding you feed the model determines
-// which side's flexure/collimation correction comes out, because the
-// model's trig terms evaluate differently outside +-90 even though no
-// physical declination is ever actually outside that range.
-//
-// Standard GEM convention (matches ASCOM/INDI pierEast/pierWest and this
-// codebase's own GEM/gemini.cpp): for a target's hour angle HA = LST-RA,
-// HA > 0 (past meridian, setting) is naturally reached "pier east", HA < 0
-// (before meridian, rising) is naturally reached "pier west" - so (ra,
-// dec) as-is corresponds to whichever of E/W matches that sign, and the
-// unfolded encoding corresponds to the other one.
+// The model's terms are evaluated with the E side "flipped": the same sky
+// point is (HA, dec) on the W side and (HA + 180, 180 - dec) on the E side -
+// the axes continued past the pole, which is how gpoint fits a GEM model
+// and how RTS2's GEM drivers reported the raw position. The trig terms then
+// give each side its own cone/non-perpendicularity sign. (The plain driver
+// picks the side from the sign of HA instead - see the comment inside.)
 void GeminiUDP::computeModelCorrection (double raDeg, double decDeg, double lstDeg, char actualPierSide, double &corrRaDeg, double &corrDecDeg)
 {
+	// IMU variant: the side is the ACTUAL pier side (the Dec axis), not one
+	// inferred from the sign of the hour angle, and the E side is encoded the
+	// way gpoint fits it and RTS2's GEM drivers always reported it - "flipped",
+	// (HA + 180, 180 - Dec), i.e. the axes continued past the pole. Cone and
+	// non-perpendicularity follow the side the tube is really on: the HA-sign
+	// rule put E-side pointings just before the meridian (Gemini allows them
+	// down to HA -1 deg) into the other encoding, and a fit of the 2026-10-02
+	// target 4 data through it was three times worse.
+	bool flipped = actualPierSide == 'E';
 	double ha = ln_range_degrees (lstDeg - raDeg);
 	if (ha > 180.0)
 		ha -= 360.0;
-	char naturalSide = (ha > 0.0) ? 'E' : 'W';
-
-	double unfoldedDec = decDeg;
-	if (actualPierSide != naturalSide && actualPierSide != '?')
-		unfoldedDec = decDeg < 0 ? -180.0 - decDeg : 180.0 - decDeg;
 
 	struct ln_equ_posn modelPos;
-	modelPos.ra = raDeg;
-	modelPos.dec = unfoldedDec;
+	modelPos.ra = flipped ? ln_range_degrees (raDeg - 180.0) : raDeg;	// HA + 180
+	modelPos.dec = flipped ? (decDeg >= 0 ? 180.0 - decDeg : -180.0 - decDeg) : decDeg;
 
 	struct ln_equ_posn realPos;
 	realPos.ra = raDeg;
@@ -3331,13 +3326,14 @@ void GeminiUDP::computeModelCorrection (double raDeg, double decDeg, double lstD
 	struct ln_equ_posn modelChange;
 	computeModel (&modelPos, &hrz, &modelChange, jd, 0);
 
+	// the change in RA is the same in both encodings; in Dec the continued
+	// coordinate runs the other way
 	corrRaDeg = raDeg - modelChange.ra;
-	corrDecDeg = decDeg - modelChange.dec;
+	corrDecDeg = flipped ? decDeg + modelChange.dec : decDeg - modelChange.dec;
 
-	logStream (MESSAGE_INFO) << "GeminiUDP: model correction for actual pier=" << actualPierSide
-		<< " (natural=" << naturalSide << " at HA=" << ha << ", "
-		<< (actualPierSide != naturalSide ? "flipped" : "direct") << " unfolded Dec=" << unfoldedDec << ")"
-		<< " -> dRA=" << modelChange.ra << " dDec=" << modelChange.dec << sendLog;
+	logStream (MESSAGE_INFO) << "GeminiUDP: model correction for pier=" << actualPierSide << " at HA=" << ha
+		<< (flipped ? " (flipped: HA+180, 180-Dec)" : " (direct)") << " -> RA " << (corrRaDeg - raDeg) * 3600 << "\", Dec "
+		<< (corrDecDeg - decDeg) * 3600 << "\"" << sendLog;
 }
 
 // Sends the model-corrected retarget once a move is close enough to its
