@@ -62,15 +62,16 @@ struct ImuSample
 /** mean and spread of the samples in a time window */
 struct ImuAverage
 {
-	int n = 0;
-	double acc[3] = {0, 0, 0};
-	double accStd = 0;		// g, RMS over the three axes of the per-axis standard deviation
+	int n = 0;			// samples in the window, outliers included
+	double acc[3] = {0, 0, 0};	// mean of the good samples
+	double accStd = 0;		// g, RMS over the three axes of the per-axis standard deviation, good samples
 	double gyro[3] = {0, 0, 0};
 	double gyroStd = 0;		// deg/s, same
 	double temp = 0;
 	bool magValid = false;
 	double mag[3] = {0, 0, 0};	// per-axis MEDIAN: single corrupt samples are common, see average()
 	int magOutliers = 0;		// samples more than 3 uT from that median on some axis
+	int accOutliers = 0;		// samples dropped from acc/gyro: off the window median by more than 0.03 g / 2 deg/s (corrupt serial lines)
 	double t0 = 0, t1 = 0;
 };
 

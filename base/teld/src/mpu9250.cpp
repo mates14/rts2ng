@@ -250,31 +250,70 @@ bool Mpu9250Reader::average (double windowSec, int minSamples, ImuAverage &out)
 {
 	std::lock_guard<std::mutex> lock (mutex_);
 	double from = now () - windowSec;
-	double sum[3] = {0, 0, 0}, sum2[3] = {0, 0, 0}, gsum[3] = {0, 0, 0}, gsum2[3] = {0, 0, 0};
-	std::vector<double> mags[3];
-	double tsum = 0;
-	int n = 0;
 	out = ImuAverage ();
+	std::vector<const ImuSample *> win;
 	for (auto it = history.rbegin (); it != history.rend () && it->t >= from; ++it)
+		win.push_back (&*it);
+	out.n = win.size ();
+	if (win.empty ())
+		return false;
+	out.t1 = win.front ()->t;
+	out.t0 = win.back ()->t;
+
+	auto median = [] (std::vector<double> v)
 	{
+		std::nth_element (v.begin (), v.begin () + v.size () / 2, v.end ());
+		return v[v.size () / 2];
+	};
+
+	// The serial line drops characters: on SBT a reply's field sometimes
+	// arrives a digit short ("15018" as "1501"), a tenth of the true value,
+	// and the line still parses - 2026-10-02 evening it was several samples
+	// a second, read as 0.15 g of "vibration". The window's per-axis median
+	// is safe; samples off it by more than any real rest scatter are dropped
+	// before the mean and the scatter are taken.
+	double accMed[3], gyroMed[3];
+	for (int i = 0; i < 3; i++)
+	{
+		std::vector<double> a, g;
+		for (auto *s : win)
+		{
+			a.push_back (s->acc[i]);
+			g.push_back (s->gyro[i]);
+		}
+		accMed[i] = median (a);
+		gyroMed[i] = median (g);
+	}
+	double sum[3] = {0, 0, 0}, sum2[3] = {0, 0, 0}, gsum[3] = {0, 0, 0}, gsum2[3] = {0, 0, 0};
+	std::vector<double> mags[3], temps;
+	int n = 0;
+	for (auto *s : win)
+	{
+		bool good = true;
+		for (int i = 0; i < 3; i++)
+			if (fabs (s->acc[i] - accMed[i]) > 0.03 || fabs (s->gyro[i] - gyroMed[i]) > 2.0)
+				good = false;
+		if (!good)
+		{
+			out.accOutliers++;
+			continue;
+		}
 		for (int i = 0; i < 3; i++)
 		{
-			sum[i] += it->acc[i];
-			sum2[i] += it->acc[i] * it->acc[i];
-			gsum[i] += it->gyro[i];
-			gsum2[i] += it->gyro[i] * it->gyro[i];
+			sum[i] += s->acc[i];
+			sum2[i] += s->acc[i] * s->acc[i];
+			gsum[i] += s->gyro[i];
+			gsum2[i] += s->gyro[i] * s->gyro[i];
 		}
-		if (it->magValid && !it->magOverflow)
-			for (int i = 0; i < 3; i++)
-				mags[i].push_back (it->mag[i]);
-		tsum += it->temp;
-		if (n == 0)
-			out.t1 = it->t;
-		out.t0 = it->t;
+		temps.push_back (s->temp);
 		n++;
 	}
-	out.n = n;
-	if (n < minSamples || n == 0)
+	for (auto *s : win)
+		if (s->magValid && !s->magOverflow)
+			for (int i = 0; i < 3; i++)
+				mags[i].push_back (s->mag[i]);
+	// mostly bad samples: the median itself is not to be trusted
+	if (n < minSamples || n == 0 || 2 * n < (int) win.size ())
 		return false;
 	double va = 0, vg = 0;
 	for (int i = 0; i < 3; i++)
@@ -286,7 +325,7 @@ bool Mpu9250Reader::average (double windowSec, int minSamples, ImuAverage &out)
 	}
 	out.accStd = sqrt (va / 3);
 	out.gyroStd = sqrt (vg / 3);
-	out.temp = tsum / n;
+	out.temp = median (temps);
 	// The magnetometer: a median, not a mean. At rest on SBT about one 2 s
 	// window in eight had one axis pulled 6-18 uT off by single bad samples,
 	// while clean windows scatter by 0.2-0.3 uT.

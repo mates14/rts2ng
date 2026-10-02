@@ -3458,13 +3458,15 @@ int GeminiUDP::stopMove ()
 	// astrometric "correct" still arriving is such a move: on SBT a backlog of
 	// them (36 deg corrections after the Dec slip) killed the probe's step
 	// within the same second. Only a client's "stop" (or "position abort")
-	// ends the probe.
-	if (imuProbeBusy () && !imuOperatorStop)
+	// ends the probe. The same for a re-zero: the stop that follows the
+	// executor's first refused move killed one before its :MP# was sent.
+	if ((imuProbeBusy () || (rezeroState != REZERO_IDLE && rezeroState != REZERO_REBOOTING)) && !imuOperatorStop)
 	{
 		if (getNow () - imuStopIgnoredLogAt > 10)
 		{
 			imuStopIgnoredLogAt = getNow ();
-			logStream (MESSAGE_WARNING) << "GeminiUDP: a stop from the framework itself ignored - position imu has the axes (\"stop\" or \"position abort\" ends it)" << sendLog;
+			logStream (MESSAGE_WARNING) << "GeminiUDP: a stop from the framework itself ignored - " << (imuProbeBusy () ? "position imu" : "a re-zero")
+				<< " has the axes (\"stop\" or \"position abort\" ends it)" << sendLog;
 		}
 		return 0;
 	}
@@ -3887,7 +3889,7 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	// magnetometer is good for
 	logStream (MESSAGE_DEBUG) << "GeminiUDP: IMU rest check at counters RA axis " << raAxis << ", Dec axis " << decAxis
 		<< " deg: acc " << av.acc[0] << " " << av.acc[1] << " " << av.acc[2] << " g, mag " << av.mag[0] << " " << av.mag[1] << " " << av.mag[2]
-		<< " uT (median, " << av.magOutliers << " of " << av.n << " samples off; model " << magErr << " uT), temp " << av.temp << " C, error " << err << " deg" << sendLog;
+		<< " uT (median, " << av.magOutliers << " of " << av.n << " samples off; " << av.accOutliers << " corrupt samples dropped; model " << magErr << " uT), temp " << av.temp << " C, error " << err << " deg" << sendLog;
 
 	learnImuSample (raAxis, decAxis, av, err);
 
@@ -4277,7 +4279,7 @@ bool GeminiUDP::imuProbeMeasure (const GeminiStatus &st, double acc[3], std::str
 	if (av.accStd > 0.01 || av.gyroStd > 0.5 || g < 0.85 || g > 1.15)
 	{
 		char buf[120];
-		snprintf (buf, sizeof (buf), "IMU not still or implausible: |a| %.3f g, scatter %.4f g, %.2f deg/s", g, av.accStd, av.gyroStd);
+		snprintf (buf, sizeof (buf), "IMU not still or implausible: |a| %.3f g, scatter %.4f g, %.2f deg/s (%d of %d samples corrupt, dropped)", g, av.accStd, av.gyroStd, av.accOutliers, av.n);
 		err = buf;
 		return false;
 	}
