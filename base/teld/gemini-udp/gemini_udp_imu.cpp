@@ -95,6 +95,7 @@
 #define OPT_POSITION_STATE       OPT_LOCAL + 7
 #define OPT_IMU_DEVICE           OPT_LOCAL + 8
 #define OPT_IMU_CALIBRATION      OPT_LOCAL + 9
+#define OPT_CORRECTIONS          OPT_LOCAL + 10
 
 namespace rts2teld
 {
@@ -915,6 +916,11 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	addOption (OPT_NO_COLDSTART, "no-safety-coldstart", 0, "no longer does anything - safety incidents never cold-start the mount");
 	addOption (OPT_MAX_RECOVERIES, "max-recoveries", 1, "no longer does anything - every incident leaves the mount locked for a human");
 	addOption (OPT_POSITION_STATE, "position-state", 1, "file keeping position_trust across driver restarts (default /var/log/rts2/gemini-udp-position.state)");
+	addOption (OPT_CORRECTIONS, "corrections", 1, "corrections RTS2 computes before a goto, as gemini2ser's: 0 all (precession, nutation, aberration, refraction - default; Gemini takes coordinates of the date), 1 refraction only, 2 all but refraction, 3 none");
+	// Gemini is fed coordinates of the date (:p0#); every earlier T0 driver
+	// ran with --corrections 0. The UDP port left all four off, and gotos
+	// and the sky evidence carried 26 years of precession (2026-10-02).
+	setCorrections (true, true, true, true);
 	addOption (OPT_IMU_DEVICE, "imu", 1, "serial port of the MPU-9250 IMU on the tube (e.g. /dev/ttyUSB0) - checks the axis counters against gravity, see imu_* values");
 	addOption (OPT_IMU_CALIBRATION, "imu-calibration", 1, "file keeping the IMU calibration samples (default /var/log/rts2/gemini-udp-imu.cal)");
 }
@@ -981,6 +987,26 @@ int GeminiUDP::processOption (int in_opt)
 			break;
 		case OPT_IMU_DEVICE:
 			imuDevice = optarg;
+			break;
+		case OPT_CORRECTIONS:
+			switch (*optarg)
+			{
+				case '0':
+					setCorrections (true, true, true, true);
+					break;
+				case '1':
+					setCorrections (false, false, false, true);
+					break;
+				case '2':
+					setCorrections (true, true, true, false);
+					break;
+				case '3':
+					setCorrections (false, false, false, false);
+					break;
+				default:
+					logStream (MESSAGE_ERROR) << "invalid --corrections " << optarg << " - 0 all, 1 refraction only, 2 all but refraction, 3 none" << sendLog;
+					return -1;
+			}
 			break;
 		case OPT_IMU_CALIBRATION:
 			imuCalibrationPath = optarg;
