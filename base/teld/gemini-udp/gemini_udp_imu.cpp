@@ -591,6 +591,8 @@ class GeminiUDP:public Telescope
 		rts2core::ValueString *imuProbeResultValue;
 
 		bool imuProbeBusy () const { return imuProbeState != IMUPROBE_IDLE; }
+		bool imuOperatorStop;		// the stopMove() in progress comes from a client's "stop" command
+		double imuStopIgnoredLogAt;
 		int beginImuProbe (bool rezero, std::string &err);
 		void runImuProbe (const GeminiStatus &st);
 		void setImuProbeState (ImuProbeState newState);
@@ -815,6 +817,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuProbeTargetRa = imuProbeTargetDec = 0;
 	imuProbeStableCount = 0;
 	imuProbeStopTries = 0;
+	imuOperatorStop = false;
+	imuStopIgnoredLogAt = 0;
 	imuProbeRa1 = imuProbeDec1 = NAN;
 	imuProbeAcc1[0] = imuProbeAcc1[1] = imuProbeAcc1[2] = NAN;
 	imuProbeRa1Ticks = imuProbeDec1Ticks = 0;
@@ -1831,6 +1835,13 @@ void GeminiUDP::savePositionState (const GeminiStatus *st)
 
 int GeminiUDP::commandAuthorized (rts2core::Connection *conn)
 {
+	if (conn->isCommand ("stop"))
+	{
+		imuOperatorStop = true;
+		int ret = Telescope::commandAuthorized (conn);
+		imuOperatorStop = false;
+		return ret;
+	}
 	if (conn->isCommand ("position"))
 		return positionCommand (conn);
 	if (conn->isCommand ("correct"))
@@ -3395,6 +3406,22 @@ int GeminiUDP::isMoving ()
 
 int GeminiUDP::stopMove ()
 {
+	// position imu owns the axes. The framework stops on its own whenever a
+	// move it wanted is refused - and while the position is LOST, every
+	// astrometric "correct" still arriving is such a move: on SBT a backlog of
+	// them (36 deg corrections after the Dec slip) killed the probe's step
+	// within the same second. Only a client's "stop" (or "position abort")
+	// ends the probe.
+	if (imuProbeBusy () && !imuOperatorStop)
+	{
+		if (getNow () - imuStopIgnoredLogAt > 10)
+		{
+			imuStopIgnoredLogAt = getNow ();
+			logStream (MESSAGE_WARNING) << "GeminiUDP: a stop from the framework itself ignored - position imu has the axes (\"stop\" or \"position abort\" ends it)" << sendLog;
+		}
+		return 0;
+	}
+
 	// the framework's stop (an operator's "stop", a new move replacing one in
 	// flight, stopTracking()) - logged, so a log tells an operator's stop from
 	// the mount stopping by itself
