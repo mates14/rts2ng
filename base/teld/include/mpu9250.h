@@ -190,8 +190,19 @@ class ImuMountModel
 		 * other; one where they merge (tube in the meridian plane). Found
 		 * from a grid of starting points, so it needs no prior position.
 		 */
-		struct AxisSolution { double raAxis, decAxis, errDeg; };
+		// condDeg: axis degrees per degree of gravity noise along the worst direction
+		struct AxisSolution { double raAxis, decAxis, errDeg, condDeg; };
 		std::vector<AxisSolution> solveAll (const double acc[3], double maxErrDeg) const;
+
+		/**
+		 * The axis position at the first of two readings, taken before and
+		 * after a known step (dRa, dDec, axis degrees) - every local best
+		 * fit of both readings together, best first; errDeg is the RMS of
+		 * the two angle errors. A step off the merge line (RA axis 0/180)
+		 * leaves one good fit where one reading alone leaves two, or a
+		 * whole valley of them on the line itself.
+		 */
+		std::vector<AxisSolution> solveJoint (const double acc1[3], const double acc2[3], double dRa, double dDec, double maxErrDeg) const;
 
 	private:
 		double zen[3];

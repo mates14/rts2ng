@@ -113,6 +113,26 @@ int main ()
 		assert (truth >= 0 && fabs (sols[truth].raAxis - tr) < 0.3 && fabs (sols[truth].decAxis - td) < 0.3);
 	}
 
+	// at CWD - on the merge line - one small step cannot decide, a step
+	// well off the line can
+	for (double stepDeg : {3.0, 25.0})
+	{
+		double a1[3], a2[3];
+		trueAcc (lat, R, bias, gain, 180, 180, a1);
+		trueAcc (lat, R, bias, gain, 180 + stepDeg, 180, a2);
+		auto sols = m.solveJoint (a1, a2, stepDeg, 0, 1.0);
+		printf ("CWD, %.0f deg step: %d fits, best RA axis %.2f Dec axis %.2f (%.3f, cond %.1f), next %.3f deg\n", stepDeg, (int) sols.size (),
+			sols[0].raAxis, sols[0].decAxis, sols[0].errDeg, sols[0].condDeg, sols.size () > 1 ? sols[1].errDeg : NAN);
+		if (stepDeg < 10)
+			assert (sols[0].condDeg > 5);	// on the merge line: badly conditioned
+		else
+		{
+			assert (sols[0].condDeg < 5);
+			assert (fabs (sols[0].raAxis - 180) < 0.3 && fabs (sols[0].decAxis - 180) < 0.3);
+			assert (sols.size () < 2 || sols[1].errDeg > std::max (3 * sols[0].errDeg, 0.5));
+		}
+	}
+
 	// southern hemisphere / reversed counters: the fit finds the sense
 	std::vector<ImuMountModel::CalSample> rev = cal;
 	for (auto &cs : rev)

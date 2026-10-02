@@ -811,6 +811,7 @@ std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double a
 			double e = errorDeg (r, d, acc);
 			if (!(e <= maxErrDeg))
 				continue;
+			AxisSolution sol {r, d, e, cond};
 			bool known = false;
 			for (auto &o : out)
 			{
@@ -819,12 +820,101 @@ std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double a
 				{
 					known = true;
 					if (e < o.errDeg)
-						o = AxisSolution {r, d, e};
+						o = sol;
 					break;
 				}
 			}
 			if (!known)
-				out.push_back (AxisSolution {r, d, e});
+				out.push_back (sol);
+		}
+	std::sort (out.begin (), out.end (), [] (const AxisSolution &a, const AxisSolution &b) { return a.errDeg < b.errDeg; });
+	return out;
+}
+
+std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveJoint (const double acc1[3], const double acc2[3], double dRa, double dDec, double maxErrDeg) const
+{
+	std::vector<AxisSolution> out;
+	if (!fitted)
+		return out;
+	double m1[3], m2[3];
+	correctAcc (acc1, m1);
+	correctAcc (acc2, m2);
+	auto residuals = [&] (double r, double d, double res[6])
+	{
+		double p1[3], p2[3];
+		predictUp (r, d, p1);
+		predictUp (r + dRa, d + dDec, p2);
+		for (int i = 0; i < 3; i++)
+		{
+			res[i] = m1[i] - p1[i];
+			res[3 + i] = m2[i] - p2[i];
+		}
+	};
+	for (double r0 = 0; r0 < 360; r0 += 20)
+		for (double d0 = 0; d0 < 360; d0 += 20)
+		{
+			double x[2] = {r0, d0};
+			bool ok = true;
+			double lmin = 0;
+			for (int it = 0; it < 60 && ok; it++)
+			{
+				const double h = 1e-4;
+				double r[6], rr[6], rd[6];
+				residuals (x[0], x[1], r);
+				residuals (x[0] + h, x[1], rr);
+				residuals (x[0], x[1] + h, rd);
+				double a = 0, b = 0, d = 0, g0 = 0, g1 = 0;
+				for (int i = 0; i < 6; i++)
+				{
+					double j0 = -(rr[i] - r[i]) / h, j1 = -(rd[i] - r[i]) / h;
+					a += j0 * j0;
+					b += j0 * j1;
+					d += j1 * j1;
+					g0 += j0 * r[i];
+					g1 += j1 * r[i];
+				}
+				double det = a * d - b * b;
+				if (det <= 0)
+				{
+					ok = false;
+					break;
+				}
+				lmin = (a + d) / 2 - sqrt (std::max (0.0, (a + d) * (a + d) / 4 - det));
+				double s0 = (d * g0 - b * g1) / det, s1 = (a * g1 - b * g0) / det;
+				double len = sqrt (s0 * s0 + s1 * s1);
+				if (len > 20)
+				{
+					s0 *= 20 / len;
+					s1 *= 20 / len;
+				}
+				x[0] += s0;
+				x[1] += s1;
+				if (len < 1e-7)
+					break;
+			}
+			if (!ok)
+				continue;
+			double r = fmod (fmod (x[0], 360.0) + 360.0, 360.0);
+			double d = fmod (fmod (x[1], 360.0) + 360.0, 360.0);
+			double e1 = errorDeg (r, d, acc1), e2 = errorDeg (r + dRa, d + dDec, acc2);
+			double e = sqrt ((e1 * e1 + e2 * e2) / 2);
+			if (!(e <= maxErrDeg) || lmin <= 0)
+				continue;
+			AxisSolution sol {r, d, e, DEG / sqrt (lmin)};
+			bool known = false;
+			for (auto &o : out)
+			{
+				double dr = fabs (fmod (o.raAxis - r + 540.0, 360.0) - 180.0), dd = fabs (fmod (o.decAxis - d + 540.0, 360.0) - 180.0);
+				if (dr < 1.0 && dd < 1.0)
+				{
+					known = true;
+					if (e < o.errDeg)
+						o = sol;
+					break;
+				}
+			}
+			if (!known)
+				out.push_back (sol);
 		}
 	std::sort (out.begin (), out.end (), [] (const AxisSolution &a, const AxisSolution &b) { return a.errDeg < b.errDeg; });
 	return out;

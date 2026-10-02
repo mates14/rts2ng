@@ -584,6 +584,8 @@ class GeminiUDP:public Telescope
 		int32_t imuProbeRa1Ticks, imuProbeDec1Ticks;
 		rts2core::ValueString *imuProbeStateValue;
 		rts2core::ValueDouble *imuProbeStepValue;
+		rts2core::ValueDouble *imuProbeStepFarValue;
+		rts2core::ValueDouble *imuProbeMaxSigmaValue;
 		rts2core::ValueString *imuProbeResultValue;
 
 		bool imuProbeBusy () const { return imuProbeState != IMUPROBE_IDLE; }
@@ -816,6 +818,10 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuProbeStateValue->setValueCharArr ("IDLE");
 	createValue (imuProbeStepValue, "imu_probe_step", "[deg] RA axis step position imu takes between its two gravity readings", false, RTS2_VALUE_WRITABLE);
 	imuProbeStepValue->setValueDouble (3.0);
+	createValue (imuProbeStepFarValue, "imu_probe_step_far", "[deg] the RA axis step instead, when the first reading puts the RA axis within 15 deg of CWD/its opposite - there a small step cannot tell the axes apart", false, RTS2_VALUE_WRITABLE);
+	imuProbeStepFarValue->setValueDouble (30.0);
+	createValue (imuProbeMaxSigmaValue, "imu_probe_max_sigma", "[deg] position imu only gives an answer this certain (calibration rms times the conditioning of the two readings)", false, RTS2_VALUE_WRITABLE);
+	imuProbeMaxSigmaValue->setValueDouble (0.25);
 	createValue (imuProbeResultValue, "imu_probe_result", "what the last position imu found", false);
 
 	createValue (imuConnectedValue, "imu_connected", "the IMU (--imu) answers with data", false);
@@ -4047,10 +4053,10 @@ int GeminiUDP::beginImuProbe (bool rezero, std::string &err)
 		err = "a re-zero, move recovery, park or safety recovery is running";
 		return -1;
 	}
-	double step = imuProbeStepValue->getValueDouble ();
-	if (!(step >= 0.5 && step <= 20))
+	double step = imuProbeStepValue->getValueDouble (), far = imuProbeStepFarValue->getValueDouble ();
+	if (!(step >= 0.5 && step <= 45) || !(far >= step && far <= 45))
 	{
-		err = "imu_probe_step must be 0.5 to 20 deg";
+		err = "imu_probe_step and imu_probe_step_far must be 0.5 to 45 deg, the far one not smaller";
 		return -1;
 	}
 
@@ -4207,15 +4213,29 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 			imuProbeRa1 = st.raAxisTicks / st.geometry.ticksPerDeg ();
 			imuProbeDec1 = st.decAxisTicks / st.geometry.decTicksPerDeg ();
 
+			// On the merge line (RA axis at CWD or opposite: the tube in the
+			// meridian plane, through the pole) RA and Dec turn gravity the
+			// same way and a small step leaves a valley of fits - step far.
+			// Judged from where gravity says the axis is, the counters may
+			// be wrong.
+			bool nearLine = true;
+			auto sols = imuModel.solveAll (acc, 3 * imuMaxErrorValue->getValueDouble ());
+			for (const auto &sol : sols)
+				if (fabs (sin ((sol.raAxis - 180.0) * M_PI / 180.0)) > sin (15.0 * M_PI / 180.0))
+					nearLine = false;
+			double stepDeg = nearLine ? imuProbeStepFarValue->getValueDouble () : imuProbeStepValue->getValueDouble ();
+
 			// towards whichever side of the counters' window has more room
 			const GeminiAxisGeometry &g = st.geometry;
-			int32_t step = (int32_t) lround (imuProbeStepValue->getValueDouble () * g.ticksPerDeg ());
+			int32_t step = (int32_t) lround (stepDeg * g.ticksPerDeg ());
 			int32_t target = st.raAxisTicks - g.westLimit > g.eastLimit - st.raAxisTicks ? st.raAxisTicks - step : st.raAxisTicks + step;
 			if (!(g.westLimit < target && target < g.eastLimit))
 			{
 				abortImuProbe ("no room for the RA step inside the safety limits (by the counters)");
 				return;
 			}
+			logStream (MESSAGE_INFO) << "GeminiUDP: position imu: stepping the RA axis by " << (target - st.raAxisTicks) / g.ticksPerDeg () << " deg"
+				<< (nearLine ? " (near the merge line, the far step)" : "") << sendLog;
 			if (!imuProbeSendMove (target, st.decAxisTicks))
 				return;
 			setImuProbeState (IMUPROBE_STEPPING);
@@ -4253,28 +4273,25 @@ void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
 	double maxErr = imuMaxErrorValue->getValueDouble ();
 	auto wrap = [] (double a) { return ln_range_degrees (a + 180.0) - 180.0; };
 
-	struct Scored { double ra, dec, e1, e2, score; };
-	std::vector<Scored> cands;
-	for (const auto &s : imuModel.solveAll (imuProbeAcc1, 3 * maxErr))
-	{
-		double e2 = imuModel.errorDeg (s.raAxis + dRa, s.decAxis + dDec, acc2);
-		cands.push_back (Scored {s.raAxis, s.decAxis, s.errDeg, e2, sqrt ((s.errDeg * s.errDeg + e2 * e2) / 2)});
-	}
-	std::sort (cands.begin (), cands.end (), [] (const Scored &a, const Scored &b) { return a.score < b.score; });
+	auto cands = imuModel.solveJoint (imuProbeAcc1, acc2, dRa, dDec, maxErr);
+	double noise = std::max (imuModel.rms (), 0.05);
 
 	std::ostringstream os;
 	os << std::fixed << std::setprecision (2);
 	for (const auto &c : cands)
-		os << "; candidate RA axis " << c.ra << " Dec axis " << c.dec << " fits " << c.e1 << " / " << c.e2 << " deg";
+		os << "; fit RA axis " << c.raAxis << " Dec axis " << c.decAxis << ": " << c.errDeg << " deg, +-" << c.condDeg * noise;
 	std::string detail = os.str ();
 
-	bool fits = !cands.empty () && cands[0].score <= maxErr / 2;
-	bool unique = cands.size () < 2 || cands[1].score >= std::max (3 * cands[0].score, 0.5);
+	bool fits = !cands.empty () && cands[0].errDeg <= maxErr / 2;
+	bool unique = cands.size () < 2 || cands[1].errDeg >= std::max (3 * cands[0].errDeg, 0.5);
+	double sigma = cands.empty () ? NAN : cands[0].condDeg * noise;
+	bool certain = sigma <= imuProbeMaxSigmaValue->getValueDouble ();
 	char buf[300];
-	if (!fits || !unique)
+	if (!fits || !unique || !certain)
 	{
 		snprintf (buf, sizeof (buf), "inconclusive: %s", cands.empty () ? "gravity fits no axis position (calibration or sensor problem?)"
-			: !fits ? "the best candidate does not fit both readings" : "two candidates fit both readings");
+			: !fits ? "the best fit does not explain both readings" : !unique ? "two axis positions explain both readings"
+			: "the readings leave the position uncertain (imu_probe_max_sigma) - larger imu_probe_step?");
 		imuProbeResultValue->setValueCharArr (buf);
 		sendValueAll (imuProbeResultValue);
 		logStream (MESSAGE_ERROR) << "GeminiUDP: position imu " << buf << detail << sendLog;
@@ -4284,25 +4301,12 @@ void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
 		return;
 	}
 
-	// the error from both readings, each refined from its own reading
-	const Scored &b = cands[0];
-	double r1 = b.ra, d1 = b.dec, r2 = b.ra + dRa, d2 = b.dec + dDec, cond;
-	double rr, dd;
-	if (imuModel.solveAxes (imuProbeAcc1, r1, d1, rr, dd, cond))
-	{
-		r1 = rr;
-		d1 = dd;
-	}
-	if (imuModel.solveAxes (acc2, r2, d2, rr, dd, cond))
-	{
-		r2 = rr;
-		d2 = dd;
-	}
-	double raErr = (wrap (r1 - imuProbeRa1) + wrap (r2 - ra2)) / 2;
-	double decErr = (wrap (d1 - imuProbeDec1) + wrap (d2 - dec2)) / 2;
+	const auto &b = cands[0];
+	double raErr = wrap (b.raAxis - imuProbeRa1);
+	double decErr = wrap (b.decAxis - imuProbeDec1);
 
-	snprintf (buf, sizeof (buf), "counters off by RA axis %+.3f, Dec axis %+.3f deg (true minus counters; fit %.2f deg, next candidate %.2f deg)",
-		raErr, decErr, b.score, cands.size () > 1 ? cands[1].score : NAN);
+	snprintf (buf, sizeof (buf), "counters off by RA axis %+.3f, Dec axis %+.3f deg +-%.2f (true minus counters; fit %.2f deg, next %.2f deg)",
+		raErr, decErr, sigma, b.errDeg, cands.size () > 1 ? cands[1].errDeg : NAN);
 	imuProbeResultValue->setValueCharArr (buf);
 	sendValueAll (imuProbeResultValue);
 	logStream (MESSAGE_WARNING) << "GeminiUDP: position imu: " << buf << detail << sendLog;
