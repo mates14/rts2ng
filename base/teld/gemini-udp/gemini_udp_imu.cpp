@@ -3811,7 +3811,7 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	// magnetometer is good for
 	logStream (MESSAGE_DEBUG) << "GeminiUDP: IMU rest check at counters RA axis " << raAxis << ", Dec axis " << decAxis
 		<< " deg: acc " << av.acc[0] << " " << av.acc[1] << " " << av.acc[2] << " g, mag " << av.mag[0] << " " << av.mag[1] << " " << av.mag[2]
-		<< " uT, temp " << av.temp << " C, error " << err << " deg" << sendLog;
+		<< " uT (median, " << av.magOutliers << " of " << av.n << " samples off), temp " << av.temp << " C, error " << err << " deg" << sendLog;
 
 	learnImuSample (raAxis, decAxis, av, err);
 

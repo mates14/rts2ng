@@ -250,9 +250,10 @@ bool Mpu9250Reader::average (double windowSec, int minSamples, ImuAverage &out)
 {
 	std::lock_guard<std::mutex> lock (mutex_);
 	double from = now () - windowSec;
-	double sum[3] = {0, 0, 0}, sum2[3] = {0, 0, 0}, gsum[3] = {0, 0, 0}, gsum2[3] = {0, 0, 0}, msum[3] = {0, 0, 0};
+	double sum[3] = {0, 0, 0}, sum2[3] = {0, 0, 0}, gsum[3] = {0, 0, 0}, gsum2[3] = {0, 0, 0};
+	std::vector<double> mags[3];
 	double tsum = 0;
-	int n = 0, nm = 0;
+	int n = 0;
 	out = ImuAverage ();
 	for (auto it = history.rbegin (); it != history.rend () && it->t >= from; ++it)
 	{
@@ -264,11 +265,8 @@ bool Mpu9250Reader::average (double windowSec, int minSamples, ImuAverage &out)
 			gsum2[i] += it->gyro[i] * it->gyro[i];
 		}
 		if (it->magValid && !it->magOverflow)
-		{
 			for (int i = 0; i < 3; i++)
-				msum[i] += it->mag[i];
-			nm++;
-		}
+				mags[i].push_back (it->mag[i]);
 		tsum += it->temp;
 		if (n == 0)
 			out.t1 = it->t;
@@ -289,9 +287,27 @@ bool Mpu9250Reader::average (double windowSec, int minSamples, ImuAverage &out)
 	out.accStd = sqrt (va / 3);
 	out.gyroStd = sqrt (vg / 3);
 	out.temp = tsum / n;
+	// The magnetometer: a median, not a mean. At rest on SBT about one 2 s
+	// window in eight had one axis pulled 6-18 uT off by single bad samples,
+	// while clean windows scatter by 0.2-0.3 uT.
+	size_t nm = mags[0].size ();
 	out.magValid = nm > 0;
-	for (int i = 0; i < 3; i++)
-		out.mag[i] = nm ? msum[i] / nm : 0;
+	if (nm > 0)
+	{
+		for (int i = 0; i < 3; i++)
+		{
+			std::vector<double> v = mags[i];
+			std::nth_element (v.begin (), v.begin () + nm / 2, v.end ());
+			out.mag[i] = v[nm / 2];
+		}
+		for (size_t k = 0; k < nm; k++)
+			for (int i = 0; i < 3; i++)
+				if (fabs (mags[i][k] - out.mag[i]) > 3.0)
+				{
+					out.magOutliers++;
+					break;
+				}
+	}
 	return true;
 }
 

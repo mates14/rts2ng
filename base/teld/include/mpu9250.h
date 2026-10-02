@@ -69,7 +69,8 @@ struct ImuAverage
 	double gyroStd = 0;		// deg/s, same
 	double temp = 0;
 	bool magValid = false;
-	double mag[3] = {0, 0, 0};
+	double mag[3] = {0, 0, 0};	// per-axis MEDIAN: single corrupt samples are common, see average()
+	int magOutliers = 0;		// samples more than 3 uT from that median on some axis
 	double t0 = 0, t1 = 0;
 };
 
