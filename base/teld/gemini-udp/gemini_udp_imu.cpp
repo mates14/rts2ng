@@ -599,7 +599,7 @@ class GeminiUDP:public Telescope
 		bool imuProbeSendMove (int32_t ra, int32_t dec);
 		bool imuProbeArrived (const GeminiStatus &st);
 		void evaluateImuProbe (const GeminiStatus &st, const double acc[3]);
-		bool startImuProbeFarStep (const GeminiStatus &st, const ImuMountModel::AxisSolution &best, double sigma, std::string &why);
+		bool startImuProbeFarStep (const GeminiStatus &st, const std::vector<ImuMountModel::AxisSolution> &plausible, double noise, std::string &why);
 };
 
 }
@@ -4333,11 +4333,17 @@ void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 	char buf[400];
 	if (!fits || !unique || !certain)
 	{
+		// every fit still in the running - the larger step has to be safe
+		// whichever of them is the truth, and the third reading decides
 		std::string farWhy;
-		if (imuProbeState == IMUPROBE_SECOND && fits && unique && sigma <= 3.0)
+		if (imuProbeState == IMUPROBE_SECOND && fits)
 		{
-			logStream (MESSAGE_INFO) << "GeminiUDP: position imu: known only to +-" << sigma << " deg after the small step" << detail << sendLog;
-			if (startImuProbeFarStep (st, cands[0], sigma, farWhy))
+			std::vector<ImuMountModel::AxisSolution> plausible;
+			for (const auto &c : cands)
+				if (c.errDeg < std::max (3 * cands[0].errDeg, 0.5))
+					plausible.push_back (c);
+			logStream (MESSAGE_INFO) << "GeminiUDP: position imu: " << plausible.size () << " fit(s) still possible after the small step" << detail << sendLog;
+			if (startImuProbeFarStep (st, plausible, noise, farWhy))
 				return;
 		}
 		snprintf (buf, sizeof (buf), "inconclusive: %s%s%s", cands.empty () ? "gravity fits no axis position (calibration or sensor problem?)"
@@ -4402,49 +4408,74 @@ void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 	setImuProbeState (IMUPROBE_RETURNING);
 }
 
-// The larger step, from where the small one says the axes truly are (to
-// +-sigma): away from the merge line, inside the configured safety limits
-// measured from TRUE CWD with a margin for that uncertainty (and inside the
-// counters' window, or the mount would refuse it), and with the tube at least
-// imu_probe_min_alt high all the way - an RA axis turn sweeps the tube along a
-// circle of constant declination, so the path is checked, not just its end.
-bool GeminiUDP::startImuProbeFarStep (const GeminiStatus &st, const ImuMountModel::AxisSolution &best, double sigma, std::string &why)
+// The larger step, safe whichever of the fits still possible after the small
+// one is the truth (each to +-its own sigma): away from the merge line, inside
+// the configured safety limits measured from TRUE CWD with a margin for that
+// uncertainty (and inside the counters' window, or the mount would refuse
+// it), and with the tube at least imu_probe_min_alt high all the way - an RA
+// axis turn sweeps the tube along a circle of constant declination, so the
+// path is checked, not just its end. Never blind: a fit known worse than 3 deg
+// makes no step at all.
+bool GeminiUDP::startImuProbeFarStep (const GeminiStatus &st, const std::vector<ImuMountModel::AxisSolution> &plausible, double noise, std::string &why)
 {
 	auto wrap = [] (double a) { return ln_range_degrees (a + 180.0) - 180.0; };
 	const GeminiAxisGeometry &g = st.geometry;
 	double k = g.ticksPerDeg ();
 	double raNow = st.raAxisTicks / k, decNow = st.decAxisTicks / g.decTicksPerDeg ();
-	double raErr = wrap (best.raAxis - imuProbeRa1), decErr = wrap (best.decAxis - imuProbeDec1);
-	double rT = raNow + raErr, dT = decNow + decErr;	// true axes now
 	double far = imuProbeStepFarValue->getValueDouble ();
-	double margin = 3 * sigma + 2.0;
+	if (plausible.empty ())
+	{
+		why = "nothing fits well enough to step from";
+		return false;
+	}
+	for (const auto &c : plausible)
+		if (c.condDeg * noise > 3.0)
+		{
+			why = "a possible position is known only to +-" + std::to_string (c.condDeg * noise) + " deg - no larger step from that";
+			return false;
+		}
 
-	// away from the line first: the line is RA axis 180 (CWD) or 0
-	double fromCwd = wrap (rT - 180.0);
-	int pref = fabs (fromCwd) <= 90 ? (fromCwd >= 0 ? 1 : -1) : (wrap (rT) >= 0 ? 1 : -1);
+	// direction away from the line, judged from the best fit; the line is
+	// RA axis 180 (CWD) or 0
+	double rBest = raNow + wrap (plausible[0].raAxis - imuProbeRa1);
+	double fromCwd = wrap (rBest - 180.0);
+	int pref = fabs (fromCwd) <= 90 ? (fromCwd >= 0 ? 1 : -1) : (wrap (rBest) >= 0 ? 1 : -1);
 	std::string tried;
 	for (int dir : { pref, -pref })
 	{
-		double rEnd = rT + dir * far;
 		int32_t counterEnd = st.raAxisTicks + (int32_t) lround (dir * far * k);
-		const char *bad = nullptr;
-		if (!(g.westLimit / k + margin < rEnd && rEnd < g.eastLimit / k - margin))
-			bad = "outside the safety limits from true CWD";
-		else if (!(g.westLimit < counterEnd && counterEnd < g.eastLimit))
+		std::string bad;
+		if (!(g.westLimit < counterEnd && counterEnd < g.eastLimit))
 			bad = "outside the counters' window";
-		else if (fabs (sin ((rEnd - 180.0) * M_PI / 180.0)) < sin (10.0 * M_PI / 180.0))
-			bad = "still on the merge line";
-		else
-			for (double t = 0; t <= far + 0.01 && !bad; t += 1.0)
-				if (imuModel.tubeAltitude (rT + dir * t, dT) < imuProbeMinAltValue->getValueDouble ())
-					bad = "the tube would go below imu_probe_min_alt";
-		if (bad)
+		for (const auto &c : plausible)
+		{
+			if (!bad.empty ())
+				break;
+			double rT = raNow + wrap (c.raAxis - imuProbeRa1), dT = decNow + wrap (c.decAxis - imuProbeDec1);	// true axes now, if c is the truth
+			double margin = 3 * c.condDeg * noise + 2.0;
+			double rEnd = rT + dir * far;
+			if (!(g.westLimit / k + margin < rEnd && rEnd < g.eastLimit / k - margin))
+				bad = "outside the safety limits from true CWD";
+			else if (fabs (sin ((rEnd - 180.0) * M_PI / 180.0)) < sin (10.0 * M_PI / 180.0))
+				bad = "still on the merge line";
+			else
+				for (double t = 0; t <= far + 0.01 && bad.empty (); t += 1.0)
+					if (imuModel.tubeAltitude (rT + dir * t, dT) < imuProbeMinAltValue->getValueDouble ())
+						bad = "the tube would go below imu_probe_min_alt";
+			if (!bad.empty ())
+			{
+				char at[80];
+				snprintf (at, sizeof (at), " if the axes are at %.1f/%.1f", rT, dT);
+				bad += at;
+			}
+		}
+		if (!bad.empty ())
 		{
 			tried += std::string (tried.empty () ? "" : ", ") + (dir > 0 ? "+" : "-") + std::to_string ((int) far) + " deg " + bad;
 			continue;
 		}
-		logStream (MESSAGE_INFO) << "GeminiUDP: position imu: true RA axis about " << rT << ", Dec axis " << dT << " deg (+-" << sigma
-			<< ") - stepping the RA axis " << dir * far << " deg more, safe from there" << sendLog;
+		logStream (MESSAGE_INFO) << "GeminiUDP: position imu: stepping the RA axis " << dir * far << " deg more - safe for all "
+			<< plausible.size () << " possible position(s)" << sendLog;
 		if (!imuProbeSendMove (counterEnd, st.decAxisTicks))
 			return true;	// aborted, and said why
 		setImuProbeState (IMUPROBE_STEPPING_FAR);
