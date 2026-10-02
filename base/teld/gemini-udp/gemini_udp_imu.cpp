@@ -581,6 +581,12 @@ class GeminiUDP:public Telescope
 		void raiseImuAlarm (const std::string &detail);
 		std::string imuSummary ();
 
+		// after a safety incident has parked and locked the mount: let the
+		// IMU decide instead of waiting for a human - see startImuAutoVerify()
+		rts2core::ValueBool *imuAutoVerifyValue;
+		std::vector<double> imuAutoVerifyAt;
+		void startImuAutoVerify ();
+
 		// ---- position imu: where the axes are, from gravity alone ----
 		// See beginImuProbe() for the scheme. Owns the axes while running,
 		// like a re-zero does.
@@ -872,6 +878,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuActionValue->addSelVal ("LOST");
 	imuActionValue->addSelVal ("REZERO");
 	imuActionValue->setValueInteger (IMU_ACTION_REZERO);
+	createValue (imuAutoVerifyValue, "imu_auto_verify", "after a safety incident has parked and locked the mount, run position imu rezero on its own: counters fine - lock released, ASSUMED; off - re-zeroed; probe cannot tell - stays locked (at most 3 per 6 h)", false, RTS2_VALUE_WRITABLE);
+	imuAutoVerifyValue->setValueBool (true);
 	createValue (imuMaxErrorValue, "imu_max_error", "[deg] IMU vs counters disagreement that counts", false, RTS2_VALUE_WRITABLE);
 	imuMaxErrorValue->setValueDouble (2.0);
 	createValue (imuConfirmValue, "imu_confirm", "consecutive rest checks that must disagree before imu_action is taken", false, RTS2_VALUE_WRITABLE);
@@ -2818,10 +2826,11 @@ void GeminiUDP::triggerIncident (const char *condition, const std::string &detai
 }
 
 // Drives the stop -> park -> lock sequence. Runs from idle(), one step per
-// tick, so nothing here may block. It ends locked, always: what happens next
-// is a human's call ("position ok" releases it), and when the incident casts
-// doubt on the axis counters the position is LOST as well, which only a
-// human's word or a re-zero from the sky lifts.
+// tick, so nothing here may block. It ends locked, always, and when the
+// incident casts doubt on the axis counters the position is LOST as well.
+// In the IMU variant the IMU is then asked (startImuAutoVerify()); without it,
+// or when it cannot tell, what happens next is a human's call ("position ok"
+// releases it).
 void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 {
 	constexpr double STOP_SETTLE_SEC = 2.0;
@@ -2839,6 +2848,7 @@ void GeminiUDP::runSafetyRecovery (const GeminiStatus &st)
 			setPositionTrust (TRUST_LOST, std::string ("safety incident (") + how + "): " + safetyReason);
 		logStream (MESSAGE_CRITICAL) << "GeminiUDP: SAFETY - mount held locked (" << how << "). Look at " << incidentLogPath
 			<< ", then \"position ok\" if the position is fine, or \"position cwd\" if it is not." << sendLog;
+		startImuAutoVerify ();
 	};
 
 	switch (safetyState)
@@ -3961,6 +3971,40 @@ void GeminiUDP::raiseImuAlarm (const std::string &detail)
 	}
 	else
 		logStream (MESSAGE_INFO) << "GeminiUDP: IMU (imu_action NONE): " << detail << sendLog;
+}
+
+// A safety incident always ends parked and locked, mostly with the position
+// LOST. Most incidents on SBT are a goto that stalls in a flip, the axes
+// stopping short with their counters intact - "the mount is properly parked,
+// nothing slipped" (2026-10-02, 21:52, and the night stood idle until a
+// human said "position ok"). But a stall can also slip an axis (14:25 the
+// same day: 36 deg in Dec), and only gravity tells the two apart. So the
+// driver asks it, through the same command a human would use: position imu
+// rezero releases the lock when the counters agree, re-zeroes when they do
+// not, and leaves everything locked when it cannot tell. Three times in six
+// hours at most - beyond that something is persistently wrong and wants a
+// human.
+void GeminiUDP::startImuAutoVerify ()
+{
+	if (imu == nullptr || !imuAutoVerifyValue->getValueBool ())
+		return;
+	double now = getNow ();
+	imuAutoVerifyAt.erase (std::remove_if (imuAutoVerifyAt.begin (), imuAutoVerifyAt.end (), [now] (double t) { return now - t > 6 * 3600.0; }), imuAutoVerifyAt.end ());
+	if (imuAutoVerifyAt.size () >= 3)
+	{
+		logStream (MESSAGE_CRITICAL) << "GeminiUDP: IMU: not checking the position on its own - already " << imuAutoVerifyAt.size ()
+			<< " automatic checks in 6 h; the mount stays locked for a human" << sendLog;
+		return;
+	}
+	std::string err;
+	if (beginImuProbe (true, err))
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: IMU: cannot check the position on its own after the incident: " << err << " - the mount stays locked" << sendLog;
+		return;
+	}
+	imuAutoVerifyAt.push_back (now);
+	logStream (MESSAGE_WARNING) << "GeminiUDP: IMU: checking the position on its own after the incident (position imu rezero, " << imuAutoVerifyAt.size () << " of 3 in 6 h)" << sendLog;
+	appendIncidentLine ("IMU auto-verify started after the incident");
 }
 
 void GeminiUDP::publishImuRaw (const ImuStatus &is)

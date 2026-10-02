@@ -500,6 +500,12 @@ to 1.5 µT with 0.4 µT noise. `position imu` lets it vote between the positions
 mirror pair, or the two ends of the valley near CWD - only on a clear margin; the position itself stays
 gravity's. `imu_mag_error` shows it at every rest check; it does not raise alarms (yet).
 
+**After a safety incident** (`imu_auto_verify`, default on): once the incident has parked and locked the
+mount, the driver runs `position imu rezero` itself - counters fine: lock released, ASSUMED, observing
+goes on; counters off: re-zeroed; probe inconclusive: stays locked for a human. At most 3 times in 6 h.
+On 2026-10-02 a flip that stalled 3° short in Dec left the mount locked for the rest of the night
+although nothing had slipped.
+
 **Stops during a probe.** While `position imu` runs, stops the framework makes on its own (every refused
 move or correction while the position is LOST makes one) are ignored; a client's `stop` or
 `position abort` ends it.
