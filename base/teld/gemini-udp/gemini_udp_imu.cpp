@@ -2386,7 +2386,12 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 			if (!newSample)
 				return;
 			rezeroLastSample = st.axisTimestamp;
-			double tolerance = std::max (4.0, 5.0 / 3600.0 * st.geometry.ticksPerDeg ());
+			// 60", not 5": on SBT a :MP# slew of 32 deg stopped 152 ticks
+			// (14") short of its target and stayed there, and the re-zero
+			// waited out its 300 s and lost the position. SETTLING still
+			// waits for the axes to be still before the cold start and logs
+			// the residual, which becomes the new zero error.
+			double tolerance = std::max (4.0, 60.0 / 3600.0 * st.geometry.ticksPerDeg ());
 			bool there = fabs ((double) st.raAxisTicks - rezeroTargetRa) <= tolerance && fabs ((double) st.decAxisTicks - rezeroTargetDec) <= tolerance
 				&& st.moveRate != 'S' && st.moveRate != 'C';
 			rezeroStableCount = there ? rezeroStableCount + 1 : 0;
