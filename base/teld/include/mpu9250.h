@@ -169,6 +169,9 @@ class ImuMountModel
 		/** unit "up" vector predicted at these axis angles, sensor frame, without bias/scale */
 		void predictUp (double raAxis, double decAxis, double out[3]) const;
 
+		/** altitude of the tube's optical axis at these axis angles, deg (the mount geometry only, no sensor) */
+		double tubeAltitude (double raAxis, double decAxis) const;
+
 		/** the measured accelerometer vector with bias and scale removed, normalised */
 		void correctAcc (const double acc[3], double out[3]) const;
 

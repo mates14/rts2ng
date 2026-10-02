@@ -147,6 +147,11 @@ int main ()
 	printf ("reversed RA counter: %s\n", mr.describe ().c_str ());
 	assert (mr.rms () < 0.1);
 
+	// the tube at CWD points at the pole: altitude = latitude, whatever the RA axis
+	assert (fabs (m.tubeAltitude (180, 180) - lat) < 0.01 && fabs (m.tubeAltitude (150, 180) - lat) < 0.01);
+	// W side, Dec axis = Dec + 90, RA axis = 90 - HA: HA 0, Dec 0 culminates at 90 - lat
+	assert (fabs (m.tubeAltitude (90, 90) - (90 - lat)) < 0.01);
+
 	// raw line parsing
 	ImuSample smp;
 	assert (parseMpu9250Raw ("-180 132 16441 -160 70 20 2134 83 -201 -278 0", smp));

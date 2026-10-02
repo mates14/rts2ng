@@ -530,6 +530,14 @@ void ImuMountModel::predictUp (double raAxis, double decAxis, double out[3]) con
 	upFromAxes (M, raSign, decSign, raAxis, decAxis, out);
 }
 
+double ImuMountModel::tubeAltitude (double raAxis, double decAxis) const
+{
+	// up in tube coordinates; the optical axis is the tube's z
+	double I[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1}, up[3];
+	upFromAxes (I, raSign, decSign, raAxis, decAxis, up);
+	return asin (std::max (-1.0, std::min (1.0, up[2]))) / DEG;
+}
+
 void ImuMountModel::correctAcc (const double acc[3], double out[3]) const
 {
 	for (int i = 0; i < 3; i++)

@@ -571,7 +571,7 @@ class GeminiUDP:public Telescope
 		// ---- position imu: where the axes are, from gravity alone ----
 		// See beginImuProbe() for the scheme. Owns the axes while running,
 		// like a re-zero does.
-		enum ImuProbeState { IMUPROBE_IDLE, IMUPROBE_STOPPING, IMUPROBE_FIRST, IMUPROBE_STEPPING, IMUPROBE_SECOND, IMUPROBE_RETURNING };
+		enum ImuProbeState { IMUPROBE_IDLE, IMUPROBE_STOPPING, IMUPROBE_FIRST, IMUPROBE_STEPPING, IMUPROBE_SECOND, IMUPROBE_STEPPING_FAR, IMUPROBE_THIRD, IMUPROBE_RETURNING };
 		ImuProbeState imuProbeState;
 		double imuProbeSince;
 		bool imuProbeRezero;		// "position imu rezero": act on the result
@@ -586,6 +586,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueDouble *imuProbeStepValue;
 		rts2core::ValueDouble *imuProbeStepFarValue;
 		rts2core::ValueDouble *imuProbeMaxSigmaValue;
+		rts2core::ValueDouble *imuProbeMinAltValue;
 		rts2core::ValueString *imuProbeResultValue;
 
 		bool imuProbeBusy () const { return imuProbeState != IMUPROBE_IDLE; }
@@ -596,7 +597,8 @@ class GeminiUDP:public Telescope
 		bool imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err);
 		bool imuProbeSendMove (int32_t ra, int32_t dec);
 		bool imuProbeArrived (const GeminiStatus &st);
-		void finishImuProbe (const GeminiStatus &st, const double acc2[3]);
+		void evaluateImuProbe (const GeminiStatus &st, const double acc[3]);
+		bool startImuProbeFarStep (const GeminiStatus &st, const ImuMountModel::AxisSolution &best, double sigma, std::string &why);
 };
 
 }
@@ -818,8 +820,10 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuProbeStateValue->setValueCharArr ("IDLE");
 	createValue (imuProbeStepValue, "imu_probe_step", "[deg] RA axis step position imu takes between its two gravity readings", false, RTS2_VALUE_WRITABLE);
 	imuProbeStepValue->setValueDouble (3.0);
-	createValue (imuProbeStepFarValue, "imu_probe_step_far", "[deg] the RA axis step instead, when the first reading puts the RA axis within 15 deg of CWD/its opposite - there a small step cannot tell the axes apart", false, RTS2_VALUE_WRITABLE);
-	imuProbeStepFarValue->setValueDouble (30.0);
+	createValue (imuProbeStepFarValue, "imu_probe_step_far", "[deg] second, larger RA axis step, taken only when the small one left the position known roughly but not to imu_probe_max_sigma (near CWD), and only if it is safe from that rough position", false, RTS2_VALUE_WRITABLE);
+	imuProbeStepFarValue->setValueDouble (25.0);
+	createValue (imuProbeMinAltValue, "imu_probe_min_alt", "[deg] the larger step must keep the tube at least this high all the way, judged from the rough position", false, RTS2_VALUE_WRITABLE);
+	imuProbeMinAltValue->setValueDouble (10.0);
 	createValue (imuProbeMaxSigmaValue, "imu_probe_max_sigma", "[deg] position imu only gives an answer this certain (calibration rms times the conditioning of the two readings)", false, RTS2_VALUE_WRITABLE);
 	imuProbeMaxSigmaValue->setValueDouble (0.25);
 	createValue (imuProbeResultValue, "imu_probe_result", "what the last position imu found", false);
@@ -4074,7 +4078,7 @@ int GeminiUDP::beginImuProbe (bool rezero, std::string &err)
 
 void GeminiUDP::setImuProbeState (ImuProbeState newState)
 {
-	static const char *names[] = { "IDLE", "STOPPING", "FIRST", "STEPPING", "SECOND", "RETURNING" };
+	static const char *names[] = { "IDLE", "STOPPING", "FIRST", "STEPPING", "SECOND", "STEPPING_FAR", "THIRD", "RETURNING" };
 	imuProbeState = newState;
 	imuProbeSince = getNow ();
 	imuProbeStableCount = 0;
@@ -4085,7 +4089,7 @@ void GeminiUDP::setImuProbeState (ImuProbeState newState)
 
 void GeminiUDP::abortImuProbe (const std::string &why)
 {
-	if (caring && (imuProbeState == IMUPROBE_STEPPING || imuProbeState == IMUPROBE_RETURNING))
+	if (caring && (imuProbeState == IMUPROBE_STEPPING || imuProbeState == IMUPROBE_STEPPING_FAR || imuProbeState == IMUPROBE_RETURNING))
 		caring->requestAbort ();
 	setImuProbeState (IMUPROBE_IDLE);
 	imuProbeResultValue->setValueCharArr (("aborted: " + why).c_str ());
@@ -4171,6 +4175,7 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 
 		case IMUPROBE_FIRST:
 		case IMUPROBE_SECOND:
+		case IMUPROBE_THIRD:
 		{
 			if (elapsed > 90.0)
 			{
@@ -4203,9 +4208,9 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 				return;
 			}
 
-			if (imuProbeState == IMUPROBE_SECOND)
+			if (imuProbeState != IMUPROBE_FIRST)
 			{
-				finishImuProbe (st, acc);
+				evaluateImuProbe (st, acc);
 				return;
 			}
 
@@ -4215,29 +4220,18 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 			imuProbeRa1 = st.raAxisTicks / st.geometry.ticksPerDeg ();
 			imuProbeDec1 = st.decAxisTicks / st.geometry.decTicksPerDeg ();
 
-			// On the merge line (RA axis at CWD or opposite: the tube in the
-			// meridian plane, through the pole) RA and Dec turn gravity the
-			// same way and a small step leaves a valley of fits - step far.
-			// Judged from where gravity says the axis is, the counters may
-			// be wrong.
-			bool nearLine = true;
-			auto sols = imuModel.solveAll (acc, 3 * imuMaxErrorValue->getValueDouble ());
-			for (const auto &sol : sols)
-				if (fabs (sin ((sol.raAxis - 180.0) * M_PI / 180.0)) > sin (15.0 * M_PI / 180.0))
-					nearLine = false;
-			double stepDeg = nearLine ? imuProbeStepFarValue->getValueDouble () : imuProbeStepValue->getValueDouble ();
-
-			// towards whichever side of the counters' window has more room
+			// a small step first - nothing is known about the true position
+			// yet; see evaluateImuProbe() for when a larger one follows.
+			// Towards whichever side of the counters' window has more room.
 			const GeminiAxisGeometry &g = st.geometry;
-			int32_t step = (int32_t) lround (stepDeg * g.ticksPerDeg ());
+			int32_t step = (int32_t) lround (imuProbeStepValue->getValueDouble () * g.ticksPerDeg ());
 			int32_t target = st.raAxisTicks - g.westLimit > g.eastLimit - st.raAxisTicks ? st.raAxisTicks - step : st.raAxisTicks + step;
 			if (!(g.westLimit < target && target < g.eastLimit))
 			{
 				abortImuProbe ("no room for the RA step inside the safety limits (by the counters)");
 				return;
 			}
-			logStream (MESSAGE_INFO) << "GeminiUDP: position imu: stepping the RA axis by " << (target - st.raAxisTicks) / g.ticksPerDeg () << " deg"
-				<< (nearLine ? " (near the merge line, the far step)" : "") << sendLog;
+			logStream (MESSAGE_INFO) << "GeminiUDP: position imu: stepping the RA axis by " << (target - st.raAxisTicks) / g.ticksPerDeg () << " deg" << sendLog;
 			if (!imuProbeSendMove (target, st.decAxisTicks))
 				return;
 			setImuProbeState (IMUPROBE_STEPPING);
@@ -4245,6 +4239,7 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 		}
 
 		case IMUPROBE_STEPPING:
+		case IMUPROBE_STEPPING_FAR:
 		case IMUPROBE_RETURNING:
 			if (elapsed > 120.0)
 			{
@@ -4255,6 +4250,8 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 				return;
 			if (imuProbeState == IMUPROBE_STEPPING)
 				setImuProbeState (IMUPROBE_SECOND);
+			else if (imuProbeState == IMUPROBE_STEPPING_FAR)
+				setImuProbeState (IMUPROBE_THIRD);
 			else
 			{
 				setImuProbeState (IMUPROBE_IDLE);
@@ -4267,7 +4264,14 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 	}
 }
 
-void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
+// Reading two (after the small step) or three (after the larger one), fitted
+// together with reading one. Near the merge line - RA axis at CWD or its
+// opposite, the tube in the meridian plane through the pole, CWD included -
+// RA and Dec turn gravity the same way and the small step leaves the position
+// known only to a degree or two; a step of a few degrees cannot do better
+// there. A larger step can, but it is only taken from a position known
+// roughly, never blind: see startImuProbeFarStep().
+void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 {
 	double ra2 = st.raAxisTicks / st.geometry.ticksPerDeg ();
 	double dec2 = st.decAxisTicks / st.geometry.decTicksPerDeg ();
@@ -4288,12 +4292,25 @@ void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
 	bool unique = cands.size () < 2 || cands[1].errDeg >= std::max (3 * cands[0].errDeg, 0.5);
 	double sigma = cands.empty () ? NAN : cands[0].condDeg * noise;
 	bool certain = sigma <= imuProbeMaxSigmaValue->getValueDouble ();
-	char buf[300];
+	char buf[400];
 	if (!fits || !unique || !certain)
 	{
-		snprintf (buf, sizeof (buf), "inconclusive: %s", cands.empty () ? "gravity fits no axis position (calibration or sensor problem?)"
-			: !fits ? "the best fit does not explain both readings" : !unique ? "two axis positions explain both readings"
-			: "the readings leave the position uncertain (imu_probe_max_sigma) - larger imu_probe_step?");
+		std::string farWhy;
+		if (imuProbeState == IMUPROBE_SECOND && fits && unique && sigma <= 3.0)
+		{
+			logStream (MESSAGE_INFO) << "GeminiUDP: position imu: known only to +-" << sigma << " deg after the small step" << detail << sendLog;
+			if (startImuProbeFarStep (st, cands[0], sigma, farWhy))
+				return;
+		}
+		snprintf (buf, sizeof (buf), "inconclusive: %s%s%s", cands.empty () ? "gravity fits no axis position (calibration or sensor problem?)"
+			: !fits ? "the best fit does not explain the readings" : !unique ? "two axis positions explain the readings"
+			: "the readings leave the position uncertain (imu_probe_max_sigma)", farWhy.empty () ? "" : " - ", farWhy.c_str ());
+		if (fits && unique && !cands.empty ())
+		{
+			char coarse[120];
+			snprintf (coarse, sizeof (coarse), "; roughly RA axis %+.1f, Dec axis %+.1f deg +-%.1f off", wrap (cands[0].raAxis - imuProbeRa1), wrap (cands[0].decAxis - imuProbeDec1), sigma);
+			strncat (buf, coarse, sizeof (buf) - strlen (buf) - 1);
+		}
 		imuProbeResultValue->setValueCharArr (buf);
 		sendValueAll (imuProbeResultValue);
 		logStream (MESSAGE_ERROR) << "GeminiUDP: position imu " << buf << detail << sendLog;
@@ -4345,6 +4362,58 @@ void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
 	if (!imuProbeSendMove (imuProbeRa1Ticks, imuProbeDec1Ticks))
 		return;
 	setImuProbeState (IMUPROBE_RETURNING);
+}
+
+// The larger step, from where the small one says the axes truly are (to
+// +-sigma): away from the merge line, inside the configured safety limits
+// measured from TRUE CWD with a margin for that uncertainty (and inside the
+// counters' window, or the mount would refuse it), and with the tube at least
+// imu_probe_min_alt high all the way - an RA axis turn sweeps the tube along a
+// circle of constant declination, so the path is checked, not just its end.
+bool GeminiUDP::startImuProbeFarStep (const GeminiStatus &st, const ImuMountModel::AxisSolution &best, double sigma, std::string &why)
+{
+	auto wrap = [] (double a) { return ln_range_degrees (a + 180.0) - 180.0; };
+	const GeminiAxisGeometry &g = st.geometry;
+	double k = g.ticksPerDeg ();
+	double raNow = st.raAxisTicks / k, decNow = st.decAxisTicks / g.decTicksPerDeg ();
+	double raErr = wrap (best.raAxis - imuProbeRa1), decErr = wrap (best.decAxis - imuProbeDec1);
+	double rT = raNow + raErr, dT = decNow + decErr;	// true axes now
+	double far = imuProbeStepFarValue->getValueDouble ();
+	double margin = 3 * sigma + 2.0;
+
+	// away from the line first: the line is RA axis 180 (CWD) or 0
+	double fromCwd = wrap (rT - 180.0);
+	int pref = fabs (fromCwd) <= 90 ? (fromCwd >= 0 ? 1 : -1) : (wrap (rT) >= 0 ? 1 : -1);
+	std::string tried;
+	for (int dir : { pref, -pref })
+	{
+		double rEnd = rT + dir * far;
+		int32_t counterEnd = st.raAxisTicks + (int32_t) lround (dir * far * k);
+		const char *bad = nullptr;
+		if (!(g.westLimit / k + margin < rEnd && rEnd < g.eastLimit / k - margin))
+			bad = "outside the safety limits from true CWD";
+		else if (!(g.westLimit < counterEnd && counterEnd < g.eastLimit))
+			bad = "outside the counters' window";
+		else if (fabs (sin ((rEnd - 180.0) * M_PI / 180.0)) < sin (10.0 * M_PI / 180.0))
+			bad = "still on the merge line";
+		else
+			for (double t = 0; t <= far + 0.01 && !bad; t += 1.0)
+				if (imuModel.tubeAltitude (rT + dir * t, dT) < imuProbeMinAltValue->getValueDouble ())
+					bad = "the tube would go below imu_probe_min_alt";
+		if (bad)
+		{
+			tried += std::string (tried.empty () ? "" : ", ") + (dir > 0 ? "+" : "-") + std::to_string ((int) far) + " deg " + bad;
+			continue;
+		}
+		logStream (MESSAGE_INFO) << "GeminiUDP: position imu: true RA axis about " << rT << ", Dec axis " << dT << " deg (+-" << sigma
+			<< ") - stepping the RA axis " << dir * far << " deg more, safe from there" << sendLog;
+		if (!imuProbeSendMove (counterEnd, st.decAxisTicks))
+			return true;	// aborted, and said why
+		setImuProbeState (IMUPROBE_STEPPING_FAR);
+		return true;
+	}
+	why = "no safe larger step (" + tried + ")";
+	return false;
 }
 
 int GeminiUDP::idle ()
