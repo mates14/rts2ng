@@ -2386,12 +2386,14 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 			if (!newSample)
 				return;
 			rezeroLastSample = st.axisTimestamp;
-			// 60", not 5": on SBT a :MP# slew of 32 deg stopped 152 ticks
-			// (14") short of its target and stayed there, and the re-zero
-			// waited out its 300 s and lost the position. SETTLING still
-			// waits for the axes to be still before the cold start and logs
-			// the residual, which becomes the new zero error.
-			double tolerance = std::max (4.0, 60.0 / 3600.0 * st.geometry.ticksPerDeg ());
+			// Not 5": on SBT :MP# slews of ~30 deg stopped 152 and 1502
+			// ticks (14", 141") short on the RA axis and stayed there, and
+			// the re-zero waited out its 300 s and lost the position. What
+			// matters is the error that is left: a quarter of rezero_min is
+			// well inside what a re-zero is for. SETTLING still waits for
+			// still axes before the cold start and logs the residual, which
+			// becomes the new zero error.
+			double tolerance = std::max (60.0 / 3600.0, rezeroMinValue->getValueDouble () / 4) * st.geometry.ticksPerDeg ();
 			bool there = fabs ((double) st.raAxisTicks - rezeroTargetRa) <= tolerance && fabs ((double) st.decAxisTicks - rezeroTargetDec) <= tolerance
 				&& st.moveRate != 'S' && st.moveRate != 'C';
 			rezeroStableCount = there ? rezeroStableCount + 1 : 0;
@@ -3012,7 +3014,11 @@ bool GeminiUDP::altitudeSafe (double raDeg, double decDeg, double marginDeg)
 // the framework's target to re-send after the CWD park.
 bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
 {
-	if (caring == nullptr || positionLost () || rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || imuProbeBusy ())
+	// an open safety incident owns the mount: on SBT a stalled flip raised
+	// both, and the recovery's retry goto moved the mount the incident had
+	// just parked and locked
+	if (caring == nullptr || positionLost () || rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || imuProbeBusy ()
+		|| safetyState != SAFETY_OK)
 		return false;
 	if (moveRetries >= moveRetriesValue->getValueInteger ())
 	{
@@ -3056,6 +3062,15 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 		moveRecoveryValue->setValueCharArr ("IDLE");
 		sendValueAll (moveRecoveryValue);
 	};
+
+	if (recoverState != RECOVER_IDLE && safetyState != SAFETY_OK)
+	{
+		logStream (MESSAGE_WARNING) << "GeminiUDP: move recovery stood down - a safety incident has the mount" << sendLog;
+		recoverState = RECOVER_IDLE;
+		moveRecoveryValue->setValueCharArr ("IDLE");
+		sendValueAll (moveRecoveryValue);
+		return;
+	}
 
 	switch (recoverState)
 	{
