@@ -2480,7 +2480,13 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 				setSafetyState (SAFETY_OK);
 			}
 			appendIncidentLine ("re-zero finished: " + rezeroSummary);
-			setPositionTrust (TRUST_CONFIRMED, "re-zeroed from the sky: " + rezeroSummary);
+			// only the sky confirms: an IMU re-zero is ASSUMED - and with
+			// imu_learn at CONFIRMED the IMU must not learn from a position
+			// only it vouched for
+			if (rezeroSummary.compare (0, 4, "IMU:") == 0)
+				setPositionTrust (TRUST_ASSUMED, "re-zeroed from the IMU: " + rezeroSummary.substr (5));
+			else
+				setPositionTrust (TRUST_CONFIRMED, "re-zeroed from the sky: " + rezeroSummary);
 			clearSkyEvidence ("re-zero finished");
 			lastRezeroAt = getNow ();
 			if (rezeroThenMove)
