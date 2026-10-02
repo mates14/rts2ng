@@ -2640,7 +2640,9 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// that, and then escalating when the mount predictably will not stop, turned
 	// a plain park failure into a locked mount with its position LOST
 	// (2026-09-15, new firmware). A failed park is reported as a failed park.
-	if (moving == TEL_PARKED && st.parkStatus == '1' && !st.parkFailed
+	// position imu steps the axes of a parked mount on purpose (:Q# does not
+	// clear the firmware's park flag) and puts them back where they were
+	if (moving == TEL_PARKED && st.parkStatus == '1' && !st.parkFailed && !imuProbeBusy ()
 		&& !isTracking () && (st.moveRate == 'T' || axisReallyMoving))
 		parkedTrackingCount++;
 	else
@@ -4315,6 +4317,13 @@ void GeminiUDP::finishImuProbe (const GeminiStatus &st, const double acc2[3])
 	{
 		if (std::max (fabs (raErr), fabs (decErr)) < rezeroMinValue->getValueDouble ())
 		{
+			// the operator asked, and has the evidence: as "position ok"
+			if (safetyState == SAFETY_LOCKED)
+			{
+				logStream (MESSAGE_WARNING) << "GeminiUDP: safety lock released by \"position imu rezero\" - the counters agree with gravity" << sendLog;
+				unBlockMove ();
+				setSafetyState (SAFETY_OK);
+			}
 			if (positionTrust != TRUST_CONFIRMED)
 				setPositionTrust (TRUST_ASSUMED, std::string ("IMU: gravity agrees with the counters (") + buf + ")");
 		}
