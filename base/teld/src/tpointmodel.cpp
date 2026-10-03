@@ -18,6 +18,7 @@
  */
 
 #include "tpointmodel.h"
+#include <cstring>
 #include "libnova_cpp.h"
 
 #include <fstream>
@@ -122,13 +123,18 @@ std::istream & TPointModel::load (std::istream & is)
 	double corr;
 	double sigma;
 	TPointModelTerm *term;
-	// first line
-	is.getline (caption, 80);
-	if (is.fail ())
+	// first line - the caption. TPOINT writes at most 80 characters, but a
+	// hand-written or converted file may not: getline (caption, 80) set the
+	// failbit on a 150 character caption and refused the whole model (SBT,
+	// 2026-10-03). Read the whole line, keep the first 80 characters.
+	std::string captionLine;
+	if (!std::getline (is, captionLine))
 	{
 		logStream (MESSAGE_ERROR) << "Cannot read first line of the model file" << sendLog;
 		return is;
 	}
+	strncpy (caption, captionLine.c_str (), 80);
+	caption[80] = '\0';
 	lineNo++;
 	// second line - method, number, refA, refB
 	is >> method >> num >> rms >> refA >> refB;
