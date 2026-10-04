@@ -1,0 +1,13 @@
+#!/bin/sh
+# prerm for fliusb-dkms: drop the module from DKMS before its source goes.
+set -e
+
+case "$1" in
+remove|upgrade|deconfigure)
+	dkms remove -m fliusb -v 1.5 --all >/dev/null 2>&1 || true
+	;;
+esac
+
+#DEBHELPER#
+
+exit 0

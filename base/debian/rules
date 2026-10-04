@@ -7,9 +7,9 @@
 # directly, a standard technique for upstream trees without polished
 # install() support.
 #
-# BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR point at the proprietary vendor
-# SDKs as they exist on this build host. Neither has a default here - both
-# come in from the environment (`?=` below only fills them in if unset),
+# BASE_GXCCD_SDK_DIR points at the proprietary vendor SDK as it exists on
+# this build host. It has no default here - it comes in from the
+# environment (`?=` below only fills them in if unset),
 # exported by buildme.sh from its per-machine site file
 # (~/.config/rts2ng/site.cmake), so the plain-cmake build and this
 # packaging build can never disagree on the path. Export them yourself
@@ -17,9 +17,13 @@
 #
 # A given path turns its SDK option to ON, so a path that does not hold a
 # usable SDK fails the configure instead of producing an empty
-# rts2-drivers-fli/rts2-drivers-gxccd package. No path - OFF, and the
-# driver package comes out empty on purpose. Andor and paracl are always
-# OFF: their drivers are not packaged (see RTS2_BASE_BINARIES below).
+# rts2-drivers-gxccd package. No path - OFF, and the driver package comes
+# out empty on purpose. Andor and paracl are always OFF: their drivers are
+# not packaged (see RTS2_BASE_BINARIES below).
+#
+# FLI is always ON: libfli is bundled (external/fli), so rts2-drivers-fli
+# is built on every host. BASE_FLI_SDK_DIR, if exported, overrides the
+# bundled copy, same as in the plain-cmake build.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
@@ -37,7 +41,7 @@ override_dh_auto_configure:
 		-DBASE_GXCCD_SDK_DIR=$(BASE_GXCCD_SDK_DIR) \
 		-DBASE_GXCCD=$(if $(BASE_GXCCD_SDK_DIR),ON,OFF) \
 		-DBASE_FLI_SDK_DIR=$(BASE_FLI_SDK_DIR) \
-		-DBASE_FLI=$(if $(BASE_FLI_SDK_DIR),ON,OFF) \
+		-DBASE_FLI=ON \
 		-DBASE_ANDOR=OFF \
 		-DBASE_PARACL=OFF
 
@@ -82,17 +86,17 @@ RTS2_BASE_BINARIES = \
 	dome/bart/rts2-dome-bart \
 	dome/zelio/rts2-dome-zelio
 
-# rts2-drivers-fli's binaries - only exist in $(BUILDDIR) if
-# BASE_FLI_SDK_DIR was given (a wrong one fails the configure, see above);
-# the install step below skips any that are missing rather than failing
-# the whole build, so rts2-base stays buildable on a host without libfli
-# (rts2-drivers-fli then simply comes out empty on that host).
+# rts2-drivers-fli's binaries - always built (bundled libfli, see above).
 RTS2_FLI_BINARIES = \
 	camd/fli/rts2-camd-fli \
 	focusd/fli/rts2-focusd-fli \
 	filterd/fli/rts2-filterd-fli
 
-# Same reasoning as RTS2_FLI_BINARIES, for rts2-drivers-gxccd.
+# rts2-drivers-gxccd's binaries - only exist in $(BUILDDIR) if
+# BASE_GXCCD_SDK_DIR was given (a wrong one fails the configure, see
+# above); the install step below skips any that are missing rather than
+# failing the whole build, so rts2-base stays buildable on a host without
+# libgxccd (rts2-drivers-gxccd then simply comes out empty on that host).
 RTS2_GXCCD_BINARIES = \
 	camd/gxccd/rts2-camd-gxccd
 
@@ -116,10 +120,15 @@ override_dh_auto_install:
 	install -m 0644 packaging/rts2-logrotate.conf debian/rts2-base/etc/logrotate.d/rts2-base
 	install -d debian/rts2-drivers-fli/usr/bin
 	for b in $(RTS2_FLI_BINARIES); do \
-		if [ -f $(BUILDDIR)/$$b ]; then \
-			install -m 0755 $(BUILDDIR)/$$b debian/rts2-drivers-fli/usr/bin/; \
-		fi; \
+		install -m 0755 $(BUILDDIR)/$$b debian/rts2-drivers-fli/usr/bin/; \
 	done
+	# fliusb-dkms: the module source where DKMS expects it, built on the
+	# target by fliusb-dkms.postinst (version 1.5 there and in dkms.conf)
+	install -d debian/fliusb-dkms/usr/src/fliusb-1.5
+	install -m 0644 external/fli/dkms.conf external/fli/fliusb/Makefile \
+		external/fli/fliusb/fliusb.c external/fli/fliusb/fliusb.h \
+		external/fli/fliusb/fliusb_ioctl.h external/fli/fliusb/README \
+		debian/fliusb-dkms/usr/src/fliusb-1.5/
 	install -d debian/rts2-drivers-gxccd/usr/bin
 	for b in $(RTS2_GXCCD_BINARIES); do \
 		if [ -f $(BUILDDIR)/$$b ]; then \

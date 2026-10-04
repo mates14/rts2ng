@@ -53,25 +53,34 @@ enable_testing()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/BaseOptions.cmake)
 
-# FLI (Finger Lakes Instrumentation) is a proprietary vendor SDK shared by
-# camd/fli, focusd/fli and filterd/fli - detected once here rather than
-# duplicating the same find_path/find_library in each driver family.
-# BASE_FLI_SDK_DIR points at a built libfli tree (libfli.h and libfli.a,
-# both at the top level - that's how libfli's own Makefile lays it out, no
-# separate include/ or lib/ subdirectory). buildme.sh proposes one; the
-# families test BASE_HAVE_FLI rather than the cached find results, so
-# BASE_FLI=OFF really turns the drivers off.
-base_sdk_option(FLI BASE_FLI_SDK_DIR "FLI drivers (camd, focusd, filterd)" FLI_INCLUDE_DIR FLI_LIBRARY)
+# FLI (Finger Lakes Instrumentation) libfli is shared by camd/fli,
+# focusd/fli and filterd/fli - set up once here rather than in each driver
+# family. Its source is bundled in external/fli (BSD-style licence, FLI
+# SDK 1.104 + RTS2 patches; see external/fli/README.md), so the drivers
+# build by default. BASE_FLI_SDK_DIR still overrides it with a built
+# libfli tree elsewhere (libfli.h and libfli.a, both at the top level -
+# that's how libfli's own Makefile lays it out). The families test
+# BASE_HAVE_FLI rather than the cached find results, so BASE_FLI=OFF
+# really turns the drivers off.
+base_sdk_option(FLI BASE_FLI_SDK_DIR "FLI drivers (camd, focusd, filterd); empty = bundled external/fli" FLI_INCLUDE_DIR FLI_LIBRARY)
 set(BASE_HAVE_FLI FALSE)
-base_sdk_wanted(FLI BASE_FLI_SDK_DIR _want)
-if(_want)
-	find_path(FLI_INCLUDE_DIR NAMES libfli.h PATHS "${BASE_FLI_SDK_DIR}" NO_DEFAULT_PATH)
-	find_library(FLI_LIBRARY NAMES fli PATHS "${BASE_FLI_SDK_DIR}" NO_DEFAULT_PATH)
-	if(FLI_INCLUDE_DIR AND FLI_LIBRARY)
-		set(BASE_HAVE_FLI TRUE)
+if(NOT BASE_FLI STREQUAL "OFF" AND "${BASE_FLI_SDK_DIR}" STREQUAL "")
+	add_subdirectory(external/fli)
+	set(FLI_INCLUDE_DIR "")
+	set(FLI_LIBRARY base_libfli)
+	set(BASE_HAVE_FLI TRUE)
+	message(STATUS "FLI: using bundled external/fli - building rts2-camd-fli, rts2-focusd-fli, rts2-filterd-fli")
+else()
+	base_sdk_wanted(FLI BASE_FLI_SDK_DIR _want)
+	if(_want)
+		find_path(FLI_INCLUDE_DIR NAMES libfli.h PATHS "${BASE_FLI_SDK_DIR}" NO_DEFAULT_PATH)
+		find_library(FLI_LIBRARY NAMES fli PATHS "${BASE_FLI_SDK_DIR}" NO_DEFAULT_PATH)
+		if(FLI_INCLUDE_DIR AND FLI_LIBRARY)
+			set(BASE_HAVE_FLI TRUE)
+		endif()
 	endif()
+	base_sdk_report(FLI BASE_FLI_SDK_DIR ${BASE_HAVE_FLI} "rts2-camd-fli, rts2-focusd-fli, rts2-filterd-fli" "libfli.h/libfli.a")
 endif()
-base_sdk_report(FLI BASE_FLI_SDK_DIR ${BASE_HAVE_FLI} "rts2-camd-fli, rts2-focusd-fli, rts2-filterd-fli" "libfli.h/libfli.a")
 
 # libmks3 (Software Bisque Paramount ME/MYT MKS3 servo controller protocol)
 # is Martin Jelinek's own C library (plain C source, not a prebuilt vendor

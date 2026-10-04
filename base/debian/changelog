@@ -43,6 +43,13 @@ rts2-base (0.1.0-5) UNRELEASED; urgency=medium
     than from a pid that can go stale and be recycled, refuses to kill a
     pid that is not the expected program, waits for a daemon to actually
     stop before restarting it, and grows --status.
+  * external/fli: libfli (FLI SDK 1.104 + RTS2 patches) and the fliusb
+    kernel module are bundled in the source. rts2-drivers-fli is built
+    on every host - its 0.1.0-5 build came out empty, the SDK path in
+    the build dirs pointing at a tree that no longer existed.
+  * New package fliusb-dkms: the fliusb kernel module, built by DKMS for
+    every installed kernel; fixed for kernels up to 7.0, scatter-gather
+    reads enabled again on current kernels (kbuild ignores EXTRA_CFLAGS).
 
  -- RTS2 Project <petr@rts2.org>  Mon, 24 Aug 2026 17:38:00 +0200
 

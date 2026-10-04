@@ -41,15 +41,13 @@ Requires libnova dev headers (found via `find_path`/`find_library` in
 `kernel/CMakeLists.txt`, not pkg-config - this system's libnova ships no
 `.pc` file).
 
-`rts2-camd-andor`/`rts2-camd-gxccd`/`rts2-camd-fli`/`rts2-focusd-fli`/
-`rts2-filterd-fli` are skipped by default (proprietary vendor SDKs). Add
-`-DBASE_ANDOR_SDK_DIR=/path/to/andor/sdk`,
+`rts2-camd-andor`/`rts2-camd-gxccd` are skipped by default (proprietary
+vendor SDKs). Add `-DBASE_ANDOR_SDK_DIR=/path/to/andor/sdk` and/or
 `-DBASE_GXCCD_SDK_DIR=/path/to/gxccd/sdk` (each a tree containing
-`include/` + `lib/`), and/or `-DBASE_FLI_SDK_DIR=/path/to/built/libfli`
-(a tree with `libfli.h` + `libfli.a` built at its top level - see "FLI"
-section for the two small patches libfli itself needed first) to the
-`cmake` invocation to build them - see the "Andor"/"GXCCD"/"FLI" sections
-below.
+`include/` + `lib/`) to the `cmake` invocation to build them - see the
+"Andor"/"GXCCD" sections below. The FLI drivers (`rts2-camd-fli`/
+`rts2-focusd-fli`/`rts2-filterd-fli`) build by default against the libfli
+bundled in `external/fli` - see the "FLI" section.
 
 ## Progress
 
@@ -904,7 +902,21 @@ adaptations. The `libfli-1.32` patches were left in place (harmless,
 possibly still useful for the "older cameras" archaeology the user was
 originally doing) but are no longer what base builds against.
 
-Gated behind `BASE_FLI_SDK_DIR` (now pointed at
+**Bundled since 2026-10-04** (`base/external/fli/`, see its README.md):
+libfli and the fliusb kernel module are imported from the RTS2 SVN
+(`fliusb` r12114 - FLI SDK 1.104 plus the RTS2 patches), with the fliusb
+that runs at FLORES (FLI module 1.5 + kernel fixes up to 7.0) on top.
+`external/fli/CMakeLists.txt` builds `base_libfli` from the same objects
+libfli's Makefile puts into `libfli.a`, and the three drivers link it
+whenever `BASE_FLI_SDK_DIR` is empty - buildme.sh no longer asks for it.
+`debian/rules` sets `BASE_FLI=ON`, so `rts2-drivers-fli` can no longer
+come out empty: `0.1.0-5` did, every build dir having cached a
+`BASE_FLI_SDK_DIR` (`~/fliusb/libfli`) that did not exist. The module is
+packaged as `fliusb-dkms` (Recommended by `rts2-drivers-fli`), rebuilt by
+DKMS for each installed kernel. What follows describes the setup before
+that; `BASE_FLI_SDK_DIR` still overrides the bundled copy.
+
+Gated behind `BASE_FLI_SDK_DIR` (then pointed at
 `/home/mates/src/fliusb/libfli`), detected once in the top-level
 `base/CMakeLists.txt` (shared by `focusd/fli`, `filterd/fli`, and
 `camd/fli` rather than duplicating the same `find_path`/`find_library`

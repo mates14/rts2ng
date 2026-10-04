@@ -90,8 +90,8 @@ if(_want)
 endif()
 base_sdk_report(GXCCD BASE_GXCCD_SDK_DIR ${_have_gxccd} "rts2-camd-gxccd" "include/gxccd.h/lib/libgxccd.a (and system libusb-1.0)")
 
-# FLI (Finger Lakes Instrumentation) camera driver. SDK detection
-# (BASE_FLI_SDK_DIR -> FLI_INCLUDE_DIR/FLI_LIBRARY) happens once in the
+# FLI (Finger Lakes Instrumentation) camera driver. libfli setup
+# (bundled external/fli, or BASE_FLI_SDK_DIR) happens once in the
 # top-level base/CMakeLists.txt, shared with focusd/fli and filterd/fli
 # (classic tree: --with-fli=<path>).
 if(BASE_HAVE_FLI)
