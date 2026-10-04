@@ -65,15 +65,15 @@ modules="base db web gui python"
 # (cron, dpkg-buildpackage from another script) nothing is asked: the site
 # file is used as is, falling back to BASE_*_SDK_DIR from the environment.
 #
-# The three SDKs have different layouts: Andor and libgxccd each want an
-# SDK root with include/ and lib/, paracl the source dir with libmks3.c.
-# libgxccd was once pointed at the FLI path, which silently produced an
-# empty rts2-drivers-gxccd package - hence the layout check below before a
-# path is accepted.
+# The two SDKs have different layouts: Andor wants an SDK root with
+# include/ and lib/, paracl the source dir with libmks3.c. A wrong tree
+# once silently produced an empty driver package - hence the layout check
+# below before a path is accepted.
 #
-# libfli is not asked for: it is bundled in base/external/fli. A
-# BASE_FLI_SDK_DIR still in an older site file overrides the bundled copy;
-# delete that line to go back to it.
+# libfli and libgxccd are not asked for: they are bundled in
+# base/external/fli and base/external/gxccd (gxccd for x86-64 only). A
+# BASE_FLI_SDK_DIR/BASE_GXCCD_SDK_DIR still in an older site file
+# overrides the bundled copy; delete that line to go back to it.
 SITE="${RTS2NG_SITE:-$HOME/.config/rts2ng/site.cmake}"
 
 # Prints the file that makes <dir> a usable <sdk> tree (its library, or
@@ -83,7 +83,6 @@ sdk_key_file() {
     local sdk=$1 d=$2 f
     case $sdk in
         ANDOR)  [ -f "$d/include/atmcdLXd.h" ] && f=$(ls "$d"/lib/libandor*x86_64.so* 2>/dev/null | head -n 1) ;;
-        GXCCD)  [ -f "$d/include/gxccd.h" ] && f="$d/lib/libgxccd.a" ;;
         PARACL) [ -f "$d/libmks3.h" ] && f="$d/libmks3.c" ;;
     esac
     [ -n "$f" ] && [ -f "$f" ] || return 1
@@ -102,7 +101,6 @@ sdk_candidates() {
     local sdk=$1 probe up=0 f d key
     case $sdk in
         ANDOR)  probe=atmcdLXd.h; up=1 ;;
-        GXCCD)  probe=gxccd.h; up=1 ;;
         PARACL) probe=libmks3.c ;;
     esac
     command -v locate >/dev/null || return 0
@@ -167,7 +165,6 @@ ask_sdk() {
 mkdir -p "$(dirname "$SITE")"
 [ -f "$SITE" ] || echo "# Written by rts2ng buildme.sh - per-machine settings, read with cmake -C" > "$SITE"
 ask_sdk ANDOR  BASE_ANDOR_SDK_DIR "Andor SDK (include/atmcdLXd.h, lib/libandor*)"
-ask_sdk GXCCD  BASE_GXCCD_SDK_DIR "gxccd SDK (include/gxccd.h, lib/libgxccd.a)"
 ask_sdk PARACL BASE_PARACL_DIR    "paracl source (libmks3.c)"
 # base/debian/rules picks these up via `?=`
 export BASE_FLI_SDK_DIR="$(site_get BASE_FLI_SDK_DIR)"

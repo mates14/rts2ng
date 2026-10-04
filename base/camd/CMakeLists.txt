@@ -52,33 +52,38 @@ if(_want)
 endif()
 base_sdk_report(ANDOR BASE_ANDOR_SDK_DIR ${_have_andor} "rts2-camd-andor" "include/atmcdLXd.h/lib/libandor*x86_64.so*")
 
-# Same opt-in as Andor above (classic tree: --with-gxccd=<path>).
-# Unlike Andor's .so, this SDK ships a static libgxccd.a with a clean
-# unversioned name - no SONAME/symlink wrinkle, so plain find_path/
-# find_library is enough. Needs libusb-1.0 (has a working pkg-config file
-# on this system, unlike libnova).
+# gxccd (Moravian Instruments). libgxccd is closed source, but its licence
+# permits redistributing the unmodified binary, so the x86-64 static
+# library is bundled in external/gxccd (see its README.md) and used
+# whenever BASE_GXCCD_SDK_DIR is empty; the path overrides it, and is
+# needed on other architectures (an SDK tree with include/gxccd.h and
+# lib/libgxccd.a; classic tree: --with-gxccd=<path>).
 #
-# base note (2026-07-16): this SDK tree ships *both* libgxccd.a and
-# libgxccd.so side by side. Plain find_library() searches .so before .a
-# (CMAKE_FIND_LIBRARY_SUFFIXES' default order), so despite the comment
-# above this was actually resolving to the .so - meaning rts2-camd-gxccd
-# needed the vendor .so + an RPATH at runtime, same wrinkle as Andor.
-# Forcing .a here instead gives a genuinely static, portable binary (no
-# externally-supplied vendor blob to ship alongside it) - motivated by
-# wanting a "everything that can statically link its control library"
-# base package. libgxccd.a's license explicitly permits binary
-# redistribution, so this is a real static link, not just a build
-# convenience. libusb-1.0 stays a normal dynamic system dependency
-# either way (found below).
-base_sdk_option(GXCCD BASE_GXCCD_SDK_DIR "gxccd (Moravian Instruments) camera driver" GXCCD_INCLUDE_DIR GXCCD_LIBRARY)
+# Only the static library is linked, even from an SDK tree that ships
+# libgxccd.so next to it: plain find_library() would prefer the .so,
+# making rts2-camd-gxccd need the vendor .so and an RPATH at runtime
+# (base note, 2026-07-16). libusb-1.0 stays an ordinary dynamic system
+# dependency.
+base_sdk_option(GXCCD BASE_GXCCD_SDK_DIR "gxccd (Moravian Instruments) camera driver; empty = bundled external/gxccd (x86-64)" GXCCD_INCLUDE_DIR GXCCD_LIBRARY)
 set(_have_gxccd FALSE)
-base_sdk_wanted(GXCCD BASE_GXCCD_SDK_DIR _want)
+set(_gxccd_bundled FALSE)
+if(NOT BASE_GXCCD STREQUAL "OFF" AND "${BASE_GXCCD_SDK_DIR}" STREQUAL ""
+		AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+	set(_gxccd_bundled TRUE)
+	set(GXCCD_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/external/gxccd/include")
+	set(GXCCD_LIBRARY "${PROJECT_SOURCE_DIR}/external/gxccd/lib/libgxccd.a")
+	set(_want TRUE)
+else()
+	base_sdk_wanted(GXCCD BASE_GXCCD_SDK_DIR _want)
+	if(_want)
+		find_path(GXCCD_INCLUDE_DIR NAMES gxccd.h PATHS "${BASE_GXCCD_SDK_DIR}/include" NO_DEFAULT_PATH)
+		set(_gxccd_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+		set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+		find_library(GXCCD_LIBRARY NAMES gxccd PATHS "${BASE_GXCCD_SDK_DIR}/lib" NO_DEFAULT_PATH)
+		set(CMAKE_FIND_LIBRARY_SUFFIXES ${_gxccd_saved_suffixes})
+	endif()
+endif()
 if(_want)
-	find_path(GXCCD_INCLUDE_DIR NAMES gxccd.h PATHS "${BASE_GXCCD_SDK_DIR}/include" NO_DEFAULT_PATH)
-	set(_gxccd_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
-	set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
-	find_library(GXCCD_LIBRARY NAMES gxccd PATHS "${BASE_GXCCD_SDK_DIR}/lib" NO_DEFAULT_PATH)
-	set(CMAKE_FIND_LIBRARY_SUFFIXES ${_gxccd_saved_suffixes})
 	find_package(PkgConfig)
 	if(PkgConfig_FOUND)
 		pkg_check_modules(LIBUSB1 libusb-1.0)
@@ -88,7 +93,17 @@ if(_want)
 		add_subdirectory(gxccd)
 	endif()
 endif()
-base_sdk_report(GXCCD BASE_GXCCD_SDK_DIR ${_have_gxccd} "rts2-camd-gxccd" "include/gxccd.h/lib/libgxccd.a (and system libusb-1.0)")
+if(_gxccd_bundled)
+	if(_have_gxccd)
+		message(STATUS "GXCCD: using bundled external/gxccd - building rts2-camd-gxccd")
+	elseif(BASE_GXCCD STREQUAL "ON")
+		message(FATAL_ERROR "GXCCD: BASE_GXCCD=ON but system libusb-1.0 (pkg-config) not found")
+	else()
+		message(WARNING "GXCCD: system libusb-1.0 (pkg-config) not found - not building rts2-camd-gxccd")
+	endif()
+else()
+	base_sdk_report(GXCCD BASE_GXCCD_SDK_DIR ${_have_gxccd} "rts2-camd-gxccd" "include/gxccd.h/lib/libgxccd.a (and system libusb-1.0)")
+endif()
 
 # FLI (Finger Lakes Instrumentation) camera driver. libfli setup
 # (bundled external/fli, or BASE_FLI_SDK_DIR) happens once in the

@@ -7,25 +7,23 @@
 # directly, a standard technique for upstream trees without polished
 # install() support.
 #
-# BASE_GXCCD_SDK_DIR points at the proprietary vendor SDK as it exists on
-# this build host. It has no default here - it comes in from the
-# environment (`?=` below only fills them in if unset),
-# exported by buildme.sh from its per-machine site file
-# (~/.config/rts2ng/site.cmake), so the plain-cmake build and this
-# packaging build can never disagree on the path. Export them yourself
-# before calling dpkg-buildpackage directly without buildme.sh.
+# FLI and gxccd are bundled (external/fli, external/gxccd), so
+# rts2-drivers-fli and rts2-drivers-gxccd are built without any SDK on the
+# build host - gxccd only on amd64, the one architecture whose libgxccd.a
+# is bundled. BASE_FLI_SDK_DIR/BASE_GXCCD_SDK_DIR, if exported (buildme.sh
+# exports what its per-machine site file ~/.config/rts2ng/site.cmake
+# says), override the bundled copies, same as in the plain-cmake build;
+# a given gxccd path also builds the driver on other architectures.
 #
-# A given path turns its SDK option to ON, so a path that does not hold a
-# usable SDK fails the configure instead of producing an empty
-# rts2-drivers-gxccd package. No path - OFF, and the driver package comes
-# out empty on purpose. Andor and paracl are always OFF: their drivers are
-# not packaged (see RTS2_BASE_BINARIES below).
-#
-# FLI is always ON: libfli is bundled (external/fli), so rts2-drivers-fli
-# is built on every host. BASE_FLI_SDK_DIR, if exported, overrides the
-# bundled copy, same as in the plain-cmake build.
+# The options are ON rather than AUTO wherever the driver is expected, so
+# a broken SDK fails the configure instead of producing an empty driver
+# package. Andor and paracl are always OFF: their drivers are not
+# packaged (see RTS2_BASE_BINARIES below).
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# DEB_HOST_ARCH (gxccd is bundled for amd64 only) even outside dpkg-buildpackage
+include /usr/share/dpkg/architecture.mk
 
 BASE_GXCCD_SDK_DIR ?=
 BASE_FLI_SDK_DIR ?=
@@ -39,7 +37,7 @@ override_dh_auto_configure:
 	dh_auto_configure --buildsystem=cmake --builddirectory=$(BUILDDIR) -- \
 		-DCMAKE_INSTALL_PREFIX=/usr \
 		-DBASE_GXCCD_SDK_DIR=$(BASE_GXCCD_SDK_DIR) \
-		-DBASE_GXCCD=$(if $(BASE_GXCCD_SDK_DIR),ON,OFF) \
+		-DBASE_GXCCD=$(if $(BASE_GXCCD_SDK_DIR)$(filter amd64,$(DEB_HOST_ARCH)),ON,OFF) \
 		-DBASE_FLI_SDK_DIR=$(BASE_FLI_SDK_DIR) \
 		-DBASE_FLI=ON \
 		-DBASE_ANDOR=OFF \
@@ -92,11 +90,13 @@ RTS2_FLI_BINARIES = \
 	focusd/fli/rts2-focusd-fli \
 	filterd/fli/rts2-filterd-fli
 
-# rts2-drivers-gxccd's binaries - only exist in $(BUILDDIR) if
-# BASE_GXCCD_SDK_DIR was given (a wrong one fails the configure, see
-# above); the install step below skips any that are missing rather than
-# failing the whole build, so rts2-base stays buildable on a host without
-# libgxccd (rts2-drivers-gxccd then simply comes out empty on that host).
+# rts2-drivers-gxccd's binaries - built on amd64 or with a
+# BASE_GXCCD_SDK_DIR (see above); the install step below skips any that
+# are missing, so on other architectures rts2-drivers-gxccd comes out
+# empty rather than failing the whole build. The libgxccd licence asks for
+# its copyright notice in the documentation of every binary
+# redistribution: LICENSE and README (the latter with the notice of the
+# inih parser inside the library) go to the package's doc directory.
 RTS2_GXCCD_BINARIES = \
 	camd/gxccd/rts2-camd-gxccd
 
@@ -135,6 +135,11 @@ override_dh_auto_install:
 			install -m 0755 $(BUILDDIR)/$$b debian/rts2-drivers-gxccd/usr/bin/; \
 		fi; \
 	done
+	install -d debian/rts2-drivers-gxccd/usr/share/doc/rts2-drivers-gxccd
+	install -m 0644 external/gxccd/LICENSE \
+		debian/rts2-drivers-gxccd/usr/share/doc/rts2-drivers-gxccd/LICENSE.libgxccd
+	install -m 0644 external/gxccd/README \
+		debian/rts2-drivers-gxccd/usr/share/doc/rts2-drivers-gxccd/README.libgxccd
 
 override_dh_installsystemd:
 	dh_installsystemd -prts2-base --no-enable --no-start rts2.service

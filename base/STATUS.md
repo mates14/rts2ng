@@ -41,13 +41,13 @@ Requires libnova dev headers (found via `find_path`/`find_library` in
 `kernel/CMakeLists.txt`, not pkg-config - this system's libnova ships no
 `.pc` file).
 
-`rts2-camd-andor`/`rts2-camd-gxccd` are skipped by default (proprietary
-vendor SDKs). Add `-DBASE_ANDOR_SDK_DIR=/path/to/andor/sdk` and/or
-`-DBASE_GXCCD_SDK_DIR=/path/to/gxccd/sdk` (each a tree containing
-`include/` + `lib/`) to the `cmake` invocation to build them - see the
-"Andor"/"GXCCD" sections below. The FLI drivers (`rts2-camd-fli`/
-`rts2-focusd-fli`/`rts2-filterd-fli`) build by default against the libfli
-bundled in `external/fli` - see the "FLI" section.
+`rts2-camd-andor` is skipped by default (proprietary vendor SDK, .so
+only). Add `-DBASE_ANDOR_SDK_DIR=/path/to/andor/sdk` (a tree containing
+`include/` + `lib/`) to the `cmake` invocation to build it - see the
+"Andor" section below. The FLI drivers (`rts2-camd-fli`/
+`rts2-focusd-fli`/`rts2-filterd-fli`) and `rts2-camd-gxccd` build by
+default against the libraries bundled in `external/fli` and
+`external/gxccd` (gxccd: x86-64 only) - see the "FLI"/"GXCCD" sections.
 
 ## Progress
 
@@ -678,6 +678,16 @@ only git-tracked of three gxccd-related files in the classic tree - like
 Andor, the other two, `gxccd.cpp.old`/`gxccd.cpp.zaloha`, are the user's
 own untracked scratch files, not touched or consulted). Driver for
 Moravian Instruments cameras via their closed-source `gxccd` library.
+
+**Bundled since 2026-10-04** (`base/external/gxccd/`, see its README.md):
+libgxccd 0.12.1's x86-64 `libgxccd.a` + `gxccd.h`, straight from
+Moravian's download page - its licence permits redistributing the
+unmodified binary. Used whenever `BASE_GXCCD_SDK_DIR` is empty on x86-64;
+buildme.sh no longer asks for it, and `debian/rules` turns BASE_GXCCD ON
+on amd64 and installs the licence into the package's doc directory.
+Against the 0.9.0 the driver was ported with, 0.12.1 only adds API
+(`gxfw_*` standalone wheel, new cameras). What follows describes the
+setup before that.
 
 Same situation as Andor - the vendor SDK is genuinely present on this
 system (`/home/mates/libgxccd-0.9.0`: headers + both a static `libgxccd.a`

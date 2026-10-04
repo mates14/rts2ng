@@ -65,8 +65,8 @@ Description: Remote Telescope System 2 - Moravian Instruments (gxccd) driver
  system for robotic astronomical observatories.
  .
  This package contains rts2-camd-gxccd, the RTS2 device driver for
- Moravian Instruments (and G2/G3-compatible) CCD/CMOS cameras. Built
- against the vendor libgxccd SDK (see BASE_GXCCD_SDK_DIR in
- base/CMakeLists.txt) - not redistributed here, so this package is only
- produced on a build host that has it. Requires rts2-base for the
- surrounding configuration, system user, and systemd units.
+ Moravian Instruments (and G2/G3-compatible) CCD/CMOS cameras,
+ statically linked with Moravian's libgxccd 0.12.1 (closed source,
+ redistributed in binary form under its licence, see
+ /usr/share/doc/rts2-drivers-gxccd/LICENSE.libgxccd). Requires rts2-base
+ for the surrounding configuration, system user, and systemd units.

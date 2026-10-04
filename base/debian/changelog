@@ -50,6 +50,9 @@ rts2-base (0.1.0-5) UNRELEASED; urgency=medium
   * New package fliusb-dkms: the fliusb kernel module, built by DKMS for
     every installed kernel; fixed for kernels up to 7.0, scatter-gather
     reads enabled again on current kernels (kbuild ignores EXTRA_CFLAGS).
+  * external/gxccd: Moravian's libgxccd 0.12.1 (x86-64 static library,
+    redistributable in binary form) is bundled; rts2-drivers-gxccd is
+    built on every amd64 host and carries the library's licence.
 
  -- RTS2 Project <petr@rts2.org>  Mon, 24 Aug 2026 17:38:00 +0200
 
