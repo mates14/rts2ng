@@ -423,6 +423,7 @@ class GeminiUDP:public Telescope
 		// ends in a park, may be a long time. Latch both so one bad move
 		// is one incident.
 		bool moveFailReported;
+		unsigned moveFailHandledSerial;	// the goto whose failure was last handled - see checkSafety()
 		bool wrongWayReported;
 
 		void checkSafety (const GeminiStatus &st);
@@ -623,6 +624,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueDouble *imuProbeStepFarValue;
 		rts2core::ValueDouble *imuProbeMaxSigmaValue;
 		rts2core::ValueDouble *imuProbeMinAltValue;
+		rts2core::ValueDouble *imuRezeroMinValue;
 		rts2core::ValueString *imuProbeResultValue;
 
 		bool imuProbeBusy () const { return imuProbeState != IMUPROBE_IDLE; }
@@ -803,6 +805,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	parkedAxisAt = 0;
 	parkedRaTicks = 0;
 	moveFailReported = false;
+	moveFailHandledSerial = 0;
 	wrongWayReported = false;
 	createValue (shortMoveDegValue, "short_move_deg", "[deg] a goto shorter than this is sent at CENTERING rate (:RC#) instead of slew - a short move at slew rate can leave the motor ramped up and running away on this mount; 0 disables", false, RTS2_VALUE_WRITABLE);
 	shortMoveDegValue->setValueDouble (1.0);
@@ -869,8 +872,10 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuProbeStepFarValue->setValueDouble (25.0);
 	createValue (imuProbeMinAltValue, "imu_probe_min_alt", "[deg] the larger step must keep the tube at least this high all the way, judged from the rough position", false, RTS2_VALUE_WRITABLE);
 	imuProbeMinAltValue->setValueDouble (10.0);
+	createValue (imuRezeroMinValue, "imu_rezero_min", "[deg] position imu rezero changes the counters only for errors above this; below it confirms them (ASSUMED, lock released). The IMU catches slips; fine zeroing is the sky's job - on 2026-10-04 its temperature bias (0.4-0.7 deg) made two IMU re-zeroes worse than none", false, RTS2_VALUE_WRITABLE);
+	imuRezeroMinValue->setValueDouble (2.0);
 	createValue (imuProbeMaxSigmaValue, "imu_probe_max_sigma", "[deg] position imu only gives an answer this certain (calibration rms times the conditioning of the two readings)", false, RTS2_VALUE_WRITABLE);
-	imuProbeMaxSigmaValue->setValueDouble (0.25);
+	imuProbeMaxSigmaValue->setValueDouble (1.0);
 	createValue (imuProbeResultValue, "imu_probe_result", "what the last position imu found", false);
 
 	createValue (imuConnectedValue, "imu_connected", "the IMU (--imu) answers with data", false);
@@ -2699,11 +2704,19 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 	// imuStallCheck()). Disagreement, or no check possible, is the incident
 	// after all. Should no recovery start (budget spent, ...), the incident
 	// is raised here 10 s later.
+	// GeminiStatus::moveFailed stays set until the next accepted goto, and
+	// moveFailReported is cleared whenever the safety state returns to OK -
+	// after an incident, every unlock reported the same old failure again
+	// (SBT 2026-10-04 21:37: incident, auto-verify, unlock, incident, ...).
+	// A failure is handled once per goto, by its serial number.
+	if (st.moveFailed && st.moveEndSerial != 0 && st.moveEndSerial == moveFailHandledSerial)
+		moveFailReported = true;
 	if (st.moveFailed)
 	{
 		if (!moveFailReported)
 		{
 			moveFailReported = true;
+			moveFailHandledSerial = st.moveEndSerial;
 			if (st.moveExecutionFault && imuStallCheckPossible ())
 			{
 				imuStallCheckPending = true;
@@ -4119,7 +4132,11 @@ bool GeminiUDP::imuStallCheck (const GeminiStatus &st, bool)
 	imuModel.solveAxes (av.acc, raAxis, decAxis, sr, sd, cond);
 	char buf[200];
 	snprintf (buf, sizeof (buf), "IMU at the stop: %.2f deg from the counters (tolerance %.2f, conditioning %.1f)", err, imuStallToleranceValue->getValueDouble (), cond);
-	if (!(cond <= 3.0))
+	// Near the merge line the split into the axes is soft: the axis error
+	// could be up to err x conditioning. Accept while that is within 2 deg
+	// (and the conditioning not hopeless) - 2026-10-04 21:35 a reading of
+	// 0.36 deg at conditioning 3.4 was rejected and locked the mount.
+	if (!(cond <= 6.0) || !(err * std::max (1.0, cond) <= 2.0 * std::max (1.0, imuStallToleranceValue->getValueDouble ())))
 		return fail (std::string (buf) + " - too close to the merge line to tell");
 	if (!(err <= imuStallToleranceValue->getValueDouble ()))
 		return fail (buf);
@@ -4737,7 +4754,7 @@ void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 
 	if (imuProbeRezero)
 	{
-		if (std::max (fabs (raErr), fabs (decErr)) < rezeroMinValue->getValueDouble ())
+		if (std::max (fabs (raErr), fabs (decErr)) < imuRezeroMinValue->getValueDouble ())
 		{
 			// the operator asked, and has the evidence: as "position ok"
 			if (safetyState == SAFETY_LOCKED)
