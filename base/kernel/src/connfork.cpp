@@ -17,6 +17,8 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+#include <string>
+#include <pwd.h>
 #include "connfork.h"
 #include "configuration.h"
 
@@ -386,6 +388,20 @@ int ConnFork::init ()
 	if ((!home || !*home) && (getuid () == 0))
 		home = "/root"; // Fallback for starting from root environments not providing HOME, e.g. systemd
 
+	// The same for USER/LOGNAME and TERM: a system service started by
+	// systemd without User= gets neither, and IRAF's cl refuses to start
+	// without them ("Environment variable 'USER' not found ... CL dies",
+	// exit status 0) - every image processed by IMGP failed on SBT once
+	// rts2.service started the daemons (2026-10-04). Looked up here, before
+	// the fork: NSS lookups in the child of a threaded daemon can deadlock.
+	std::string userName;
+	if (!getenv ("USER") || !getenv ("LOGNAME"))
+	{
+		struct passwd *pw = getpwuid (getuid ());
+		if (pw && pw->pw_name)
+			userName = pw->pw_name;
+	}
+
 	// do everything that will be needed to done before forking
 	beforeFork ();
 	childPid = fork ();
@@ -431,6 +447,12 @@ int ConnFork::init ()
 	// Better set HOME variable as some scripts (e.g. AstroPy based ones) expect it to be set
 	if (home && *home)
 		setenv ("HOME", home, 1);
+	if (!userName.empty ())
+	{
+		setenv ("USER", userName.c_str (), 0);
+		setenv ("LOGNAME", userName.c_str (), 0);
+	}
+	setenv ("TERM", "dumb", 0);
 
 	if (sockwrite == -2)
 	{
