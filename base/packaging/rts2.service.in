@@ -1,12 +1,14 @@
 # systemd unit to start every device/service listed in
 # @BASE_CONFDIR@/rts2/{centrald,devices,services}
 #
-# base note: dropped the classic unit's "After=postgresql.service" - this
-# is rts2-base (base only, no DB); a future rts2-db package that actually
-# needs a database can add its own ordering via a drop-in.
+# After=postgresql.service is ordering only (no Wants=): on a host with the
+# database (executor, selector) RTS2 starts after it, and on a base-only
+# host without PostgreSQL systemd ignores ordering against a unit that is
+# not there. The classic unit had the same line.
 [Unit]
 Description=RTS2 (all configured devices/services)
 Documentation=https://github.com/RTS2/rts2
+After=postgresql.service
 
 [Service]
 Type=forking

@@ -1,0 +1,49 @@
+#!/bin/sh
+# postinst for rts2-base
+set -e
+
+# A classic RTS2 install (under /usr/local) left its own rts2.service and
+# rts2@.service in /etc/systemd/system. Files there override this package's
+# units in /lib/systemd/system, and these point at /usr/local/bin/rts2-start,
+# which no longer exists - so systemd could not start RTS2 at all (seen on
+# the SBT host, 2026-10-03). Move such leftovers aside, recognized by their
+# ExecStart; an override an administrator wrote for this package is left
+# alone. If the old copy had been enabled, the enable link pointed at it:
+# re-enable, which links the packaged unit instead.
+migrate_classic_units ()
+{
+	moved=
+	for unit in rts2.service rts2@.service; do
+		f=/etc/systemd/system/$unit
+		if [ -f "$f" ] && [ ! -L "$f" ] && grep -q '^ExecStart=/usr/local/bin/rts2-start' "$f"; then
+			mv "$f" "$f.classic-rts2"
+			echo "rts2-base: moved the classic-RTS2 unit $f aside to $f.classic-rts2; the packaged unit in /lib/systemd/system applies now" >&2
+			moved=1
+		fi
+	done
+	[ -n "$moved" ] || return 0
+
+	wants=/etc/systemd/system/multi-user.target.wants/rts2.service
+	if [ -L "$wants" ] && [ ! -e "$wants" ]; then
+		rm -f "$wants"
+		reenable=1
+	fi
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		if [ -n "$reenable" ]; then
+			systemctl enable rts2.service || true
+		fi
+	elif [ -n "$reenable" ]; then
+		ln -s /lib/systemd/system/rts2.service "$wants"
+	fi
+}
+
+case "$1" in
+	configure)
+		migrate_classic_units
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0
