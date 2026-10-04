@@ -5,15 +5,41 @@ source ~/.gnupg-repo.conf
 # GNUPGHOME=~/.gnupg-repo
 # REPO_GPG_KEY=something
 
+usage() {
+    cat <<USAGE
+usage: $0 [-c] [-r] [-d] [-s] [module ...]
+  (none)  build in <module>/build; configures only if that has no cache yet,
+          so choices made in ccmake survive between runs
+  -c      open ccmake on each module's build dir before building
+  -r      start over: ask for the SDK paths again (previous answers
+          prefilled) and wipe the build dirs
+  -d      build .deb packages
+  -s      build source packages
+modules: base db web gui python (default: all)
+USAGE
+}
+
 build_deb=0
 build_src=0
-while getopts "ds" optn; do
+run_ccmake=0
+reconfigure=0
+while getopts "dscrh" optn; do
 case $optn in
     d)
         build_deb=1;
         ;;
     s)
         build_src=1;
+        ;;
+    c)
+        run_ccmake=1;
+        ;;
+    r)
+        reconfigure=1;
+        ;;
+    *)
+        usage
+        exit 1
         ;;
 esac
 done
@@ -26,32 +52,132 @@ modules="base db web gui python"
 # sudo apt install libgsl-dev qtbase5-dev
 # sudo apt install build-essential debhelper devscripts dpkg-dev
 
-# Single source of truth for this machine's vendor SDK paths - exported so
-# base/debian/rules' `BASE_FLI_SDK_DIR ?= ...` / `BASE_GXCCD_SDK_DIR ?= ...`
-# pick them up too, without needing to edit that file per-site.
+# Vendor SDK locations - one site file per machine, read with `cmake -C`
+# by every tree's first configure (db, web and gui each nest base in their
+# own build dir, so a path set in one tree's ccmake would not reach the
+# others) and exported for base/debian/rules. The paths used to be
+# hardcoded exports here, and went stale silently: a wrong path only
+# skipped the driver, with a STATUS line among a hundred others to say so.
 #
-# These are *different* trees with different layouts: libfli wants the
-# built source dir itself (libfli.h + libfli.a at the top level), libgxccd
-# and Andor each want an SDK root with include/ and lib/ subdirectories.
-# libfli and libgxccd were both pointed at the FLI path once, which
-# silently produced empty rts2-drivers-fli/rts2-drivers-gxccd packages -
-# CMake just skips the driver when detection fails, and debian/rules skips
-# the missing binary.
+# Now each SDK is looked for with locate, the best candidate is proposed,
+# and the path is used only once confirmed (or typed in, if nothing was
+# found). Asked once per machine; -r asks again. Without a terminal
+# (cron, dpkg-buildpackage from another script) nothing is asked: the site
+# file is used as is, falling back to BASE_*_SDK_DIR from the environment.
 #
-# Exporting alone is not enough for the cmake branch below: these are cache
-# PATH variables, and CMake never reads the environment for those, so each
-# one also has to be repeated as -D on the cmake line or the driver is
-# skipped with nothing but a STATUS line among a hundred others to say so.
-# The export is what base/debian/rules picks up.
-export BASE_ANDOR_SDK_DIR=/home/mates/andor
-export BASE_FLI_SDK_DIR=/home/mates/fliusb/libfli
-export BASE_GXCCD_SDK_DIR=/home/mates/libgxccd-0.9.0
+# The four SDKs have different layouts: libfli wants the built source dir
+# itself (libfli.h + libfli.a at the top level), Andor and libgxccd each
+# want an SDK root with include/ and lib/, paracl the source dir with
+# libmks3.c. libfli and libgxccd were both pointed at the FLI path once,
+# which silently produced empty rts2-drivers-fli/rts2-drivers-gxccd
+# packages - hence the layout check below before a path is accepted.
+SITE="${RTS2NG_SITE:-$HOME/.config/rts2ng/site.cmake}"
+
+# Prints the file that makes <dir> a usable <sdk> tree (its library, or
+# libmks3.c for paracl); fails if the tree is incomplete. The library also
+# has to be for this machine - several old trees around are 32-bit builds.
+sdk_key_file() {
+    local sdk=$1 d=$2 f
+    case $sdk in
+        FLI)    [ -f "$d/libfli.h" ] && f="$d/libfli.a" ;;
+        ANDOR)  [ -f "$d/include/atmcdLXd.h" ] && f=$(ls "$d"/lib/libandor*x86_64.so* 2>/dev/null | head -n 1) ;;
+        GXCCD)  [ -f "$d/include/gxccd.h" ] && f="$d/lib/libgxccd.a" ;;
+        PARACL) [ -f "$d/libmks3.h" ] && f="$d/libmks3.c" ;;
+    esac
+    [ -n "$f" ] && [ -f "$f" ] || return 1
+    case $f in
+        *.c) ;;
+        *)  if [ "$(uname -m)" = x86_64 ] && command -v objdump >/dev/null; then
+                objdump -f "$f" 2>/dev/null | grep -q 'architecture: i386:x86-64' || return 1
+            fi ;;
+    esac
+    echo "$f"
+}
+
+# Candidate trees for <sdk>, best first: those under $HOME before other
+# users' (which may vanish on a shared machine), then newest library.
+sdk_candidates() {
+    local sdk=$1 probe up=0 f d key
+    case $sdk in
+        FLI)    probe=libfli.h ;;
+        ANDOR)  probe=atmcdLXd.h; up=1 ;;
+        GXCCD)  probe=gxccd.h; up=1 ;;
+        PARACL) probe=libmks3.c ;;
+    esac
+    command -v locate >/dev/null || return 0
+    locate -b "\\$probe" 2>/dev/null | grep -v -e '/\.svn/' -e '/\.git/' | while IFS= read -r f; do
+        d=$(dirname "$f")
+        [ $up = 1 ] && d=$(dirname "$d")
+        d=$(realpath -q "$d") || continue
+        key=$(sdk_key_file $sdk "$d") || continue
+        case $d/ in "$HOME"/*) r=0 ;; *) r=1 ;; esac
+        printf '%d\t%d\t%s\n' $r "$(stat -L -c %Y "$key")" "$d"
+    done | sort -u | sort -t $'\t' -k1,1n -k2,2nr | cut -f3
+}
+
+site_has() { [ -f "$SITE" ] && grep -q "^set($1 " "$SITE"; }
+site_get() { [ -f "$SITE" ] && sed -n "s/^set($1 \"\(.*\)\" CACHE.*/\1/p" "$SITE"; }
+site_put() {
+    local tmp
+    tmp=$(mktemp)
+    [ -f "$SITE" ] && grep -v "^set($1 " "$SITE" > "$tmp"
+    printf 'set(%s "%s" CACHE PATH "%s")\n' "$1" "$2" "$3" >> "$tmp"
+    mv "$tmp" "$SITE"
+}
+
+# ask_sdk <sdk> <cache var> <description>
+ask_sdk() {
+    local sdk=$1 var=$2 desc=$3 cur="" def ans cands n i
+    if site_has $var; then
+        [ $reconfigure = 1 ] && [ -t 0 ] || return 0
+        cur=$(site_get $var)
+    fi
+    if [ ! -t 0 ]; then
+        # not recorded when empty, so that the next run on a terminal asks
+        [ -n "${!var}" ] && site_put $var "${!var}" "$desc"
+        return 0
+    fi
+    mapfile -t cands < <(sdk_candidates $sdk)
+    def=${cur:-${!var:-${cands[0]}}}
+    echo "==> $desc"
+    n=${#cands[@]}
+    if [ $n = 0 ]; then
+        echo "    nothing found by locate"
+    else
+        for ((i = 0; i < n && i < 10; i++)); do
+            echo "    found: ${cands[$i]}"
+        done
+        [ $n -gt 10 ] && echo "    ... and $((n - 10)) more"
+    fi
+    while :; do
+        read -e -i "$def" -p "$desc path [empty = skip]: " ans
+        ans="${ans/#\~/$HOME}"
+        [ -z "$ans" ] && break
+        if sdk_key_file $sdk "$ans" >/dev/null; then
+            ans=$(realpath "$ans")
+            break
+        fi
+        echo "    $ans is not a usable $sdk tree for this machine, try again"
+        def=$ans
+    done
+    site_put $var "$ans" "$desc"
+}
+
+mkdir -p "$(dirname "$SITE")"
+[ -f "$SITE" ] || echo "# Written by rts2ng buildme.sh - per-machine settings, read with cmake -C" > "$SITE"
+ask_sdk FLI    BASE_FLI_SDK_DIR   "FLI SDK (libfli.h + libfli.a)"
+ask_sdk ANDOR  BASE_ANDOR_SDK_DIR "Andor SDK (include/atmcdLXd.h, lib/libandor*)"
+ask_sdk GXCCD  BASE_GXCCD_SDK_DIR "gxccd SDK (include/gxccd.h, lib/libgxccd.a)"
+ask_sdk PARACL BASE_PARACL_DIR    "paracl source (libmks3.c)"
+# base/debian/rules picks these up via `?=`
+export BASE_FLI_SDK_DIR="$(site_get BASE_FLI_SDK_DIR)"
+export BASE_ANDOR_SDK_DIR="$(site_get BASE_ANDOR_SDK_DIR)"
+export BASE_GXCCD_SDK_DIR="$(site_get BASE_GXCCD_SDK_DIR)"
+export BASE_PARACL_DIR="$(site_get BASE_PARACL_DIR)"
 
 
 if [ $build_deb == 0 ] && [ $build_src == 0 ]; then
     for tree in $modules; do
-    #for tree in gui; do
-    #for tree in base; do
         # python/ (and any future non-CMake tree) has nothing to
         # configure/build here - it only ever gets touched by the -d/-s
         # (dpkg-buildpackage) branches below, via its own debian/rules.
@@ -59,8 +185,15 @@ if [ $build_deb == 0 ] && [ $build_src == 0 ]; then
             echo "==> Skipping cmake build for $tree (no CMakeLists.txt)"
             continue
         fi
-        rm -rf $tree/build
-        cmake -S $tree -B $tree/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBASE_ANDOR_SDK_DIR=$BASE_ANDOR_SDK_DIR -DBASE_FLI_SDK_DIR=$BASE_FLI_SDK_DIR -DBASE_GXCCD_SDK_DIR=$BASE_GXCCD_SDK_DIR
+        # The cache is kept between runs: options changed in ccmake stay,
+        # and cmake --build re-runs configure by itself when a
+        # CMakeLists.txt changes. The site file only seeds a fresh cache -
+        # it never overrides a value already in one, hence the wipe on -r.
+        [ $reconfigure = 1 ] && rm -rf $tree/build
+        if [ ! -f $tree/build/CMakeCache.txt ]; then
+            cmake -S $tree -B $tree/build -C "$SITE" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        fi
+        [ $run_ccmake = 1 ] && ccmake $tree/build
         cmake --build $tree/build -j4
     done
 fi
