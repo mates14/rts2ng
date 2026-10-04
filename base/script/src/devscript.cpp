@@ -73,6 +73,21 @@ void DevScript::startTarget (bool callScriptEnds)
 
 	counted_ptr <Script> sc (new Script (scriptLoopCount, script_connection->getMaster ()));
 	sc->setTarget (script_connection->getName (), currentTarget);
+
+	if (sc->empty ())
+	{
+		// empty script - the device has nothing to do for this target. It sits the
+		// target out: no script is started, it is not reported as running and it is
+		// not flagged as failed (which an empty script, executing nothing, used to be).
+		// Other devices' scripts decide when the target ends; if all are empty, nothing
+		// ends it and the executor holds the target until now/skip/stop.
+		logStream (MESSAGE_DEBUG) << "empty script for target " << currentTarget->getTargetID () << " on device " << script_connection->getName () << ", device stays idle" << sendLog;
+		currentTarget = NULL;
+		// clears SCRIPT/SCRIPREP on the device
+		scriptBegin ();
+		return;
+	}
+
 	setScript (sc);
 
 	clearFailedCount ();
