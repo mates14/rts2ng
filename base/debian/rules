@@ -8,16 +8,18 @@
 # install() support.
 #
 # BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR point at the proprietary vendor
-# SDKs as they exist on this build host - adjust for a different builder
-# (or drop them to build rts2-base without the gxccd/FLI drivers' own
-# packages). Neither has a hardcoded default here - both are expected to
+# SDKs as they exist on this build host. Neither has a default here - both
 # come in from the environment (`?=` below only fills them in if unset),
-# single-sourced from buildme.sh's own `export BASE_GXCCD_SDK_DIR=...`/
-# `export BASE_FLI_SDK_DIR=...` so the plain-cmake build and this
-# packaging build can never disagree on the path (see the git history
-# around when BASE_FLI_SDK_DIR was fixed the same way - two different
-# hardcoded paths in two different files had drifted apart). Export them
-# yourself before calling dpkg-buildpackage directly without buildme.sh.
+# exported by buildme.sh from its per-machine site file
+# (~/.config/rts2ng/site.cmake), so the plain-cmake build and this
+# packaging build can never disagree on the path. Export them yourself
+# before calling dpkg-buildpackage directly without buildme.sh.
+#
+# A given path turns its SDK option to ON, so a path that does not hold a
+# usable SDK fails the configure instead of producing an empty
+# rts2-drivers-fli/rts2-drivers-gxccd package. No path - OFF, and the
+# driver package comes out empty on purpose. Andor and paracl are always
+# OFF: their drivers are not packaged (see RTS2_BASE_BINARIES below).
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
@@ -33,14 +35,18 @@ override_dh_auto_configure:
 	dh_auto_configure --buildsystem=cmake --builddirectory=$(BUILDDIR) -- \
 		-DCMAKE_INSTALL_PREFIX=/usr \
 		-DBASE_GXCCD_SDK_DIR=$(BASE_GXCCD_SDK_DIR) \
-		-DBASE_FLI_SDK_DIR=$(BASE_FLI_SDK_DIR)
+		-DBASE_GXCCD=$(if $(BASE_GXCCD_SDK_DIR),ON,OFF) \
+		-DBASE_FLI_SDK_DIR=$(BASE_FLI_SDK_DIR) \
+		-DBASE_FLI=$(if $(BASE_FLI_SDK_DIR),ON,OFF) \
+		-DBASE_ANDOR=OFF \
+		-DBASE_PARACL=OFF
 
 # Binaries this package ships: centrald, rts2-mon, scriptexec, and every
 # driver that builds without a bundled proprietary shared library (see
 # debian/control). rts2-camd-andor (vendor SDK is .so-only) and
 # rts2-teld-paramount (libmks3 not vendored, informal non-redistribution
-# understanding on the source) are deliberately excluded even if a build
-# host happens to have BASE_ANDOR_SDK_DIR/BASE_PARACL_DIR set.
+# understanding on the source) are deliberately excluded - not even built,
+# BASE_ANDOR/BASE_PARACL=OFF above.
 RTS2_BASE_BINARIES = \
 	centrald/rts2-centrald \
 	centrald/rts2-state \
@@ -77,7 +83,7 @@ RTS2_BASE_BINARIES = \
 	dome/zelio/rts2-dome-zelio
 
 # rts2-drivers-fli's binaries - only exist in $(BUILDDIR) if
-# BASE_FLI_SDK_DIR resolved to a real libfli tree (see base/CMakeLists.txt);
+# BASE_FLI_SDK_DIR was given (a wrong one fails the configure, see above);
 # the install step below skips any that are missing rather than failing
 # the whole build, so rts2-base stays buildable on a host without libfli
 # (rts2-drivers-fli then simply comes out empty on that host).

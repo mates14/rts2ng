@@ -51,51 +51,46 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 enable_testing()
 
-# FLI (Finger Lakes Instrumentation) is a proprietary vendor SDK shared by
-# both focusd/fli and filterd/fli - detected once here rather than
-# duplicating the same find_path/find_library in both driver-family
-# CMakeLists.txt files. Same opt-in reasoning as Andor/gxccd: nobody has
-# this hardware/SDK by accident, so it's never auto-searched. Point
-# BASE_FLI_SDK_DIR at a built libfli tree (containing libfli.h and
-# libfli.a, both at the top level - that's how libfli's own Makefile lays
-# it out, no separate include/ or lib/ subdirectory) to build the FLI
-# drivers; leave it empty (the default) to skip them.
-set(BASE_FLI_SDK_DIR "" CACHE PATH "Path to a built libfli tree (contains libfli.h and libfli.a at the top level); leave empty to skip building the FLI drivers")
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/BaseOptions.cmake)
 
-if(BASE_FLI_SDK_DIR)
+# FLI (Finger Lakes Instrumentation) is a proprietary vendor SDK shared by
+# camd/fli, focusd/fli and filterd/fli - detected once here rather than
+# duplicating the same find_path/find_library in each driver family.
+# BASE_FLI_SDK_DIR points at a built libfli tree (libfli.h and libfli.a,
+# both at the top level - that's how libfli's own Makefile lays it out, no
+# separate include/ or lib/ subdirectory). buildme.sh proposes one; the
+# families test BASE_HAVE_FLI rather than the cached find results, so
+# BASE_FLI=OFF really turns the drivers off.
+base_sdk_option(FLI BASE_FLI_SDK_DIR "FLI drivers (camd, focusd, filterd)" FLI_INCLUDE_DIR FLI_LIBRARY)
+set(BASE_HAVE_FLI FALSE)
+base_sdk_wanted(FLI BASE_FLI_SDK_DIR _want)
+if(_want)
 	find_path(FLI_INCLUDE_DIR NAMES libfli.h PATHS "${BASE_FLI_SDK_DIR}" NO_DEFAULT_PATH)
 	find_library(FLI_LIBRARY NAMES fli PATHS "${BASE_FLI_SDK_DIR}" NO_DEFAULT_PATH)
 	if(FLI_INCLUDE_DIR AND FLI_LIBRARY)
-		message(STATUS "FLI SDK found (${FLI_INCLUDE_DIR}, ${FLI_LIBRARY}) - building FLI drivers")
-	else()
-		message(WARNING "BASE_FLI_SDK_DIR is set to '${BASE_FLI_SDK_DIR}' but libfli.h/libfli.a were not found there - skipping FLI drivers")
+		set(BASE_HAVE_FLI TRUE)
 	endif()
-else()
-	message(STATUS "BASE_FLI_SDK_DIR not set - skipping FLI drivers (requires the proprietary FLI SDK)")
 endif()
+base_sdk_report(FLI BASE_FLI_SDK_DIR ${BASE_HAVE_FLI} "rts2-camd-fli, rts2-focusd-fli, rts2-filterd-fli" "libfli.h/libfli.a")
 
 # libmks3 (Software Bisque Paramount ME/MYT MKS3 servo controller protocol)
 # is Martin Jelinek's own C library (plain C source, not a prebuilt vendor
 # .so like Andor/gxccd) - built from source like FLI, but here we only need
 # the one file (libmks3.c/.h); the rest of that tree (drv.c/main.c/maps.c/
 # tpmodel.c/simplc.c) belongs to a separate standalone "paracl" CLI tool
-# and is not needed by rts2-teld-paramount. Same opt-in reasoning as
-# Andor/gxccd/FLI: point BASE_PARACL_DIR at a checkout containing
-# libmks3.c and libmks3.h to build rts2-teld-paramount; leave empty (the
-# default) to skip it.
-set(BASE_PARACL_DIR "" CACHE PATH "Path to Martin Jelinek's paracl tree (contains libmks3.c/libmks3.h); leave empty to skip building rts2-teld-paramount")
-
-if(BASE_PARACL_DIR)
+# and is not needed by rts2-teld-paramount. BASE_PARACL_DIR points at a
+# checkout containing libmks3.c and libmks3.h.
+base_sdk_option(PARACL BASE_PARACL_DIR "Paramount telescope driver (paracl/libmks3 source)" PARACL_LIBMKS3_C PARACL_LIBMKS3_H)
+set(BASE_HAVE_PARACL FALSE)
+base_sdk_wanted(PARACL BASE_PARACL_DIR _want)
+if(_want)
 	find_file(PARACL_LIBMKS3_C NAMES libmks3.c PATHS "${BASE_PARACL_DIR}" NO_DEFAULT_PATH)
 	find_file(PARACL_LIBMKS3_H NAMES libmks3.h PATHS "${BASE_PARACL_DIR}" NO_DEFAULT_PATH)
 	if(PARACL_LIBMKS3_C AND PARACL_LIBMKS3_H)
-		message(STATUS "paracl/libmks3 found (${PARACL_LIBMKS3_C}) - building rts2-teld-paramount")
-	else()
-		message(WARNING "BASE_PARACL_DIR is set to '${BASE_PARACL_DIR}' but libmks3.c/libmks3.h were not found there - skipping rts2-teld-paramount")
+		set(BASE_HAVE_PARACL TRUE)
 	endif()
-else()
-	message(STATUS "BASE_PARACL_DIR not set - skipping rts2-teld-paramount (requires Martin Jelinek's paracl/libmks3 source)")
 endif()
+base_sdk_report(PARACL BASE_PARACL_DIR ${BASE_HAVE_PARACL} "rts2-teld-paramount" "libmks3.c/libmks3.h")
 
 add_subdirectory(kernel)
 

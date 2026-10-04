@@ -75,8 +75,8 @@ Common to all three subtrees:
 - libusb-1.0
 
 `base/` additionally, only for specific opt-in drivers (each gated behind
-its own CMake cache variable, skipped by default — see `base/STATUS.md` and
-`base/CMakeLists.txt`):
+an SDK path plus an AUTO/ON/OFF option such as `BASE_FLI`, skipped while
+no path is given — see "Selecting drivers" below):
 
 - Finger Lakes Instrumentation (FLI) camera/focuser/filter-wheel SDK
   (`-DBASE_FLI_SDK_DIR=...`)
@@ -86,8 +86,8 @@ its own CMake cache variable, skipped by default — see `base/STATUS.md` and
   mount protocol) (`-DBASE_PARACL_DIR=...`)
 
 None of these vendor SDKs are redistributed in this repository; the drivers
-that need them are simply skipped at configure time if the corresponding
-path isn't provided.
+that need them are skipped at configure time if the corresponding path
+isn't provided (or the configure fails, if their option is set to `ON`).
 
 `db/` additionally requires:
 
@@ -129,6 +129,26 @@ cd db    # or gui
 cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
+
+### buildme.sh
+
+`buildme.sh [module ...]` at the repository root builds each tree in
+`<tree>/build`. On its first run on a machine it looks for each vendor SDK
+with `locate`, proposes the best candidate and asks for confirmation (or
+for a path, if none was found); the answers go to
+`~/.config/rts2ng/site.cmake` (override with `RTS2NG_SITE`), which seeds
+every tree's first configure via `cmake -C`. The build cache is kept
+between runs; `-c` opens `ccmake` before building, `-r` asks for the SDK
+paths again and configures from scratch.
+
+### Selecting drivers
+
+Every driver has a cache option, `BASE_<FAMILY>_<DRIVER>` (e.g.
+`BASE_TELD_LX200`, `BASE_SENSORD_NUT`), ON by default; vendor-SDK drivers
+are selected per SDK with `BASE_FLI`, `BASE_ANDOR`, `BASE_GXCCD` and
+`BASE_PARACL` (AUTO: build if the path is usable, ON: fail if it is not,
+OFF: never). Change them with `ccmake build` (or `buildme.sh -c`), or
+with `-D` on the command line.
 
 ### Debian packages
 

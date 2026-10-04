@@ -25,12 +25,12 @@ target_link_libraries(base_teld PUBLIC base_kernel Threads::Threads)
 
 add_subdirectory(tests)
 
-add_subdirectory(dummy)
-add_subdirectory(d50)
-add_subdirectory(gemini)
-add_subdirectory(gemini-udp)
-add_subdirectory(lx200)
+base_driver(dummy "Simulated telescope")
+base_driver(d50 "D50 telescope")
+base_driver(gemini "Losmandy Gemini")
+base_driver(gemini-udp "Losmandy Gemini over UDP")
+base_driver(lx200 "Meade LX200 protocol")
 
-if(PARACL_LIBMKS3_C AND PARACL_LIBMKS3_H)
+if(BASE_HAVE_PARACL)
 	add_subdirectory(paramount)
 endif()

@@ -8,8 +8,8 @@ target_include_directories(base_filterd PUBLIC
 
 target_link_libraries(base_filterd PUBLIC base_kernel)
 
-add_subdirectory(dummy)
+base_driver(dummy "Simulated filter wheel")
 
-if(FLI_INCLUDE_DIR AND FLI_LIBRARY)
+if(BASE_HAVE_FLI)
 	add_subdirectory(fli)
 endif()

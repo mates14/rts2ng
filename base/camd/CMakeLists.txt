@@ -10,22 +10,21 @@ target_include_directories(base_camd PUBLIC
 
 target_link_libraries(base_camd PUBLIC base_kernel)
 
-add_subdirectory(dummy)
+base_driver(dummy "Simulated camera")
 
 # V4L2 webcam driver - needs only the Linux kernel UAPI header
 # (linux/videodev2.h, no separate library), so unlike the vendor SDKs below
 # there's nothing to detect: it always builds on Linux.
-add_subdirectory(v4l)
+base_driver(v4l "V4L2 webcam")
 
 # Andor is a proprietary vendor SDK (precompiled headers + .so, no source
-# available) - nobody has this hardware/SDK by accident, so unlike libnova
-# or ncurses this is never auto-searched. Point BASE_ANDOR_SDK_DIR at an
-# SDK tree (one containing include/atmcdLXd.h and lib/libandor-*.so) to
-# build rts2-camd-andor; leave it empty (the default) to skip the driver
-# entirely, matching the classic tree's --with-andor=<path> opt-in.
-set(BASE_ANDOR_SDK_DIR "" CACHE PATH "Path to an Andor SDK tree (contains include/ and lib/); leave empty to skip building rts2-camd-andor")
-
-if(BASE_ANDOR_SDK_DIR)
+# available). BASE_ANDOR_SDK_DIR points at an SDK tree (one containing
+# include/atmcdLXd.h and lib/libandor-*.so), matching the classic tree's
+# --with-andor=<path>; buildme.sh proposes one (see cmake/BaseOptions.cmake).
+base_sdk_option(ANDOR BASE_ANDOR_SDK_DIR "Andor camera driver" ANDOR_INCLUDE_DIR)
+set(_have_andor FALSE)
+base_sdk_wanted(ANDOR BASE_ANDOR_SDK_DIR _want)
+if(_want)
 	find_path(ANDOR_INCLUDE_DIR NAMES atmcdLXd.h PATHS "${BASE_ANDOR_SDK_DIR}/include" NO_DEFAULT_PATH)
 	# Vendor filename varies by SDK build variant - some ship
 	# libandor-x86_64.so.<ver>, others libandor-stdc++6-x86_64.so.<ver> (an
@@ -47,16 +46,13 @@ if(BASE_ANDOR_SDK_DIR)
 		file(CREATE_LINK "${ANDOR_LIBRARY_REAL}" "${ANDOR_LINK_DIR}/libandor.so.2" SYMBOLIC)
 		set(ANDOR_LIBRARY "${ANDOR_LINK_DIR}/libandor.so.2")
 
-		message(STATUS "Andor SDK found (${ANDOR_INCLUDE_DIR}, ${ANDOR_LIBRARY_REAL}) - building rts2-camd-andor")
+		set(_have_andor TRUE)
 		add_subdirectory(andor)
-	else()
-		message(WARNING "BASE_ANDOR_SDK_DIR is set to '${BASE_ANDOR_SDK_DIR}' but atmcdLXd.h/libandor-*-x86_64.so were not found there - skipping rts2-camd-andor")
 	endif()
-else()
-	message(STATUS "BASE_ANDOR_SDK_DIR not set - skipping rts2-camd-andor (requires the proprietary Andor SDK)")
 endif()
+base_sdk_report(ANDOR BASE_ANDOR_SDK_DIR ${_have_andor} "rts2-camd-andor" "include/atmcdLXd.h/lib/libandor*x86_64.so*")
 
-# Same opt-in reasoning as Andor above (classic tree: --with-gxccd=<path>).
+# Same opt-in as Andor above (classic tree: --with-gxccd=<path>).
 # Unlike Andor's .so, this SDK ships a static libgxccd.a with a clean
 # unversioned name - no SONAME/symlink wrinkle, so plain find_path/
 # find_library is enough. Needs libusb-1.0 (has a working pkg-config file
@@ -74,9 +70,10 @@ endif()
 # redistribution, so this is a real static link, not just a build
 # convenience. libusb-1.0 stays a normal dynamic system dependency
 # either way (found below).
-set(BASE_GXCCD_SDK_DIR "" CACHE PATH "Path to a gxccd (Moravian Instruments) SDK tree (contains include/ and lib/); leave empty to skip building rts2-camd-gxccd")
-
-if(BASE_GXCCD_SDK_DIR)
+base_sdk_option(GXCCD BASE_GXCCD_SDK_DIR "gxccd (Moravian Instruments) camera driver" GXCCD_INCLUDE_DIR GXCCD_LIBRARY)
+set(_have_gxccd FALSE)
+base_sdk_wanted(GXCCD BASE_GXCCD_SDK_DIR _want)
+if(_want)
 	find_path(GXCCD_INCLUDE_DIR NAMES gxccd.h PATHS "${BASE_GXCCD_SDK_DIR}/include" NO_DEFAULT_PATH)
 	set(_gxccd_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
 	set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
@@ -87,19 +84,16 @@ if(BASE_GXCCD_SDK_DIR)
 		pkg_check_modules(LIBUSB1 libusb-1.0)
 	endif()
 	if(GXCCD_INCLUDE_DIR AND GXCCD_LIBRARY AND LIBUSB1_FOUND)
-		message(STATUS "gxccd SDK found (${GXCCD_INCLUDE_DIR}, ${GXCCD_LIBRARY}) - building rts2-camd-gxccd")
+		set(_have_gxccd TRUE)
 		add_subdirectory(gxccd)
-	else()
-		message(WARNING "BASE_GXCCD_SDK_DIR is set to '${BASE_GXCCD_SDK_DIR}' but gxccd.h/libgxccd.a/libusb-1.0 were not all found - skipping rts2-camd-gxccd")
 	endif()
-else()
-	message(STATUS "BASE_GXCCD_SDK_DIR not set - skipping rts2-camd-gxccd (requires the proprietary gxccd SDK)")
 endif()
+base_sdk_report(GXCCD BASE_GXCCD_SDK_DIR ${_have_gxccd} "rts2-camd-gxccd" "include/gxccd.h/lib/libgxccd.a (and system libusb-1.0)")
 
 # FLI (Finger Lakes Instrumentation) camera driver. SDK detection
 # (BASE_FLI_SDK_DIR -> FLI_INCLUDE_DIR/FLI_LIBRARY) happens once in the
-# top-level base/CMakeLists.txt, shared with focusd/fli and filterd/fli -
-# same opt-in reasoning as Andor/gxccd above (classic tree: --with-fli=<path>).
-if(FLI_INCLUDE_DIR AND FLI_LIBRARY)
+# top-level base/CMakeLists.txt, shared with focusd/fli and filterd/fli
+# (classic tree: --with-fli=<path>).
+if(BASE_HAVE_FLI)
 	add_subdirectory(fli)
 endif()

@@ -10,6 +10,6 @@ target_include_directories(base_dome PUBLIC
 
 target_link_libraries(base_dome PUBLIC base_kernel)
 
-add_subdirectory(d50)
-add_subdirectory(bart)
-add_subdirectory(zelio)
+base_driver(d50 "D50 dome")
+base_driver(bart "BART dome")
+base_driver(zelio "Zelio PLC dome")

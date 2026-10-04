@@ -8,12 +8,12 @@ target_include_directories(base_focusd PUBLIC
 
 target_link_libraries(base_focusd PUBLIC base_kernel)
 
-add_subdirectory(dummy)
-add_subdirectory(tefo)
-add_subdirectory(aaf)
-add_subdirectory(optec)
-add_subdirectory(nstep)
+base_driver(dummy "Simulated focuser")
+base_driver(tefo "TEFO focuser")
+base_driver(aaf "AAF focuser")
+base_driver(optec "Optec focuser")
+base_driver(nstep "NSTEP focuser")
 
-if(FLI_INCLUDE_DIR AND FLI_LIBRARY)
+if(BASE_HAVE_FLI)
 	add_subdirectory(fli)
 endif()
