@@ -1,0 +1,95 @@
+Changelog
+=========
++ 0.12.1 | 0.11.1:
+    + Fix gain for C1+46000 and C2-46000 CMOS cameras
++ 0.12.0 | 0.11.0:
+    + Added support for C1+46000 and C2-46000 CMOS cameras
++ 0.11.1 | 0.10.1:
+    + Attempt to fix `gxccd_set_temperature` overflow with old GX cameras
++ 0.11.0 | 0.10.0:
+    + Added new camera PIDs
+    + Fixed macOS exposure issue
++ 0.10.0 | 0.9.0:
+    + Added support for new standalone filter wheel and C0 cameras
+    + New functions:
+        + `gxfw_enumerate_usb` /  `gxfw_enumerate_eth`
+        + `gxfw_initialize_usb` / `gxfw_initialize_eth`
+        + `gxfw_release`
+        + `gxfw_get_boolean_parameter`
+        + `gxfw_get_integer_parameter`
+        + `gxfw_get_string_parameter`
+        + `gxfw_enumerate_filters`
+        + `gxfw_set_filter`
+        + `gxfw_reinit_filter_wheel`
++ 0.9.0 | 0.8.0:
+    + Added new camera PIDs
++ 0.8.3 | 0.7.3:
+    + Added continuous exposure support for C4 cameras
++ 0.8.2 | 0.7.2:
+    + Added trigger and continuous exposure support from 0.8.0/0.7.0 to the ETH adapter branch
+    + Added functions `gxccd_open_shutter` and `gxccd_close_shutter`
++ 0.8.1 | 0.7.1:
+    + Fixed macOS ARM linkage issue
+    + Improved GPS handling
+    + Fixed hardware 2x2 binning with subframe
++ 0.8.0 | 0.7.0:
+    + Added support for C2-9000 CMOS camera
+    + Added trigger and continuous exposure support - parameters `GBP_TRIGGER` and `GBP_CONTINUOUS_EXPOSURES`, functions `gxccd_start_exposure_trigger` and `gxccd_read_image_exposure`
++ 0.7.2 | 0.6.2:
+    + Fixed GPS time handling
++ 0.7.1 | 0.6.1:
+    + Added support for setting binning parameters in config file
+    + Added new camera PIDs
++ 0.7.0 | 0.6.0:
+    + Added LICENSE file
+    + Added support for C5 CMOS cameras
+    + Added support for setting hardware binning in config file
+    + Added GPS support - parameter `GBP_GPS` and functions `gxccd_get_image_time_stamp` and `gxccd_get_gps_data`
++ 0.6.7 | 0.5.1:
+    + Fixed macOS Monterey issue when camera was not ready after fw upload and did not connect afterwards
++ 0.6.7 | 0.5.0:
+    + Fixed memory leak during C1x/C3 image read
++ 0.6.7 | 0.5.0:
+    + Added parameter `GBP_HEX_VERSION_NUMBER`
++ 0.6.6 | 0.5.0:
+    + Improved C1x/C3 image transform
++ 0.6.5 | 0.5.0:
+    + Added "16-bit" lo-gain read mode for C4
++ 0.6.4 | 0.5.0:
+    + Improved C1x/C3 subframe and image transform
++ 0.6.3 | 0.5.0:
+    + Fixed C1x/C3 image read
++ 0.6.2 | 0.5.0:
+    + Added support for C1x and C3 cameras
++ 0.6.1 | 0.5.0:
+    + Added support for C4 CMOS cameras
++ 0.5.6 | 0.4.6:
+    + Fixed bug with temperature setting - when it was higher than 58, it overflowed and a negative temperature was set
++ 0.5.5 | 0.4.5:
+    + Added support for C1+ CMOS cameras
++ 0.5.0 | 0.4.0:
+    + Added support for C1(A) and C2(A) CMOS cameras
+    + Added parameters `GBP_ELECTRONIC_SHUTTER` and `GIP_MAX_PIXEL_VALUE`
++ 0.4.2 | 0.3.1:
+    + Added support for C2 CMOS cameras
+    + Fixed exposures for C1 cameras
+    + Added functions `gxccd_set_gain`, `gxccd_convert_gain` and `gxccd_reinit_filter_wheel`
++ 0.4.0 | 0.3.0:
+    + Added support for C1 CMOS cameras
++ 0.3.5 | 0.2.5:
+    + Fixed max binning and suframe parameters for G0/G1 cameras
++ 0.3.4 | 0.2.4:
+    + Improved handling of other commands when camera is reading image
++ 0.3.3 | 0.2.2:
+    + Improved handling of libusb commands
++ 0.3.1 | 0.2.1:
+    + Library now automatically clears sensor every 15 s (can be configured in config file)
+    + Improved error handling and reporting to the user
++ 0.2.4 | 0.1.0:
+    + Initial macOS version 0.1.0
+    + Fixed temp. reading for cameras with onewire sensor
++ 0.2.3:
+    + Improved libusb opening/closing device
+    + Image read is now handled in blocks
++ 0.2.0:
+    + Initial release
