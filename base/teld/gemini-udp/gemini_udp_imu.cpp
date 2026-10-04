@@ -594,6 +594,9 @@ class GeminiUDP:public Telescope
 		double imuStallPendingSince;
 		double imuStallRestSince;
 		std::string imuStallReason;
+		double imuStallLastAxisTs;
+		int32_t imuStallLastRa, imuStallLastDec;
+		bool imuStallStill;
 		bool imuStallCheckPossible () const { return imu && imuCalibrated && imuConnectedValue->getValueBool () && imuAutoVerifyValue->getValueBool (); }
 		// RECOVER_STOPPING: true when the recovery may go on (counters agree,
 		// or no check pending); false to keep waiting; an incident is raised
@@ -898,6 +901,9 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuStallCheckPending = false;
 	imuStallPendingSince = 0;
 	imuStallRestSince = NAN;
+	imuStallLastAxisTs = 0;
+	imuStallLastRa = imuStallLastDec = 0;
+	imuStallStill = false;
 	createValue (imuMaxErrorValue, "imu_max_error", "[deg] IMU vs counters disagreement that counts", false, RTS2_VALUE_WRITABLE);
 	imuMaxErrorValue->setValueDouble (2.0);
 	createValue (imuConfirmValue, "imu_confirm", "consecutive rest checks that must disagree before imu_action is taken", false, RTS2_VALUE_WRITABLE);
@@ -2703,6 +2709,8 @@ void GeminiUDP::checkSafety (const GeminiStatus &st)
 				imuStallCheckPending = true;
 				imuStallPendingSince = getNow ();
 				imuStallRestSince = NAN;
+				imuStallLastAxisTs = 0;
+				imuStallStill = false;
 				imuStallReason = st.moveFailReason;
 				logStream (MESSAGE_WARNING) << "GeminiUDP: " << st.moveFailReason << " - the IMU checks the counters where it stopped before the move is retried" << sendLog;
 				return;
@@ -4054,8 +4062,26 @@ void GeminiUDP::startImuAutoVerify ()
 	appendIncidentLine ("IMU auto-verify started after the incident");
 }
 
-bool GeminiUDP::imuStallCheck (const GeminiStatus &st, bool atRest)
+bool GeminiUDP::imuStallCheck (const GeminiStatus &st, bool)
 {
+	// Still the way the rest check means it: Dec unchanged, RA at most at a
+	// tracking rate. Not the recovery's "counters exactly unchanged": the
+	// worm keeps turning after the :Q# (on 2026-10-04 01:15 the check waited
+	// 60 s for a rest that never came and the stall became an incident).
+	if (st.axisValid && st.geometry.valid && st.axisTimestamp != imuStallLastAxisTs)
+	{
+		if (imuStallLastAxisTs > 0)
+		{
+			double dt = std::max (1.0, st.axisTimestamp - imuStallLastAxisTs);
+			imuStallStill = st.decAxisTicks == imuStallLastDec
+				&& fabs ((double) st.raAxisTicks - imuStallLastRa) / st.geometry.ticksPerDeg () <= 0.02 * dt
+				&& st.moveRate != 'S' && st.moveRate != 'C';
+		}
+		imuStallLastAxisTs = st.axisTimestamp;
+		imuStallLastRa = st.raAxisTicks;
+		imuStallLastDec = st.decAxisTicks;
+	}
+	bool atRest = imuStallStill;
 	auto fail = [&] (const std::string &why)
 	{
 		imuStallCheckPending = false;
@@ -4749,8 +4775,12 @@ void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 // uncertainty (and inside the counters' window, or the mount would refuse
 // it), and with the tube at least imu_probe_min_alt high all the way - an RA
 // axis turn sweeps the tube along a circle of constant declination, so the
-// path is checked, not just its end. Never blind: a fit known worse than 3 deg
-// makes no step at all.
+// path is checked, not just its end. Never blind: a fit known worse than 10
+// deg makes no step at all. (It was 3: on 2026-10-04 the auto-verify at CWD,
+// on a cold sensor, had a candidate at +-4.8 deg, made no larger step and
+// left the mount locked for the rest of the night. Each candidate's own
+// limits margin, 3 sigma + 2 deg, already covers the uncertainty, and from
+// CWD an RA turn of a few tens of degrees keeps the tube near the pole.)
 bool GeminiUDP::startImuProbeFarStep (const GeminiStatus &st, const std::vector<ImuMountModel::AxisSolution> &plausible, double noise, std::string &why)
 {
 	auto wrap = [] (double a) { return ln_range_degrees (a + 180.0) - 180.0; };
@@ -4764,7 +4794,7 @@ bool GeminiUDP::startImuProbeFarStep (const GeminiStatus &st, const std::vector<
 		return false;
 	}
 	for (const auto &c : plausible)
-		if (c.condDeg * noise > 3.0)
+		if (c.condDeg * noise > 10.0)
 		{
 			why = "a possible position is known only to +-" + std::to_string (c.condDeg * noise) + " deg - no larger step from that";
 			return false;
