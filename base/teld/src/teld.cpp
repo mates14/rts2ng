@@ -1643,6 +1643,14 @@ void Telescope::setTelLongLat (double longitude, double latitude)
 	cos_lat = cos (ln_deg_to_rad (latitude));
 	sin_lat = sin (ln_deg_to_rad (latitude));
 	tan_lat = sin_lat / cos_lat;
+
+	// The pointing model is created in init(), with getLatitude () - which
+	// is NaN there for drivers that read their site in initValues() (the
+	// Gemini UDP drivers do). Its latitude-dependent terms (TF, DAF, ...)
+	// then made every correction NaN, and the T0 model was never applied
+	// (SBT, night 2026-10-03/04).
+	if (model)
+		model->setLatitude (latitude);
 }
 
 void Telescope::setTelAltitude (float altitude)

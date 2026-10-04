@@ -93,6 +93,17 @@ class TelModel
 
 		double getLatitudeRadians () { return tel_latitude_r; }
 
+		/**
+		 * The latitude is known only once the driver has read its site -
+		 * Telescope::setTelLongLat() passes it on. The model is created
+		 * earlier, in Telescope::init().
+		 */
+		void setLatitude (double in_latitude)
+		{
+			tel_latitude = in_latitude;
+			tel_latitude_r = ln_deg_to_rad (in_latitude);
+		}
+
 	protected:
 		double tel_latitude;
 		double tel_latitude_r;
