@@ -427,7 +427,13 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
   /* wait for the transfer to complete */
   usb_sg_wait(&s_sgreq);
 
+// del_timer_sync() was renamed timer_delete_sync() in 6.2, the old name
+// removed in 6.15
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION (6,2,0))
+  timer_delete_sync(&dev->usbsg.timer);
+#else
   del_timer_sync(&dev->usbsg.timer);
+#endif
 
   if (s_sgreq.status)
   {

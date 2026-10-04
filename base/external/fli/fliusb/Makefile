@@ -3,11 +3,11 @@ obj-m		:= fliusb.o
 KDIR		?= /lib/modules/$(shell uname -r)/build
 PWD		:= $(shell pwd)
 
-EXTRA_CFLAGS		+= -O2 -Wall
+ccflags-y		+= -O2 -Wall
 
-#EXTRA_CFLAGS		+= -DDEBUG	# enable debug messages
-#EXTRA_CFLAGS		+= -DASYNCWRITE	# enable asynchronous writes
-EXTRA_CFLAGS		+= -DSGREAD	# enable scatter-gather reads
+#ccflags-y		+= -DDEBUG	# enable debug messages
+#ccflags-y		+= -DASYNCWRITE	# enable asynchronous writes
+ccflags-y		+= -DSGREAD	# enable scatter-gather reads
 
 all: module cleanup
 
