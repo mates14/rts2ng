@@ -91,8 +91,7 @@ typedef struct {
   struct page *userpg[NUMSGPAGE];
   struct scatterlist slist[NUMSGPAGE];
   unsigned int maxpg;
-  struct usb_sg_request sgreq;
-  struct timer_list timer;
+   struct timer_list timer;
   struct semaphore sem;
 } fliusbsg_t;
 
@@ -113,6 +112,8 @@ typedef struct {
 #endif
 
   unsigned int timeout;	/* timeout for bulk transfers in milliseconds */
+
+  unsigned char bDisconnected;
 
   struct usb_device *usbdev;
   struct usb_interface *interface;

@@ -44,22 +44,20 @@
 #include <linux/version.h>
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/mutex.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/errno.h>
 #include <linux/usb.h>
 #include <linux/fs.h>
 #include <linux/fcntl.h>
-#include <asm/uaccess.h>
 #include <linux/slab.h>
-
+#include <asm/uaccess.h>
 
 #ifdef SGREAD
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/scatterlist.h>
-#include <asm/scatterlist.h>
+//#include <asm/scatterlist.h>
 #endif
 
 #include "fliusb.h"
@@ -67,7 +65,15 @@
 
 MODULE_AUTHOR("Finger Lakes Instrumentation, L.L.C. <support@flicamera.com>");
 MODULE_LICENSE("Dual BSD/GPL");
-MODULE_VERSION("1.1");
+MODULE_VERSION("1.5");
+
+/* initMUTEX was removed in 2.6.37 */
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36) && !defined(init_MUTEX)
+#define init_MUTEX(sem)	sema_init(sem, 1)
+#endif 
+
+struct mutex fliusb_mutex;
 
 /* Module parameters */
 typedef struct {
@@ -79,8 +85,6 @@ static fliusb_param_t defaults = {
   .buffersize =	FLIUSB_BUFFERSIZE,
   .timeout =	FLIUSB_TIMEOUT,
 };
-
-struct mutex flimutex;
 
 #define FLIUSB_MOD_PARAMETERS						     \
   FLIUSB_MOD_PARAM(buffersize, uint, "USB bulk transfer buffer size")	     \
@@ -115,11 +119,11 @@ static ssize_t fliusb_read(struct file *file, char __user *buffer,
 			   size_t count, loff_t *ppos);
 static ssize_t fliusb_write(struct file *file, const char __user *user_buffer,
 			    size_t count, loff_t *ppos);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
-static int fliusb_ioctl(struct inode *inode, struct file *file,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36)
+static long fliusb_ioctl(struct file *file,
 			unsigned int cmd, unsigned long arg);
 #else
-static long fliusb_ioctl(struct file *file,
+static int fliusb_ioctl(struct inode *inode, struct file *file,
 			unsigned int cmd, unsigned long arg);
 #endif
 
@@ -127,11 +131,11 @@ static struct file_operations fliusb_fops = {
   .owner		= THIS_MODULE,
   .read			= fliusb_read,
   .write		= fliusb_write,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
-  .ioctl		= fliusb_ioctl,
-#else
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36)
   .unlocked_ioctl	= fliusb_ioctl,
-#endif  
+#else
+  .ioctl		= fliusb_ioctl,
+#endif
   .open			= fliusb_open,
   .release		= fliusb_release,
 };
@@ -211,6 +215,8 @@ static int fliusb_open(struct inode *inode, struct file *file)
 
   minor = iminor(inode);
 
+  mutex_lock(&fliusb_mutex);
+
   if ((interface = usb_find_interface(&fliusb_driver, minor)) == NULL)
   {
     FLIUSB_ERR("no interface found for minor number %d", minor);
@@ -228,6 +234,8 @@ static int fliusb_open(struct inode *inode, struct file *file)
 
   /* save a pointer to the device structure for later use */
   file->private_data = dev;
+
+  mutex_unlock(&fliusb_mutex);
 
   return 0;
 }
@@ -257,7 +265,11 @@ static int fliusb_simple_bulk_read(fliusb_t *dev, unsigned int pipe,
   if (count > dev->buffersize)
     count = dev->buffersize;
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 0, 0)
+  if (!access_ok(userbuffer, count))
+#else
   if (!access_ok(VERIFY_WRITE, userbuffer, count))
+#endif
     return -EFAULT;
 
   if (down_interruptible(&dev->buffsem))
@@ -282,13 +294,15 @@ static int fliusb_simple_bulk_read(fliusb_t *dev, unsigned int pipe,
 }
 
 #ifdef SGREAD
+struct usb_sg_request s_sgreq;
 
-static void fliusb_sg_bulk_read_timeout(unsigned long data)
+static void fliusb_sg_bulk_read_timeout(struct timer_list *pTimer)
 {
-  fliusb_t *dev = (fliusb_t *)data;
+  //fliusb_t *dev = (fliusb_t *)data;
 
   FLIUSB_ERR("bulk read timed out");
-  usb_sg_cancel(&dev->usbsg.sgreq);
+  usb_sg_cancel(&s_sgreq);
+  //usb_sg_cancel(&dev->usbsg.sgreq);
 
   return;
 }
@@ -304,9 +318,9 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
   /* userbuffer must be aligned to a multiple of the endpoint's
      maximum packet size
   */
-  if ((size_t)userbuffer % usb_maxpacket(dev->usbdev, pipe, 0))
+  if ((size_t)userbuffer % usb_maxpacket(dev->usbdev, pipe))
   {
-    FLIUSB_ERR("user buffer is not properly aligned: 0x%p %% 0x%04x", userbuffer, usb_maxpacket(dev->usbdev, pipe, 0));
+    FLIUSB_ERR("user buffer is not properly aligned: 0x%p %% 0x%04x", userbuffer, usb_maxpacket(dev->usbdev, pipe));
     return -EINVAL;
   }
 
@@ -321,10 +335,40 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
   if (down_interruptible(&dev->usbsg.sem))
     return -ERESTARTSYS;
 
-  down_read(&current->mm->mmap_sem);
-  numpg = get_user_pages(current, current->mm, (size_t)userbuffer & PAGE_MASK,
-			 numpg, 1, 0, dev->usbsg.userpg, NULL);
-  up_read(&current->mm->mmap_sem);
+  down_read(&current->mm->mmap_lock);
+
+// EDIT2 (13.1.2023) - v jadre 4.19 se to opet zmenilo, pribyl dalsi parametr na konci, z:
+//long get_user_pages_remote(struct task_struct *tsk, struct mm_struct *mm,
+//			    unsigned long start, unsigned long nr_pages,
+//			    unsigned int gup_flags, struct page **pages,
+//			    struct vm_area_struct **vmas);
+// se to zmenilo na:
+//long get_user_pages_remote(struct task_struct *tsk, struct mm_struct *mm,
+//                          unsigned long start, unsigned long nr_pages,
+//                          unsigned int gup_flags, struct page **pages,
+//                          struct vm_area_struct **vmas, int *locked);
+// Takhle narychle mi neni tak uplne jasny, co to znamena, nasel jsem ale nekde zdrojak, ze kdyz "owner", tak je 0, jinak 1...
+// Zkusim teda dat 0 :-D.
+//
+//  numpg = get_user_pages((size_t)userbuffer & PAGE_MASK,
+//			 numpg, FOLL_WRITE, dev->usbsg.userpg, NULL);
+//  numpg = get_user_pages((size_t)userbuffer & PAGE_MASK,
+//			 numpg, FOLL_WRITE, dev->usbsg.userpg, NULL, 0);
+// EDIT3 (9.7.2026) - v jadre 6.5 zmizel parametr vmas uplne, z:
+//long get_user_pages(unsigned long start, unsigned long nr_pages,
+//		     unsigned int gup_flags, struct page **pages,
+//		     struct vm_area_struct **vmas);
+// se to zmenilo na:
+//long get_user_pages(unsigned long start, unsigned long nr_pages,
+//		     unsigned int gup_flags, struct page **pages);
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION (6,5,0))
+  numpg = get_user_pages((size_t)userbuffer & PAGE_MASK,
+			 numpg, FOLL_WRITE, dev->usbsg.userpg);
+#else
+  numpg = get_user_pages((size_t)userbuffer & PAGE_MASK,
+			 numpg, FOLL_WRITE, dev->usbsg.userpg, NULL);
+#endif
+  up_read(&current->mm->mmap_lock);
 
   if (numpg <= 0)
   {
@@ -368,7 +412,7 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
 #endif
   }
 
-  if ((err = usb_sg_init(&dev->usbsg.sgreq, dev->usbdev, pipe, 0,
+  if ((err = usb_sg_init(&s_sgreq, dev->usbdev, pipe, 0,
 			 dev->usbsg.slist, numpg, 0, GFP_KERNEL)))
   {
     FLIUSB_ERR("usb_sg_init() failed: %d", err);
@@ -376,24 +420,24 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
   }
 
   dev->usbsg.timer.expires = jiffies + (timeout * HZ + 500) / 1000;
-  dev->usbsg.timer.data = (unsigned long)dev;
-  dev->usbsg.timer.function = fliusb_sg_bulk_read_timeout;
+  //dev->usbsg.timer.data = (unsigned long)dev;
+  //dev->usbsg.timer.function = fliusb_sg_bulk_read_timeout;
   add_timer(&dev->usbsg.timer);
 
   /* wait for the transfer to complete */
-  usb_sg_wait(&dev->usbsg.sgreq);
+  usb_sg_wait(&s_sgreq);
 
   del_timer_sync(&dev->usbsg.timer);
 
-  if (dev->usbsg.sgreq.status)
+  if (s_sgreq.status)
   {
-    FLIUSB_ERR("bulk read error %d; transfered %zd bytes",
-	       dev->usbsg.sgreq.status, dev->usbsg.sgreq.bytes);
-    err = dev->usbsg.sgreq.status;
+    FLIUSB_ERR("bulk read error %d; transfered %d bytes",
+	       (int) s_sgreq.status, (int) s_sgreq.bytes);
+    err = s_sgreq.status;
     goto done;
   }
 
-  err = dev->usbsg.sgreq.bytes;
+  err = s_sgreq.bytes;
 
  done:
 
@@ -403,7 +447,7 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
   {
     if (!PageReserved(dev->usbsg.userpg[i]))
       SetPageDirty(dev->usbsg.userpg[i]);
-    page_cache_release(dev->usbsg.userpg[i]);
+    put_page(dev->usbsg.userpg[i]);
   }
 
   return err;
@@ -416,7 +460,7 @@ static int fliusb_bulk_read(fliusb_t *dev, unsigned int pipe,
 			    unsigned int timeout)
 {
   FLIUSB_DBG("pipe: 0x%08x; userbuffer: %p; count: %u; timeout: %u",
-	     pipe, userbuffer, count, timeout);
+	     pipe, userbuffer, (unsigned int)count, timeout);
 
 #ifdef SGREAD
   if (count > dev->buffersize)
@@ -434,8 +478,8 @@ static int fliusb_bulk_write(fliusb_t *dev, unsigned int pipe,
 {
   int err, cnt;
 
-  FLIUSB_DBG("pipe: 0x%08x; userbuffer: %p; count: %u; timeout: %u",
-	     pipe, userbuffer, count, timeout);
+  FLIUSB_DBG("dev: %p, pipe: 0x%08x; userbuffer: %p; count: %u; timeout: %u",
+	     dev,pipe, userbuffer, (unsigned int)count, timeout);
 
   if (count > dev->buffersize)
     count = dev->buffersize;
@@ -454,6 +498,9 @@ static int fliusb_bulk_write(fliusb_t *dev, unsigned int pipe,
 			  timeout)))
   {
     cnt = err;
+    // reset USB in case of an error
+    err = usb_reset_configuration (dev->usbdev);
+    FLIUSB_DBG("configuration return: %d", err);
   }
 
  done:
@@ -498,7 +545,11 @@ static int fliusb_bulk_write(fliusb_t *dev, unsigned int pipe,
   FLIUSB_DBG("pipe: 0x%08x; userbuffer: %p; count: %u; timeout: %u",
 	     pipe, userbuffer, count, timeout);
 
-  if (!access_ok(VERIFY_READ, userbuffer, count))
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 0, 0)
+  if (!access_ok(userbuffer, count))
+#else
+  if (!access_ok(VERIFY_WRITE, userbuffer, count))
+#endif
     return -EFAULT;
 
   if ((urb = usb_alloc_urb(0, GFP_KERNEL)) == NULL)
@@ -574,11 +625,11 @@ static ssize_t fliusb_write(struct file *file, const char __user *userbuffer,
 			   userbuffer, count, dev->timeout);
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
-static int fliusb_ioctl(struct inode *inode, struct file *file,
-			unsigned int cmd, unsigned long arg)
-#else
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36)
 static long fliusb_ioctl(struct file *file,
+                        unsigned int cmd, unsigned long arg)
+#else
+static int fliusb_ioctl(struct inode *inode, struct file *file,
 			unsigned int cmd, unsigned long arg)
 #endif
 {
@@ -590,14 +641,25 @@ static long fliusb_ioctl(struct file *file,
     fliusb_string_descriptor_t strdesc;
   } tmp;
   unsigned int tmppipe;
+  long lResult;
   int err;
 
-  FLIUSB_DBG("cmd: %p; arg: %p", (void *)cmd, (void *)arg);
+  FLIUSB_DBG("cmd: 0x%x; arg: %p", cmd, (void *)arg);
 
   if (_IOC_TYPE(cmd) != FLIUSB_IOC_TYPE || _IOC_NR(cmd) > FLIUSB_IOC_MAX)
     return -ENOTTY;
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 0, 0)
   /* Check that arg can be read from */
+  if ((_IOC_DIR(cmd) & _IOC_WRITE) &&
+      !access_ok((void __user *)arg, _IOC_SIZE(cmd)))
+    return -EFAULT;
+
+  /* Check that arg can be written to */
+  if ((_IOC_DIR(cmd) & _IOC_READ) &&
+      !access_ok((void __user *)arg, _IOC_SIZE(cmd)))
+    return -EFAULT;
+#else
   if ((_IOC_DIR(cmd) & _IOC_WRITE) &&
       !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd)))
     return -EFAULT;
@@ -606,9 +668,9 @@ static long fliusb_ioctl(struct file *file,
   if ((_IOC_DIR(cmd) & _IOC_READ) &&
       !access_ok(VERIFY_WRITE, (void __user *)arg, _IOC_SIZE(cmd)))
     return -EFAULT;
+#endif
 
   dev = (fliusb_t *)file->private_data;
-
   switch (cmd)
   {
 #define FLIUSB_IOC_GETCMD(cmd, val, type)	\
@@ -631,7 +693,7 @@ static long fliusb_ioctl(struct file *file,
     if (__get_user(tmp.uint8, (u_int8_t __user *)arg))
       return -EFAULT;
     tmppipe = usb_rcvbulkpipe(dev->usbdev, tmp.uint8);
-    if (usb_maxpacket(dev->usbdev, tmppipe, 0) == 0)
+    if (usb_maxpacket(dev->usbdev, tmppipe) == 0)
     {
       FLIUSB_ERR("invalid read USB bulk transfer endpoint address: 0x%02x",
 		 tmp.uint8);
@@ -645,7 +707,7 @@ static long fliusb_ioctl(struct file *file,
     if (__get_user(tmp.uint8, (u_int8_t __user *)arg))
       return -EFAULT;
     tmppipe = usb_sndbulkpipe(dev->usbdev, tmp.uint8);
-    if (usb_maxpacket(dev->usbdev, tmppipe, 1) == 0)
+    if (usb_maxpacket(dev->usbdev, tmppipe) == 0)
     {
       FLIUSB_ERR("invalid write USB bulk transfer endpoint address: 0x%02x",
 		 tmp.uint8);
@@ -677,17 +739,36 @@ static long fliusb_ioctl(struct file *file,
     if (__copy_from_user(&tmp.bulkxfer, (fliusb_bulktransfer_t __user *)arg,
 			 sizeof(fliusb_bulktransfer_t)))
       return -EFAULT;
-    tmppipe = usb_rcvbulkpipe(dev->usbdev, tmp.bulkxfer.ep);
-    return fliusb_bulk_read(dev, tmppipe, tmp.bulkxfer.buf,
-			    tmp.bulkxfer.count, tmp.bulkxfer.timeout);
+
+    mutex_lock(&fliusb_mutex);
+    if (!(dev->bDisconnected))
+	{
+		tmppipe = usb_rcvbulkpipe(dev->usbdev, tmp.bulkxfer.ep);
+		lResult= fliusb_bulk_read(dev, tmppipe, tmp.bulkxfer.buf,
+					tmp.bulkxfer.count, tmp.bulkxfer.timeout);
+	}
+    else
+    	lResult= -EPIPE;
+    mutex_unlock(&fliusb_mutex);
+    return(lResult);
 
   case FLIUSB_BULKWRITE:
     if (__copy_from_user(&tmp.bulkxfer, (fliusb_bulktransfer_t __user *)arg,
 			 sizeof(fliusb_bulktransfer_t)))
       return -EFAULT;
-    tmppipe = usb_sndbulkpipe(dev->usbdev, tmp.bulkxfer.ep);
-    return fliusb_bulk_write(dev, tmppipe, tmp.bulkxfer.buf,
-			     tmp.bulkxfer.count, tmp.bulkxfer.timeout);
+
+    mutex_lock(&fliusb_mutex);
+    if (!(dev->bDisconnected))
+	{
+		tmppipe = usb_sndbulkpipe(dev->usbdev, tmp.bulkxfer.ep);
+		lResult= fliusb_bulk_write(dev, tmppipe, tmp.bulkxfer.buf,
+					 tmp.bulkxfer.count, tmp.bulkxfer.timeout);
+	}
+    else
+    	lResult= -EPIPE;
+    mutex_unlock(&fliusb_mutex);
+
+    return(lResult);
 
   case FLIUSB_GET_DEVICE_DESCRIPTOR:
     if (__copy_to_user((void *)arg, &dev->usbdev->descriptor,
@@ -784,14 +865,14 @@ static int fliusb_initdev(fliusb_t **dev, struct usb_interface *interface,
   }
 
   /* Check that the endpoints exist */
-  if (usb_maxpacket(tmpdev->usbdev, tmpdev->rdbulkpipe, 0) == 0)
+  if (usb_maxpacket(tmpdev->usbdev, tmpdev->rdbulkpipe) == 0)
   {
     FLIUSB_ERR("invalid read USB bulk transfer endpoint address: 0x%02x",
 	       usb_pipeendpoint(tmpdev->rdbulkpipe) | USB_DIR_IN);
     err = -ENXIO;
     goto fail;
   }
-  if (usb_maxpacket(tmpdev->usbdev, tmpdev->wrbulkpipe, 1) == 0)
+  if (usb_maxpacket(tmpdev->usbdev, tmpdev->wrbulkpipe) == 0)
   {
     FLIUSB_ERR("invalid write USB bulk transfer endpoint address: 0x%02x",
 	       usb_pipeendpoint(tmpdev->wrbulkpipe) | USB_DIR_OUT);
@@ -799,22 +880,15 @@ static int fliusb_initdev(fliusb_t **dev, struct usb_interface *interface,
     goto fail;
   }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
   init_MUTEX(&tmpdev->buffsem);
-#else
-  sema_init(&tmpdev->buffsem, 1);
-#endif  
   if ((err = fliusb_allocbuffer(tmpdev, defaults.buffersize)))
     goto fail;
 
 #ifdef SGREAD
   tmpdev->usbsg.maxpg = NUMSGPAGE;
-  init_timer(&tmpdev->usbsg.timer);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)  
+  //init_timer(&tmpdev->usbsg.timer);
+  timer_setup(&tmpdev->usbsg.timer,fliusb_sg_bulk_read_timeout,0);
   init_MUTEX(&tmpdev->usbsg.sem);
-#else
-  sema_init(&tmpdev->usbsg.sem, 1);
-#endif  
 #endif /* SGREAD */
 
   if ((err = usb_string(tmpdev->usbdev, tmpdev->usbdev->descriptor.iProduct,
@@ -870,18 +944,22 @@ static void fliusb_disconnect(struct usb_interface *interface)
   /* this is to block entry to fliusb_open() while the device is being
      disconnected
   */
-  mutex_lock(&flimutex);
+  mutex_lock(&fliusb_mutex);
 
   dev = usb_get_intfdata(interface);
+
   usb_set_intfdata(interface, NULL);
 
   /* give back the minor number we were using */
   usb_deregister_dev(interface, &fliusb_class);
 
-  mutex_unlock(&flimutex);
 
   /* decrement usage count */
   kref_put(&dev->kref, fliusb_delete);
+
+  dev->bDisconnected= 1;
+
+  mutex_unlock(&fliusb_mutex);
 
   FLIUSB_INFO("FLI USB device disconnected");
 }
@@ -893,7 +971,7 @@ static int __init fliusb_init(void)
   if ((err = usb_register(&fliusb_driver)))
     FLIUSB_ERR("usb_register() failed: %d", err);
 
-  mutex_init(&flimutex);
+  mutex_init(&fliusb_mutex);
 
   FLIUSB_INFO(FLIUSB_NAME " module loaded");
 
