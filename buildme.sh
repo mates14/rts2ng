@@ -166,6 +166,18 @@ mkdir -p "$(dirname "$SITE")"
 [ -f "$SITE" ] || echo "# Written by rts2ng buildme.sh - per-machine settings, read with cmake -C" > "$SITE"
 ask_sdk ANDOR  BASE_ANDOR_SDK_DIR "Andor SDK (include/atmcdLXd.h, lib/libandor*)"
 ask_sdk PARACL BASE_PARACL_DIR    "paracl source (libmks3.c)"
+# An override of a bundled library whose tree is gone would fail the
+# configure (the options are ON) instead of falling back to the bundled
+# copy - drop it from the site file.
+for var in BASE_FLI_SDK_DIR BASE_GXCCD_SDK_DIR; do
+    cur=$(site_get $var)
+    if [ -n "$cur" ] && [ ! -d "$cur" ]; then
+        echo "==> $var: $cur does not exist, removed from $SITE - using the bundled copy"
+        tmp=$(mktemp)
+        grep -v "^set($var " "$SITE" > "$tmp"
+        mv "$tmp" "$SITE"
+    fi
+done
 # base/debian/rules picks these up via `?=`
 export BASE_FLI_SDK_DIR="$(site_get BASE_FLI_SDK_DIR)"
 export BASE_ANDOR_SDK_DIR="$(site_get BASE_ANDOR_SDK_DIR)"
