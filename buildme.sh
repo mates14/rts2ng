@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-source ~/.gnupg-repo.conf
+GPG_CONF=~/.gnupg-repo.conf
+test -e $GPG_CONF && source $GPG_CONF
 # GNUPGHOME=~/.gnupg-repo
 # REPO_GPG_KEY=something
 
