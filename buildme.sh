@@ -14,7 +14,8 @@ usage: $0 [-c] [-r] [-d] [-s] [module ...]
   -c      open ccmake on each module's build dir before building
   -r      start over: ask for the SDK paths again (previous answers
           prefilled) and wipe the build dirs
-  -d      build .deb packages
+  -d      build .deb packages, then offer to rsync dist/<os>/<codename>/
+          to \$RTS2NG_UPLOAD (default lascaux.asu.cas.cz:public_html/rts2ng)
   -s      build source packages
 modules: base db web gui python (default: all)
 USAGE
@@ -313,4 +314,23 @@ fi
 if [ $build_deb == 1 ] || [ $build_src == 1 ]; then
     echo "==> Packages in $DIST_DIR:"
     ls -la "$DIST_DIR"
+fi
+
+# Publish the repository: dist/<os>/<codename>/ mirrors to
+# $RTS2NG_UPLOAD/<os>/<codename>/ (--delete, so packages dropped here
+# vanish there too). Asked only on a terminal - an unattended build never
+# publishes. The remote mkdir lets a new distribution go up without
+# preparing its directory by hand first.
+RTS2NG_UPLOAD="${RTS2NG_UPLOAD:-lascaux.asu.cas.cz:public_html/rts2ng}"
+if [ $build_deb == 1 ] && [ -t 0 ]; then
+    up_host="${RTS2NG_UPLOAD%%:*}"
+    up_dir="${RTS2NG_UPLOAD#*:}/$ID/$VERSION_CODENAME"
+    read -p "Upload the packages to $up_host:$up_dir/? [Y/n]: " ans
+    case "$ans" in
+        ""|[Yy]*)
+            rsync -av --delete --rsync-path="mkdir -p '$up_dir' && rsync" \
+                "$DIST_DIR/" "$up_host:$up_dir/"
+            ;;
+        *)  echo "==> Not uploaded" ;;
+    esac
 fi
