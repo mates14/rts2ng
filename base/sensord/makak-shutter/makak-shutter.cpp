@@ -395,13 +395,13 @@ int MakakShutter::setValue (rts2core::Value *old_value, rts2core::Value *new_val
 			}
 			return -2;
 		}
-		int ret = sendCommand (v ? 'o' : 'c');
-		if (ret == 0)
-		{
-			wantShutter = v;
-			wantShutterTime = getNow ();
-		}
-		return ret ? -2 : 0;
+		// set before sending: the reply is checked against it, and the
+		// previous request may be minutes old (setting the shutter to the
+		// state it already has does not get here), which would look like
+		// a shutter stuck past shutter_timeout
+		wantShutter = v;
+		wantShutterTime = getNow ();
+		return sendCommand (v ? 'o' : 'c') ? -2 : 0;
 	}
 
 	if (old_value == heatingSwitch)
