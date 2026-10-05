@@ -440,9 +440,9 @@ int MakakShutter::unitCommand (char c)
 	if (unitConn->writePort (&c, 1) < 0)
 		return -1;
 
-	// one extra line in case the reply is preceded by the help line
-	// the unit prints after a reset
-	for (int i = 0; i < 2; i++)
+	// extra lines in case the reply is preceded by the help line or the
+	// blank line the unit prints while it boots after a reset
+	for (int i = 0; i < 3; i++)
 	{
 		int len = unitConn->readPort (buf, sizeof (buf) - 1, '\n');
 		if (len < 0)
@@ -455,7 +455,7 @@ int MakakShutter::unitCommand (char c)
 		// and shutter character into the driver state; it also read
 		// the reply past its end (see the termination above).
 		ret = sscanf (buf, "H: %f T: %f %7s %d", &hum1, &temp1, shutState, &heater);
-		if (ret == 4 || strncmp (buf, "i = info", 8))
+		if (ret == 4 || (strncmp (buf, "i = info", 8) && buf[strspn (buf, " \r\n")] != '\0'))
 			break;
 	}
 	if (ret != 4)
