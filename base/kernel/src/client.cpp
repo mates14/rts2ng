@@ -27,6 +27,7 @@
 #include <sys/socket.h>
 #include <string.h>
 #include <unistd.h>
+#include <pwd.h>
 #include <fcntl.h>
 
 #include <iostream>
@@ -141,7 +142,14 @@ Client::Client (int in_argc, char **in_argv, const char *_name):Block (in_argc, 
 	central_host = "localhost";
 	central_port = RTS2_CENTRALD_PORT;
 
-	login = getlogin();
+	// base note: classic took cuserid (NULL) here, the port changed it to
+	// getlogin (), which is the user of the login *session* and NULL for
+	// anything started outside one (systemd units, cron) - the client
+	// then sent "login " to centrald, never got device keys and could not
+	// command any device. Take the effective user, as classic did.
+	struct passwd *pw = getpwuid (geteuid ());
+	loginName = pw ? pw->pw_name : std::to_string (geteuid ());
+	login = loginName.c_str ();
 	password = login;
 
 	name = _name;

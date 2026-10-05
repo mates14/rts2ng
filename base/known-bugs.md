@@ -6,7 +6,10 @@ deployment) that are not fixed yet. Bugs inherited from classic RTS2 go to
 
 ---
 
-## Clients started without a login session cannot log in to centrald
+## FIXED: Clients started without a login session cannot log in to centrald
+
+**Fixed:** 2026-10-05 - `Client::Client ()` takes the effective user
+(`getpwuid (geteuid ())`) as classic did.
 
 **Found:** 2026-10-05 on makak (morpheus), from centrald log noise
 **File:** `kernel/src/client.cpp:144` (`Client::Client ()`)

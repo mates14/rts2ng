@@ -160,6 +160,7 @@ class Client:public Block
 	private:
 		const char *central_host;
 		const char *central_port;
+		std::string loginName;
 		const char *login;
 		const char *password;
 
