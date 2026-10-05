@@ -437,6 +437,13 @@ void Daemon::detachFromConsole ()
 	int f = open ("/dev/null", O_RDWR);
 	if (f < 0 || dup (f) < 0 || dup (f) < 0)
 		logStream (MESSAGE_ERROR) << "cannot redirect standard descriptors to /dev/null: " << strerror (errno) << sendLog;
+	// Closing the descriptors is not enough to leave the terminal: without
+	// a session of our own we still have it as controlling tty and still sit
+	// in the starting shell's process group, so a hangup on logout or a
+	// signal sent to that job reaches the daemon. We are a forked child,
+	// never a group leader here, so setsid() cannot fail with EPERM.
+	if (setsid () < 0)
+		logStream (MESSAGE_WARNING) << "cannot start new session: " << strerror (errno) << sendLog;
 }
 
 const char * Daemon::getLockPrefix ()
