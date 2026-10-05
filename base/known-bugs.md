@@ -85,3 +85,30 @@ without the obsolete `cuserid`:
 later `getpw*` call overwrites, so copy it into a `std::string` member if
 anything else in the process uses `getpw*`.) Possibly also make
 `CommandLogin` refuse an empty login loudly instead of sending `login `.
+
+---
+
+## `exec_device` in rts2-scriptexec casts a Client to a Device
+
+**Found:** 2026-10-05, writing the makak observing script in Python
+**File:** `script/src/connexe.cpp` (`ConnExe::processCommand ()`, `exec_device`)
+**Severity:** undefined behaviour; harmless-looking in practice so far
+
+```cpp
+	else if (!strcmp (cmd, "exec_device"))
+	{
+		writeToProcess (((rts2core::Device *) master)->getDeviceName () ? ((rts2core::Device *) master)->getDeviceName () : "None");
+	}
+```
+
+`master` is whatever runs the exe script. In rts2-executor that is a
+`Device`, but in rts2-scriptexec it is a `Client` (`ScriptExec: public
+rts2core::Client`), and the C-style cast reads the `Device` member layout
+from an object that does not have it. Locally it answered an empty line;
+it could as well crash or print garbage. `rts2.scriptcomm.Rts2Comm`
+sends `exec_device` from every `setValue`/`getValue` that names a device,
+so any Python script under rts2-scriptexec hits it.
+
+**Fix (proposed):** `dynamic_cast<rts2core::Device *> (master)` and answer
+`None` when it is not a device. Until then `python/sites/makak/
+kseq-expose.py` overrides `getExecDevice ()`.
