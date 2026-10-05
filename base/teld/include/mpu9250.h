@@ -39,6 +39,7 @@
 #define __RTS2_TELD_MPU9250__
 
 #include <atomic>
+#include <cmath>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -156,6 +157,7 @@ class ImuMountModel
 			double acc[3];		// g, averaged at rest
 			bool magValid = false;
 			double mag[3] = {0, 0, 0};	// uT, raw chip axes, window median
+			double temp = NAN;		// deg C, die temperature; NaN: no temperature term for this sample
 		};
 
 		ImuMountModel ();
@@ -195,10 +197,10 @@ class ImuMountModel
 		double tubeAltitude (double raAxis, double decAxis) const;
 
 		/** the measured accelerometer vector with bias and scale removed, normalised */
-		void correctAcc (const double acc[3], double out[3]) const;
+		void correctAcc (const double acc[3], double out[3], double tempC = NAN) const;
 
 		/** angle between measured and predicted up, deg */
-		double errorDeg (double raAxis, double decAxis, const double acc[3]) const;
+		double errorDeg (double raAxis, double decAxis, const double acc[3], double tempC = NAN) const;
 
 		/**
 		 * Axis angles the sensor says the mount is at, searched from (raAxis,
@@ -207,7 +209,7 @@ class ImuMountModel
 		 * of gravity error along the worst direction; large near the poses
 		 * where the two solutions merge (tube in the meridian plane).
 		 */
-		bool solveAxes (const double acc[3], double raAxis, double decAxis, double &raOut, double &decOut, double &condDeg) const;
+		bool solveAxes (const double acc[3], double raAxis, double decAxis, double &raOut, double &decOut, double &condDeg, double tempC = NAN) const;
 
 		/**
 		 * Every axis position that explains this gravity reading to within
@@ -217,7 +219,7 @@ class ImuMountModel
 		 */
 		// condDeg: axis degrees per degree of gravity noise along the worst direction
 		struct AxisSolution { double raAxis, decAxis, errDeg, condDeg; };
-		std::vector<AxisSolution> solveAll (const double acc[3], double maxErrDeg) const;
+		std::vector<AxisSolution> solveAll (const double acc[3], double maxErrDeg, double tempC = NAN) const;
 
 		/**
 		 * The axis position at the first of two readings, taken before and
@@ -227,12 +229,15 @@ class ImuMountModel
 		 * leaves one good fit where one reading alone leaves two, or a
 		 * whole valley of them on the line itself.
 		 */
-		std::vector<AxisSolution> solveJoint (const double acc1[3], const double acc2[3], double dRa, double dDec, double maxErrDeg) const;
+		std::vector<AxisSolution> solveJoint (const double acc1[3], const double acc2[3], double dRa, double dDec, double maxErrDeg, double temp1 = NAN, double temp2 = NAN) const;
 
 	private:
 		double zen[3];
 		double M[9];		// row-major, sensor axes in tube coordinates (columns)
 		double bias[3];
+		double tempCoef[3];		// g/C, bias = bias + tempCoef (T - TEMP_REF)
+		bool tempModel;
+		static constexpr double TEMP_REF = 25.0;
 		double scale;
 		int raSign, decSign;
 		bool fitted;
@@ -245,7 +250,7 @@ class ImuMountModel
 		int nMagFit;
 
 		void upFromAxes (const double Mr[9], int rs, int ds, double raAxis, double decAxis, double out[3]) const;
-		double fitFrom (const std::vector<CalSample> &samples, double Mr[9], double b[3], double &s, int rs, int ds, bool full, int iterations) const;
+		double fitFrom (const std::vector<CalSample> &samples, double Mr[9], double b[3], double &s, double kc[3], int rs, int ds, bool full, bool temp, int iterations) const;
 };
 
 }

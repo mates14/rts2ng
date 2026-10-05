@@ -549,6 +549,8 @@ ImuMountModel::ImuMountModel ()
 	for (int i = 0; i < 9; i++)
 		M[i] = i % 4 == 0 ? 1 : 0;
 	bias[0] = bias[1] = bias[2] = 0;
+	tempCoef[0] = tempCoef[1] = tempCoef[2] = 0;
+	tempModel = false;
 	scale = 1;
 	raSign = decSign = 1;
 	fitted = false;
@@ -598,21 +600,22 @@ double ImuMountModel::tubeAltitude (double raAxis, double decAxis) const
 	return asin (std::max (-1.0, std::min (1.0, up[2]))) / DEG;
 }
 
-void ImuMountModel::correctAcc (const double acc[3], double out[3]) const
+void ImuMountModel::correctAcc (const double acc[3], double out[3], double tempC) const
 {
+	double dt = tempModel && std::isfinite (tempC) ? tempC - TEMP_REF : 0;
 	for (int i = 0; i < 3; i++)
-		out[i] = (acc[i] - bias[i]) / scale;
+		out[i] = (acc[i] - bias[i] - tempCoef[i] * dt) / scale;
 	double n = norm3 (out);
 	if (n > 0)
 		for (int i = 0; i < 3; i++)
 			out[i] /= n;
 }
 
-double ImuMountModel::errorDeg (double raAxis, double decAxis, const double acc[3]) const
+double ImuMountModel::errorDeg (double raAxis, double decAxis, const double acc[3], double tempC) const
 {
 	double p[3], m[3];
 	predictUp (raAxis, decAxis, p);
-	correctAcc (acc, m);
+	correctAcc (acc, m, tempC);
 	return angleDeg (p, m);
 }
 
@@ -621,12 +624,14 @@ double ImuMountModel::errorDeg (double raAxis, double decAxis, const double acc[
 // Rotation-only fits compare directions (normalised measurements, so an
 // accelerometer gain error does not matter); full fits compare the raw
 // vectors in g. Returns the RMS angle between measured and predicted, deg.
-double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[9], double b[3], double &s, int rs, int ds, bool full, int iterations) const
+double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[9], double b[3], double &s, double kc[3], int rs, int ds, bool full, bool temp, int iterations) const
 {
-	const int np = full ? 7 : 3;
+	// rotation (3), then bias (3) and gain (1), then the bias's temperature
+	// coefficients (3)
+	const int np = temp ? 10 : (full ? 7 : 3);
 	const int nr = 3 * samples.size ();
 
-	auto residuals = [&] (const double Mt[9], const double bt[3], double st, std::vector<double> &r)
+	auto residuals = [&] (const double Mt[9], const double bt[3], double st, const double kt[3], std::vector<double> &r)
 	{
 		r.resize (nr);
 		for (size_t k = 0; k < samples.size (); k++)
@@ -636,8 +641,9 @@ double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[
 			const double *a = samples[k].acc;
 			if (full)
 			{
+				double dt = std::isfinite (samples[k].temp) ? samples[k].temp - TEMP_REF : 0;
 				for (int i = 0; i < 3; i++)
-					r[3 * k + i] = a[i] - (st * up[i] + bt[i]);
+					r[3 * k + i] = a[i] - (st * up[i] + bt[i] + kt[i] * dt);
 			}
 			else
 			{
@@ -647,13 +653,16 @@ double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[
 			}
 		}
 	};
-	auto apply = [&] (const double p[7], double Mt[9], double bt[3], double &st)
+	auto apply = [&] (const double p[10], double Mt[9], double bt[3], double &st, double kt[3])
 	{
 		double R[9];
 		rodrigues (p, R);
 		matMul (Mr, R, Mt);
 		for (int i = 0; i < 3; i++)
+		{
 			bt[i] = full ? b[i] + p[3 + i] : b[i];
+			kt[i] = temp ? kc[i] + p[7 + i] : kc[i];
+		}
 		st = full ? s + p[6] : s;
 	};
 	auto cost = [] (const std::vector<double> &r)
@@ -665,7 +674,7 @@ double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[
 	};
 
 	std::vector<double> r0, r1;
-	residuals (Mr, b, s, r0);
+	residuals (Mr, b, s, kc, r0);
 	double c0 = cost (r0);
 	double lambda = 1e-3;
 	for (int it = 0; it < iterations; it++)
@@ -674,12 +683,12 @@ double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[
 		std::vector<double> J (nr * np);
 		for (int j = 0; j < np; j++)
 		{
-			double p[7] = {0, 0, 0, 0, 0, 0, 0};
+			double p[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 			const double h = 1e-6;
 			p[j] = h;
-			double Mt[9], bt[3], st;
-			apply (p, Mt, bt, st);
-			residuals (Mt, bt, st, r1);
+			double Mt[9], bt[3], st, kt[3];
+			apply (p, Mt, bt, st, kt);
+			residuals (Mt, bt, st, kt, r1);
 			for (int i = 0; i < nr; i++)
 				J[i * np + j] = (r1[i] - r0[i]) / h;
 		}
@@ -702,17 +711,18 @@ double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[
 				A[j * np + j] += 1e-12;
 			if (!solveLinear (A, Jtr, np, step))
 				break;
-			double p[7] = {0, 0, 0, 0, 0, 0, 0};
+			double p[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 			for (int j = 0; j < np; j++)
 				p[j] = step[j];
-			double Mt[9], bt[3], st;
-			apply (p, Mt, bt, st);
-			residuals (Mt, bt, st, r1);
+			double Mt[9], bt[3], st, kt[3];
+			apply (p, Mt, bt, st, kt);
+			residuals (Mt, bt, st, kt, r1);
 			double c1 = cost (r1);
 			if (c1 < c0)
 			{
 				memcpy (Mr, Mt, sizeof (Mt));
 				memcpy (b, bt, sizeof (bt));
+				memcpy (kc, kt, sizeof (kt));
 				s = st;
 				bool converged = c0 - c1 < 1e-14 * (1 + c0);
 				r0 = r1;
@@ -734,8 +744,9 @@ double ImuMountModel::fitFrom (const std::vector<CalSample> &samples, double Mr[
 	{
 		double up[3], m[3];
 		upFromAxes (Mr, rs, ds, cs.raAxis, cs.decAxis, up);
+		double dt = std::isfinite (cs.temp) ? cs.temp - TEMP_REF : 0;
 		for (int i = 0; i < 3; i++)
-			m[i] = full ? (cs.acc[i] - b[i]) / s : cs.acc[i];
+			m[i] = full ? (cs.acc[i] - b[i] - kc[i] * dt) / s : cs.acc[i];
 		double e = angleDeg (up, m);
 		sum2 += e * e;
 	}
@@ -759,9 +770,9 @@ bool ImuMountModel::fit (const std::vector<CalSample> &samples, int fullModelFro
 		for (int rs = -1; rs <= 1; rs += 2)
 			for (int ds = -1; ds <= 1; ds += 2)
 			{
-				double Mr[9], b[3] = {0, 0, 0}, s = 1;
+				double Mr[9], b[3] = {0, 0, 0}, s = 1, k[3] = {0, 0, 0};
 				memcpy (Mr, start.data (), sizeof (Mr));
-				double e = fitFrom (samples, Mr, b, s, rs, ds, false, 40);
+				double e = fitFrom (samples, Mr, b, s, k, rs, ds, false, false, 40);
 				if (e < bestRms)
 				{
 					bestRms = e;
@@ -777,14 +788,16 @@ bool ImuMountModel::fit (const std::vector<CalSample> &samples, int fullModelFro
 	raSign = bestRs;
 	decSign = bestDs;
 	bias[0] = bias[1] = bias[2] = 0;
+	tempCoef[0] = tempCoef[1] = tempCoef[2] = 0;
 	scale = 1;
 	fullModel = false;
+	tempModel = false;
 	fitRms = bestRms;
 	if ((int) samples.size () >= fullModelFrom)
 	{
-		double Mr[9], b[3] = {0, 0, 0}, s = 1;
+		double Mr[9], b[3] = {0, 0, 0}, s = 1, k[3] = {0, 0, 0};
 		memcpy (Mr, bestM, sizeof (Mr));
-		double e = fitFrom (samples, Mr, b, s, raSign, decSign, true, 100);
+		double e = fitFrom (samples, Mr, b, s, k, raSign, decSign, true, false, 100);
 		// a bias the size of gravity means the data did not constrain it
 		if (std::isfinite (e) && e <= bestRms && s > 0.8 && s < 1.2 && norm3 (b) < 0.2)
 		{
@@ -793,19 +806,48 @@ bool ImuMountModel::fit (const std::vector<CalSample> &samples, int fullModelFro
 			scale = s;
 			fullModel = true;
 			fitRms = e;
+
+			// The accelerometer's offset drifts with its temperature: on SBT
+			// the IMU agreed with the sky to 0.05 deg at 28 C and was 1.4 deg
+			// off at 17 C. With samples spread over at least 5 C, fit a
+			// linear term - (bias + k (T - 25 C)); 0.36 -> 0.16 deg rms on the
+			// 2026-10 data, coefficients about 1 mg/C.
+			double tLo = INFINITY, tHi = -INFINITY;
+			for (const auto &cs : samples)
+				if (std::isfinite (cs.temp))
+				{
+					tLo = std::min (tLo, cs.temp);
+					tHi = std::max (tHi, cs.temp);
+				}
+			if (tHi - tLo >= 5.0)
+			{
+				double Mt[9], bt[3], st = s, kt[3] = {0, 0, 0};
+				memcpy (Mt, Mr, sizeof (Mt));
+				memcpy (bt, b, sizeof (bt));
+				double et = fitFrom (samples, Mt, bt, st, kt, raSign, decSign, true, true, 100);
+				if (std::isfinite (et) && et < e && st > 0.8 && st < 1.2 && norm3 (bt) < 0.2 && norm3 (kt) < 0.01)
+				{
+					memcpy (M, Mt, sizeof (M));
+					memcpy (bias, bt, sizeof (bias));
+					memcpy (tempCoef, kt, sizeof (tempCoef));
+					scale = st;
+					tempModel = true;
+					fitRms = et;
+				}
+			}
 		}
 	}
 	fitted = true;
 	return true;
 }
 
-bool ImuMountModel::solveAxes (const double acc[3], double raAxis, double decAxis, double &raOut, double &decOut, double &condDeg) const
+bool ImuMountModel::solveAxes (const double acc[3], double raAxis, double decAxis, double &raOut, double &decOut, double &condDeg, double tempC) const
 {
 	raOut = decOut = condDeg = NAN;
 	if (!fitted)
 		return false;
 	double m[3];
-	correctAcc (acc, m);
+	correctAcc (acc, m, tempC);
 	double x[2] = {raAxis, decAxis};
 	double JtJ[4] = {0, 0, 0, 0};
 	for (int it = 0; it < 30; it++)
@@ -863,7 +905,7 @@ bool ImuMountModel::solveAxes (const double acc[3], double raAxis, double decAxi
 	return true;
 }
 
-std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double acc[3], double maxErrDeg) const
+std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double acc[3], double maxErrDeg, double tempC) const
 {
 	std::vector<AxisSolution> out;
 	if (!fitted)
@@ -872,11 +914,11 @@ std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double a
 		for (double d0 = 0; d0 < 360; d0 += 30)
 		{
 			double r, d, cond;
-			if (!solveAxes (acc, r0, d0, r, d, cond))
+			if (!solveAxes (acc, r0, d0, r, d, cond, tempC))
 				continue;
 			r = fmod (fmod (r, 360.0) + 360.0, 360.0);
 			d = fmod (fmod (d, 360.0) + 360.0, 360.0);
-			double e = errorDeg (r, d, acc);
+			double e = errorDeg (r, d, acc, tempC);
 			if (!(e <= maxErrDeg))
 				continue;
 			AxisSolution sol {r, d, e, cond};
@@ -899,14 +941,14 @@ std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveAll (const double a
 	return out;
 }
 
-std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveJoint (const double acc1[3], const double acc2[3], double dRa, double dDec, double maxErrDeg) const
+std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveJoint (const double acc1[3], const double acc2[3], double dRa, double dDec, double maxErrDeg, double temp1, double temp2) const
 {
 	std::vector<AxisSolution> out;
 	if (!fitted)
 		return out;
 	double m1[3], m2[3];
-	correctAcc (acc1, m1);
-	correctAcc (acc2, m2);
+	correctAcc (acc1, m1, temp1);
+	correctAcc (acc2, m2, temp2);
 	auto residuals = [&] (double r, double d, double res[6])
 	{
 		double p1[3], p2[3];
@@ -964,7 +1006,7 @@ std::vector<ImuMountModel::AxisSolution> ImuMountModel::solveJoint (const double
 				continue;
 			double r = fmod (fmod (x[0], 360.0) + 360.0, 360.0);
 			double d = fmod (fmod (x[1], 360.0) + 360.0, 360.0);
-			double e1 = errorDeg (r, d, acc1), e2 = errorDeg (r + dRa, d + dDec, acc2);
+			double e1 = errorDeg (r, d, acc1, temp1), e2 = errorDeg (r + dRa, d + dDec, acc2, temp2);
 			double e = sqrt ((e1 * e1 + e2 * e2) / 2);
 			if (!(e <= maxErrDeg) || lmin <= 0)
 				continue;
@@ -1085,6 +1127,11 @@ std::string ImuMountModel::describe () const
 		bias[0], bias[1], bias[2], scale,
 		M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]);
 	std::string out = buf;
+	if (tempModel)
+	{
+		snprintf (buf, sizeof (buf), "; bias temperature %+.2f %+.2f %+.2f mg/C (ref %.0f C)", tempCoef[0] * 1000, tempCoef[1] * 1000, tempCoef[2] * 1000, TEMP_REF);
+		out += buf;
+	}
 	if (magFitted)
 		snprintf (buf, sizeof (buf), "; magnetometer fit of %d samples, rms %.2f uT", nMagFit, magFitRms);
 	else
