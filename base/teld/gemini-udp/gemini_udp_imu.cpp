@@ -636,6 +636,8 @@ class GeminiUDP:public Telescope
 		void abortImuProbe (const std::string &why);
 		bool imuProbeMeasure (const GeminiStatus &st, double acc[3], std::string &err, double *mag = nullptr);
 		bool imuProbeMag1Valid;
+		double imuProbeTemp1;		// sensor temperature at the first reading
+		double imuProbeLastTemp;	// ... and at the latest
 		double imuProbeMag1[3];		// magnetometer at the first reading
 		bool imuProbeSendMove (int32_t ra, int32_t dec);
 		bool imuProbeArrived (const GeminiStatus &st);
@@ -861,6 +863,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	imuOperatorStop = false;
 	imuStopIgnoredLogAt = 0;
 	imuProbeMag1Valid = false;
+	imuProbeTemp1 = imuProbeLastTemp = NAN;
 	imuProbeRa1 = imuProbeDec1 = NAN;
 	imuProbeAcc1[0] = imuProbeAcc1[1] = imuProbeAcc1[2] = NAN;
 	imuProbeRa1Ticks = imuProbeDec1Ticks = 0;
@@ -3944,9 +3947,9 @@ void GeminiUDP::checkImu (const GeminiStatus &st)
 	double err = NAN, raErr = NAN, decErr = NAN, cond = NAN;
 	if (imuModel.valid ())
 	{
-		err = imuModel.errorDeg (raAxis, decAxis, av.acc);
+		err = imuModel.errorDeg (raAxis, decAxis, av.acc, av.temp);
 		double sr, sd;
-		if (imuModel.solveAxes (av.acc, raAxis, decAxis, sr, sd, cond))
+		if (imuModel.solveAxes (av.acc, raAxis, decAxis, sr, sd, cond, av.temp))
 		{
 			raErr = ln_range_degrees (sr - raAxis + 180.0) - 180.0;
 			decErr = ln_range_degrees (sd - decAxis + 180.0) - 180.0;
@@ -4127,9 +4130,9 @@ bool GeminiUDP::imuStallCheck (const GeminiStatus &st, bool)
 		return false;
 	}
 	double raAxis = st.raAxisTicks / st.geometry.ticksPerDeg (), decAxis = st.decAxisTicks / st.geometry.decTicksPerDeg ();
-	double err = imuModel.errorDeg (raAxis, decAxis, av.acc);
+	double err = imuModel.errorDeg (raAxis, decAxis, av.acc, av.temp);
 	double sr, sd, cond = NAN;
-	imuModel.solveAxes (av.acc, raAxis, decAxis, sr, sd, cond);
+	imuModel.solveAxes (av.acc, raAxis, decAxis, sr, sd, cond, av.temp);
 	char buf[200];
 	snprintf (buf, sizeof (buf), "IMU at the stop: %.2f deg from the counters (tolerance %.2f, conditioning %.1f)", err, imuStallToleranceValue->getValueDouble (), cond);
 	// Near the merge line the split into the axes is soft: the axis error
@@ -4203,6 +4206,7 @@ void GeminiUDP::learnImuSample (double raAxis, double decAxis, const ImuAverage 
 	cs.decAxis = decAxis;
 	for (int i = 0; i < 3; i++)
 		cs.acc[i] = av.acc[i];
+	cs.temp = av.temp;
 	cs.magValid = av.magValid;
 	for (int i = 0; i < 3; i++)
 		cs.mag[i] = av.mag[i];
@@ -4278,6 +4282,10 @@ void GeminiUDP::loadImuCalibration ()
 			if (n == 5 || n == 8)
 			{
 				cs.magValid = n == 8;
+				// "T=<deg C>" anywhere after the numbers; samples written
+				// before temperatures were kept were all taken around 28 C
+				size_t tp = line.find (" T=");
+				cs.temp = tp != std::string::npos ? atof (line.c_str () + tp + 3) : 28.0;
 				imuCal.push_back (cs);
 			}
 		}
@@ -4303,7 +4311,7 @@ void GeminiUDP::saveImuCalibration ()
 			}
 			return;
 		}
-		f << "# rts2-teld-gemini-udp-imu calibration, saved " << (long) time (nullptr) << ": sample <RA axis deg> <Dec axis deg> <ax> <ay> <az> [g] [<mx> <my> <mz> uT, raw chip axes]\n";
+		f << "# rts2-teld-gemini-udp-imu calibration, saved " << (long) time (nullptr) << ": sample <RA axis deg> <Dec axis deg> <ax> <ay> <az> [g] [<mx> <my> <mz> uT, raw chip axes] [T=<sensor deg C>]\n";
 		f << "# " << imuModel.describe () << "\n";
 		f << std::setprecision (8);
 		for (const auto &cs : imuCal)
@@ -4311,6 +4319,8 @@ void GeminiUDP::saveImuCalibration ()
 			f << "sample " << cs.raAxis << " " << cs.decAxis << " " << cs.acc[0] << " " << cs.acc[1] << " " << cs.acc[2];
 			if (cs.magValid)
 				f << " " << cs.mag[0] << " " << cs.mag[1] << " " << cs.mag[2];
+			if (std::isfinite (cs.temp))
+				f << " T=" << cs.temp;
 			f << "\n";
 		}
 	}
@@ -4464,6 +4474,7 @@ bool GeminiUDP::imuProbeMeasure (const GeminiStatus &st, double acc[3], std::str
 	}
 	for (int i = 0; i < 3; i++)
 		acc[i] = av.acc[i];
+	imuProbeLastTemp = av.temp;
 	if (mag)
 	{
 		for (int i = 0; i < 3; i++)
@@ -4576,6 +4587,7 @@ void GeminiUDP::runImuProbe (const GeminiStatus &st)
 
 			memcpy (imuProbeAcc1, acc, sizeof (acc));
 			memcpy (imuProbeMag1, mag, sizeof (mag));
+			imuProbeTemp1 = imuProbeLastTemp;
 			imuProbeMag1Valid = !std::isnan (mag[0]);
 			imuProbeRa1Ticks = st.raAxisTicks;
 			imuProbeDec1Ticks = st.decAxisTicks;
@@ -4641,7 +4653,7 @@ void GeminiUDP::evaluateImuProbe (const GeminiStatus &st, const double acc2[3])
 	double maxErr = imuMaxErrorValue->getValueDouble ();
 	auto wrap = [] (double a) { return ln_range_degrees (a + 180.0) - 180.0; };
 
-	auto cands = imuModel.solveJoint (imuProbeAcc1, acc2, dRa, dDec, maxErr);
+	auto cands = imuModel.solveJoint (imuProbeAcc1, acc2, dRa, dDec, maxErr, imuProbeTemp1, imuProbeLastTemp);
 	double noise = std::max (imuModel.rms (), 0.05);
 
 	// The compass votes between the fits gravity leaves in the running: the

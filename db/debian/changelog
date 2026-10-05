@@ -1,3 +1,9 @@
+rts2-db (0.1.0-20261005~u2404) noble; urgency=medium
+
+  * Automated build by buildme.sh.
+
+ -- RTS2 Project <petr@rts2.org>  Mon, 05 Oct 2026 14:11:15 +0200
+
 rts2-db (0.1.0-9) UNRELEASED; urgency=medium
 
   * rts2-recordd: new daemon recording selected device values into the

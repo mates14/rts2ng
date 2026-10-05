@@ -212,6 +212,43 @@ int main ()
 		assert (worstMag < 3 && right == total && total > 30);
 	}
 
+	// temperature: the offset drifts by about 1 mg/C (SBT); samples over
+	// 15-30 C, the fit has to find the drift, and a reading at a
+	// temperature none of the samples had is corrected by it
+	{
+		const double kc[3] = {-0.0007, 0.0002, -0.0011};	// g/C
+		std::uniform_real_distribution<double> tmp (15, 30);
+		std::vector<ImuMountModel::CalSample> tcal;
+		for (int i = 0; i < 60; i++)
+		{
+			ImuMountModel::CalSample cs;
+			cs.raAxis = ra (rng);
+			cs.decAxis = dec (rng);
+			cs.temp = tmp (rng);
+			double b[3];
+			for (int j = 0; j < 3; j++)
+				b[j] = bias[j] + kc[j] * (cs.temp - 25);
+			trueAcc (lat, R, b, gain, cs.raAxis, cs.decAxis, cs.acc);
+			for (int j = 0; j < 3; j++)
+				cs.acc[j] += noise (rng);
+			tcal.push_back (cs);
+		}
+		ImuMountModel mt;
+		mt.setLatitude (lat);
+		assert (mt.fit (tcal));
+		printf ("%s\n", mt.describe ().c_str ());
+		assert (mt.rms () < 0.3);
+		// a cold reading (10 C - outside the samples): with its temperature
+		// it agrees, without it it is off by the drift
+		double cr = 180 + 40, cd = 180 - 30, b[3], ca[3];
+		for (int j = 0; j < 3; j++)
+			b[j] = bias[j] + kc[j] * (10 - 25);
+		trueAcc (lat, R, b, gain, cr, cd, ca);
+		double withT = mt.errorDeg (cr, cd, ca, 10), without = mt.errorDeg (cr, cd, ca);
+		printf ("cold reading: %.3f deg with its temperature, %.3f deg without\n", withT, without);
+		assert (withT < 0.15 && without > 0.5);
+	}
+
 	// raw line parsing
 	ImuSample smp;
 	assert (parseMpu9250Raw ("-180 132 16441 -160 70 20 2134 83 -201 -278 0", smp));

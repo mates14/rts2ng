@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 rts2-base (0.1.0-5) UNRELEASED; urgency=medium
 
   * debian/rules: add teld/gemini-udp/rts2-teld-gemini-udp to
@@ -116,3 +117,5 @@ rts2-base (0.1.0-1) UNRELEASED; urgency=medium
     vendored into this build).
 
  -- RTS2 Project <petr@rts2.org>  Thu, 16 Jul 2026 18:03:23 +0200
+=======
+>>>>>>> Stashed changes
