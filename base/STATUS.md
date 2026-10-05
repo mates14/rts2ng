@@ -2025,9 +2025,39 @@ at a real site:
   the brown dome - nothing new.
 - **AVE lab CCD-testing computer**: `sensor-avelab` (user-supplied
   source, not in the classic tree at all).
-- **Makak (zenith camera)**: user-confirmed uses `gxccd` + `d50-wfunit`
-  (identical shutter hardware to D50) - both already ported, nothing
-  new needed.
+- **Makak (zenith camera)**: `gxccd` + a shutter unit that turned out
+  *not* to be the D50 one (found at the 2026-10-05 install): classic
+  RTS2 at makak (morpheus) ran an uncommitted rewrite of
+  `src/sensord/d50-wfunit.cpp` - reply `H: <hum> T: <temp> <C|O>
+  <heating 0-3>`, polled with `i`, heating switch `0`/`1`/`2` instead of
+  fans. Ported as its own driver, `sensord/makak-shutter`
+  (`rts2-sensor-makak-shutter`, default port `/dev/arduino`), keeping
+  the value names the makak scripts use (`shutter`, `htSwitch`,
+  `heating`, `temp`, `humidity`). Fixed on the way: reply buffer read
+  unterminated, `sscanf` result unchecked (garbage reply -> uninitialized
+  heating/shutter state), command failures reported as success; the
+  `htSwitch` value now follows the mode the unit reports. The unit
+  answers every byte with the status line (`H: nan T: nan Closed 0` -
+  its temperature/humidity sensor is dead, nan readings are kept out of
+  the statistics) and prints a help line after each reset, which the
+  driver skips.
+
+  The unit tends to drop off; classic makak worked around that with a
+  daily `reboot` from /etc/crontab (JS, 14.10.2024). The driver now does
+  the same thing locally: after `max_failures` (3) failed polls, or when
+  the reported shutter state does not follow the command within
+  `shutter_timeout` (30 s), it closes the port, toggles `disable` of the
+  USB hub port the CH341 sits on (found from /sys/class/tty/ttyUSBn at
+  start, `usb_port` value), waits for /dev/arduino, reopens it (which
+  reboots the arduino) and re-sends the shutter and heating state - the
+  arduino forgets the heating mode on reboot. Non-blocking (idle () state
+  machine), HW error raised while it lasts, backoff 60 s doubling to 1 h
+  when resets do not help, `auto_reset` to switch off, `reset` command to
+  force one. Without root the sysfs write fails and only the port reopen
+  is done. Tested on makak 2026-10-05: open/close/heating, `reset`
+  command as mates (reopen only) and root (port toggle), and the
+  automatic path - port disabled from outside, three failed polls, reset,
+  unit back with heating restored, 35 s total.
 
 User's own assessment (2026-07-12): "everything I can reach is
 supported" - the only unknowns are whether Markus Wildi or other RTS2

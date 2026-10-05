@@ -76,6 +76,7 @@ RTS2_BASE_BINARIES = \
 	sensord/bart-rain/rts2-sensor-bart-rain \
 	sensord/aws-mlab/rts2-sensor-aws-mlab \
 	sensord/d50-wfunit/rts2-sensor-d50-wfunit \
+	sensord/makak-shutter/rts2-sensor-makak-shutter \
 	sensord/fram-weather/rts2-sensor-fram-weather \
 	sensord/avelab/rts2-sensor-avelab \
 	sensord/windrs/rts2-sensor-windrs \
