@@ -1,9 +1,3 @@
-rts2-web (0.1.0-20261005~u2404) noble; urgency=medium
-
-  * Automated build by buildme.sh.
-
- -- RTS2 Project <petr@rts2.org>  Mon, 05 Oct 2026 14:18:53 +0200
-
 rts2-web (0.1.0-1) UNRELEASED; urgency=medium
 
   * Initial packaging of the web tree as rts2-web, shipping rts2-httpd and
