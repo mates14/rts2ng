@@ -660,6 +660,12 @@ header h1 {
 	margin-top: 16px;
 }
 
+/* the light curve spans the whole row under the visibility plots: years
+ * of data squeezed into a third of the width would be unreadable */
+#lc-panel {
+	grid-column: 1 / -1;
+}
+
 .target-box {
 	margin-bottom: 0;
 }

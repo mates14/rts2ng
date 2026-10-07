@@ -229,6 +229,7 @@ async function loadTarget (id) {
 	tarIdLabelEl.hidden = true;
 	document.getElementById ('sky-panel').hidden = true;
 	document.getElementById ('year-panel').hidden = true;
+	document.getElementById ('lc-panel').hidden = true;
 	document.getElementById ('create-type-row').hidden = true;
 
 	const [d50, sbt] = await Promise.all ([loadSiteData ('d50', id), loadSiteData ('sbt', id)]);
@@ -253,6 +254,7 @@ async function loadTarget (id) {
 	await renderScriptsBox ();
 	await loadVisibility ();
 	await loadYearVisibility ();
+	loadLightCurve ();
 }
 
 document.getElementById ('load-form').addEventListener ('submit', (ev) => {
@@ -494,6 +496,7 @@ async function startNewTarget () {
 	tarIdLabelEl.hidden = true;
 	document.getElementById ('sky-panel').hidden = true;
 	document.getElementById ('year-panel').hidden = true;
+	document.getElementById ('lc-panel').hidden = true;
 
 	const freeIdOn = async (site, after) => {
 		const url = 'api/db/new-target-id' + (after !== null ? `?after=${after}` : '');
@@ -815,12 +818,86 @@ document.getElementById ('peer-config-form').addEventListener ('submit', (ev) =>
 	const val = document.getElementById ('peer-prefix').value.trim ().replace (/\/$/, '');
 	localStorage.setItem (PEER_PREFIX_KEY, val);
 	document.getElementById ('peer-prefix').value = peerPrefix ();
+	localStorage.setItem (LCGEN_KEY, document.getElementById ('lcgen-base').value.trim ());
+	document.getElementById ('lcgen-base').value = lcgenBase ();
 	if (currentId !== null)
 		loadTarget (currentId);
 });
 
 document.getElementById ('peer-site').value = currentSite;
 document.getElementById ('peer-prefix').value = peerPrefix ();
+
+// --- Light curve (lcgen) -----------------------------------------------------
+//
+// The D50 photometry database and its light curve service, lcgen, live on
+// another machine (hog), so rather than proxying data through this daemon
+// the page loads lcgen's own plot widget (static/lcplot.js) straight from
+// there and lets it fetch from there - lcgen's API allows cross-origin
+// use, and its login travels as a bearer token rather than a cookie, so
+// none of this depends on third-party cookies. An empty setting turns
+// the panel off.
+
+const LCGEN_KEY = 'rts2-target-lcgen';
+const LCGEN_DEFAULT = 'https://hog.asu.cas.cz/lcgen/';
+
+function lcgenBase () {
+	const stored = localStorage.getItem (LCGEN_KEY);
+	const base = stored !== null ? stored.trim () : LCGEN_DEFAULT;
+	return base ? base.replace (/\/?$/, '/') : '';
+}
+
+let lcPlot = null;
+let lcPlotBase = null;
+let lcScript = null;
+
+function loadLcgenScript (base) {
+	if (lcScript && lcScript.base === base)
+		return lcScript.promise;
+	const promise = new Promise ((resolve, reject) => {
+		const script = document.createElement ('script');
+		script.src = base + 'static/lcplot.js';
+		script.onload = () => resolve ();
+		script.onerror = () => reject (new Error (`cannot load ${script.src}`));
+		document.head.appendChild (script);
+	});
+	lcScript = { base, promise };
+	return promise;
+}
+
+async function loadLightCurve () {
+	const panel = document.getElementById ('lc-panel');
+	const statusEl = document.getElementById ('lc-status');
+	const base = lcgenBase ();
+	// only fixed positions - an orbit has no single place to look
+	const ra = parseCoordinate (document.getElementById ('f-ra').value, true);
+	const dec = parseCoordinate (document.getElementById ('f-dec').value, false);
+	if (!base || currentId === null || document.getElementById ('position-fields').hidden || ra === null || dec === null) {
+		panel.hidden = true;
+		return;
+	}
+	panel.hidden = false;
+	setStatus (statusEl, true, '');
+	try {
+		await loadLcgenScript (base);
+	} catch (er) {
+		setStatus (statusEl, false, `${er.message} - is the light curve service (Advanced settings below) right?`);
+		return;
+	}
+	if (!lcPlot || lcPlotBase !== base) {
+		if (lcPlot)
+			lcPlot.destroy ();
+		lcPlot = LCPlot.create (document.getElementById ('lc-plot'), { base });
+		lcPlotBase = base;
+	}
+	const name = document.getElementById ('f-name').value.trim ();
+	const link = new URLSearchParams ({ ra: ra.toFixed (6), dec: dec.toFixed (6) });
+	if (name)
+		link.set ('name', name);
+	document.getElementById ('lc-link').href = base + '?' + link;
+	lcPlot.load ({ ra: ra.toFixed (6), dec: dec.toFixed (6), name });
+}
+
+document.getElementById ('lcgen-base').value = lcgenBase ();
 
 // --- Visibility plot ---------------------------------------------------------
 //
@@ -1634,6 +1711,7 @@ for (const elId of ['f-ra', 'f-dec']) {
 			return;
 		loadVisibility ();
 		loadYearVisibility ();
+		loadLightCurve ();
 	});
 }
 
@@ -1760,6 +1838,7 @@ async function prefillNewTarget (qs) {
 
 	await loadVisibility ();
 	await loadYearVisibility ();
+	loadLightCurve ();
 }
 
 // Support ?id=N in the URL so a link (e.g. from a future target-list

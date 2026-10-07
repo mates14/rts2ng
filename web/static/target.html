@@ -167,10 +167,25 @@
 			<div id="year-legend" class="sky-legend"></div>
 			<div id="year-status" class="status-line"></div>
 		</section>
+
+		<section id="lc-panel" class="panel target-box" hidden>
+			<h2>Light curve</h2>
+			<p class="hint">
+				Everything D50's photometry pipeline measured within a couple
+				of arcseconds of this position, served by
+				<a id="lc-link" target="_blank" rel="noopener">lcgen</a> on another
+				machine. Drag across the strip under the plot to pick a time
+				range, across the plot to zoom; double-click resets. Data
+				younger than a year, and embargoed (unpublished GRB) data,
+				show only after logging in to lcgen, with its own login.
+			</p>
+			<div id="lc-plot"></div>
+			<div id="lc-status" class="status-line"></div>
+		</section>
 	</div>
 
 	<details id="peer-settings">
-		<summary>Advanced: telescope identity / proxy path (auto-detected, override only if wrong)</summary>
+		<summary>Advanced: telescope identity / proxy path (auto-detected, override only if wrong), light curve service</summary>
 		<form id="peer-config-form" class="inline-form">
 			<label>This page is served by
 				<select id="peer-site">
@@ -179,6 +194,7 @@
 				</select>
 			</label>
 			<label>Other telescope's proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt"></label>
+			<label>Light curve service <input id="lcgen-base" type="text" placeholder="https://hog.asu.cas.cz/lcgen/ (empty: no light curve)"></label>
 			<button type="submit">Save</button>
 		</form>
 	</details>

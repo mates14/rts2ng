@@ -2672,3 +2672,32 @@ Tested: the endpoint against the local dev database (121 targets); the
 page in headless Chrome against a mock serving ~13.6k targets per site
 (load ~0.7 s, filters, sort, URL state, cone search, one site down). Not
 yet tried against production data.
+
+### Target editor: light curve panel (2026-10-08)
+
+A "Light curve" box under the two visibility plots in `target.html`,
+showing everything D50's photometry pipeline measured around the target's
+position. The data and the plot both come from lcgen
+(`https://hog.asu.cas.cz/lcgen/`, a separate Flask service on hog next to
+the photometry database), not from rts2-httpd.
+
+- **How**: target.js loads lcgen's own widget (`<lcgen>/static/lcplot.js`,
+  vanilla canvas like the rest of this frontend) and points it at the RA/Dec
+  in the What box; the widget fetches `<lcgen>/api/lc` cross-origin itself.
+  Nothing is proxied through this daemon, so the two never have to run on
+  the same machine.
+- **Login**: lcgen hides data younger than a year and embargoed
+  (unpublished GRB) positions from anonymous users. Its login is lcgen's
+  own (same htpasswd as hog's Apache), traded for a bearer token kept in
+  this page's localStorage - no cookies, so third-party-cookie blocking
+  does not matter.
+- **Setting**: "Light curve service" in the Advanced box (localStorage key
+  `rts2-target-lcgen`); empty turns the panel off.
+- Shown for fixed positions only (not elliptical targets), refreshed when a
+  target loads, a new one is prefilled, or a new target's RA/Dec change.
+  Spans the whole row: a light curve in a third of the width is unreadable.
+
+Tested: in headless Chrome against a local rts2-httpd (`stars` dev
+database, spare ports) and the live lcgen - a prefilled new target at TT Boo
+(4772 public points), an existing local target with no D50 data ("No public
+measurements here"), and the panel switching off with an empty setting.
