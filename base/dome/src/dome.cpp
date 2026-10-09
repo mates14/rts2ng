@@ -32,6 +32,7 @@ Dome::Dome (int in_argc, char **in_argv, int in_device_type, bool inhibit_auto_c
 	stateMaster = NULL;
 
 	closeFailReported = false;
+	closeRetries = 0;
 
 	createValue (weatherOpensDome, "weather_open", "if true, good weather can open dome", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 	weatherOpensDome->setValueBool (false);
@@ -131,7 +132,7 @@ int Dome::domeOpenStart ()
 
 	if (isOpened () == -2)
 	{
-		maskState (DOME_DOME_MASK | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome opened");
+		maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome opened");
 		logStream (MESSAGE_REPORTIT | MESSAGE_INFO) << "dome (already) opened" << sendLog;
 		return 0;
 	}
@@ -146,8 +147,12 @@ int Dome::domeOpenStart ()
 	}
 
 	closeFailReported = false;
+	closeRetries = 0;
 
-	maskState (DOME_DOME_MASK | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENING | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, "opening dome");
+	// base note: classic blocked only exposures while opening. A move queued by the
+	// executor (with BOP_TEL_MOVE) now waits for the roof too, instead of reaching a
+	// mount that refuses it and losing the target.
+	maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENING | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, "opening dome");
 	logStream (MESSAGE_REPORTIT | MESSAGE_INFO) << "starting to open the dome" << sendLog;
 	return 0;
 }
@@ -158,7 +163,8 @@ int Dome::domeCloseStart ()
 
 	if (isClosed () == -2)
 	{
-		maskState (DOME_DOME_MASK | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSED | DEVICE_BLOCK_OPEN, "dome closed");
+		maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSED | DEVICE_BLOCK_OPEN, "dome closed");
+		closeRetries = 0;
 		//logStream (MESSAGE_INFO) << "dome (already) closed" << sendLog;
 		return 0;
 	}
@@ -178,7 +184,7 @@ int Dome::domeCloseStart ()
 		{
 			logStream (MESSAGE_REPORTIT | MESSAGE_INFO) << "waiting for devices to move into a position safe for dome to close" << sendLog;
 		}
-		maskState (DOME_DOME_MASK | BOP_EXPOSURE, DOME_WAIT_CLOSING, "waiting for devices to move into a position safe for dome to close");
+		maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE, DOME_WAIT_CLOSING, "waiting for devices to move into a position safe for dome to close");
 		addTimer (closeRepeatTimeAfterPark->getValueDouble (), new rts2core::Event (EVENT_DOMECLOSE_RETRY));
 		return 0;
 	}
@@ -189,8 +195,25 @@ int Dome::domeCloseStart ()
 	{
 		logStream (MESSAGE_REPORTIT | MESSAGE_INFO) << "starting to close dome" << sendLog;
 	}
-	maskState (DOME_DOME_MASK | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSING | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, "starting to close dome");
+	maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSING | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, "starting to close dome");
 	return 0;
+}
+
+void Dome::closeFailed ()
+{
+	// base note: classic marked the dome DOME_CLOSED and stopped there, so outside bad
+	// weather (whose idle loop keeps calling domeCloseStart) a roof stuck half-way was
+	// never tried again. domeCloseStart re-reads the end switches before restarting.
+	if (closeRetries < DOME_CLOSE_MAX_RETRIES)
+	{
+		closeRetries++;
+		logStream (MESSAGE_ERROR | MESSAGE_REPORTIT) << "dome is not closed, retrying the close (" << closeRetries << "/" << DOME_CLOSE_MAX_RETRIES << ")" << sendLog;
+		addTimer (closeRepeatTimeAfterPark->getValueDouble (), new rts2core::Event (EVENT_DOMECLOSE_RETRY));
+	}
+	else
+	{
+		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome is not closed after " << DOME_CLOSE_MAX_RETRIES << " retries, giving up - EMERGENCY INTERVENTION NECESSARY" << sendLog;
+	}
 }
 
 int Dome::domeStop ()
@@ -203,7 +226,8 @@ int Dome::domeStop ()
 		logStream (MESSAGE_ERROR) << "stopping dome movement failed" << sendLog;
 		return -1;
 	}
-	maskState (DOME_STOPPED_MASK, DOME_STOPPED, "dome movement stopped");
+	// base note: classic left BOP_EXPOSURE set when an opening was stopped
+	maskState (DOME_STOPPED_MASK | BOP_EXPOSURE | BOP_TEL_MOVE, DOME_STOPPED, "dome movement stopped");
 	return 0;
 }
 
@@ -235,7 +259,7 @@ int Dome::checkOpening ()
 			endOpen ();
 			infoAll ();
 			logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome opening interrupted" << sendLog;
-			maskState (DOME_DOME_MASK | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome opening interrupted");
+			maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome opening interrupted");
 		}
 		if (ret == -2)
 		{
@@ -245,11 +269,11 @@ int Dome::checkOpening ()
 			if (ret)
 			{
 				logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome did not open propely" << sendLog;
-				maskState (DOME_DOME_MASK | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome did not open properly");
+				maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome did not open properly");
 			}
 			else
 			{
-				maskState (DOME_DOME_MASK | BOP_EXPOSURE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome opened");
+				maskState (DOME_DOME_MASK | BOP_EXPOSURE | BOP_TEL_MOVE | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_OPENED | DEVICE_BLOCK_CLOSE, "dome opened");
 				logStream (MESSAGE_REPORTIT | MESSAGE_INFO) << "dome opened" << sendLog;
 			}
 		}
@@ -270,6 +294,7 @@ int Dome::checkOpening ()
 			infoAll ();
 			logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome closing interrupted" << sendLog;
 			maskState (DOME_DOME_MASK | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSED | DEVICE_BLOCK_OPEN, "closing finished with error");
+			closeFailed ();
 		}
 		if (ret == -2)
 		{
@@ -280,11 +305,13 @@ int Dome::checkOpening ()
 			{
 				logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome did not close properly" << sendLog;
 				maskState (DOME_DOME_MASK | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSED | DEVICE_BLOCK_OPEN, "dome did not close propely");
+				closeFailed ();
 			}
 			else
 			{
 				maskState (DOME_DOME_MASK | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSED | DEVICE_BLOCK_OPEN, "dome closed");
 				logStream (MESSAGE_REPORTIT | MESSAGE_INFO) << "dome closed" << sendLog;
+				closeRetries = 0;
 			}
 		}
 	}

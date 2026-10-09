@@ -27,6 +27,8 @@
 
 #define EVENT_DOMECLOSE_RETRY		RTS2_LOCAL_EVENT + 402
 
+#define DOME_CLOSE_MAX_RETRIES		3
+
 /**
  * Dome, copulas and roof controllers.
  */
@@ -179,6 +181,16 @@ class Dome:public rts2core::Device
 		rts2core::ValueString *stateMaster;
 
 		bool closeFailReported;
+
+		// failed closes retried so far - a close that ends without the closed
+		// end switch is retried a few times, not just reported
+		int closeRetries;
+
+		/**
+		 * Called when closing finished without the dome being closed.
+		 * Schedules a retry (up to DOME_CLOSE_MAX_RETRIES), then gives up loudly.
+		 */
+		void closeFailed ();
 
 		double centraldLastContactTime;
 

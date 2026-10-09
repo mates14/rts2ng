@@ -1551,6 +1551,55 @@ if (focuserDevice != nullptr && !strcmp (focuserDevice, conn->getName ()))
 Found 2026-09-11 while porting `ClientFilterCamera`/`ClientFocusCamera` into
 base (task 36).
 
+## D50 mount/roof interlock (`src/teld/d50.cpp`, `src/dome/d50.cpp`, `lib/rts2/dome.cpp`, `lib/rts2/connford.cpp`)
+
+Found 2026-10-09 in a review of the D50 mount and roof drivers, aimed at the two
+of them colliding (telescope vs. roof) or the roof staying open in rain. The
+classic code running at D50 has all of these; base fixes them. The dome-side
+fixes were exercised on a bench (rts2ng centrald + dummy T0 + `rts2-dome-d50`
+on a simulated Ford board over a pty); the mount-side ones need the hardware.
+
+- **Encoder cross-check was one-sided.** Every motor-vs-ABS-encoder check
+  (`startResync`, `endMove`, `endPark`, `setValue` of `inside_dome_limit`) was
+  `diff.ra > limit || diff.dec > limit` - a negative difference of any size
+  passed, including the checks that allow `inside_dome_limit` (the value the
+  roof closes on). The RA difference was not wrapped to +-180 either.
+  Fix: `fabs`, wrapped RA (`checkAbsEncDifference ()`).
+- **Failed encoder reads used uninitialised values.** `info ()`, `init ()` and
+  the backlash timer ignored `remotesGetAbsolutePosition ()`'s result and
+  used whatever was on the stack. Fix: `readAbsEncoders ()` keeps a validity
+  flag; an unknown difference refuses the inside-dome moves, and only warns
+  at `endPark` (an unreadable cross-check must not keep the roof open in rain).
+- **The roof could close on a mount that had just started to leave.** The
+  mount cleared `inside_dome_limit` at the start of a move without sending it;
+  the roof learned it only with the next info (up to 5 s), and
+  `getMountState ()` trusted the value before looking at the mount's state
+  (which is pushed at once). A move started between "park done" and "roof
+  starts" raced the roof. Fix: the mount sends the flag immediately, the dome
+  waits while the mount is moving or parking, and the mount refuses any move
+  but park while the dome is closing or waiting to close.
+- **First target lost when the system goes ON before the roof is open.** The
+  dome blocked only exposures while opening (and the D50 cameras' `blocked_by`
+  does not list the dome), so the executor's move reached the mount, which
+  refused it ("domestate bad"), and the camera exposed the parked position
+  (D50 log, 2026-10-08 22:36). Fix: the dome also raises `BOP_TEL_MOVE`
+  while opening, so a move queued with `BOP_TEL_MOVE` waits for the roof.
+  Stopping an opening now clears both blocks (classic left `BOP_EXPOSURE` set).
+- **A close that never reached the end switch was not retried** outside bad
+  weather: `Dome` marked the roof `DOME_CLOSED` ("did not close properly") and
+  stopped. Fix: `closeFailed ()` retries 3 times, then gives up with a
+  critical message.
+- **Ford pin writes reported success when the write failed**
+  (`zapni_pin`/`vypni_pin` ignored the second `writePort`), and the D50 dome
+  ignored `ZAP`/`VYP` results. `switchOffPins (4 pins)` OR-ed `.port` for the
+  fourth pin instead of `.pin`.
+- Smaller: `info ()` compared the pointer `guidePulseRA == 0` (never true, the
+  worm-frequency reset never ran); the tracking lead `1/10 / 3600 * 15 * haCpd`
+  was integer 0; a new move during parking did not cancel the old path's
+  waypoint timers; the "return to last safe position" recovery after a horizon
+  stop moved the mount without clearing `inside_dome_limit`; `--help` gave the
+  roof-switch variable default as `roof_open` (it is `roof_opened`).
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

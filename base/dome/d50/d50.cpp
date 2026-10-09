@@ -163,13 +163,21 @@ int D50::startOpen ()
 	if (getPortState (ZAVIRANI))
 	{
 		// the dome is just closing, but this is a decent dome, we can simply stop, wait a bit and then start the opening as requested
-		VYP (ZAVIRANI);
+		if (VYP (ZAVIRANI))
+		{
+			logStream (MESSAGE_ERROR) << "startOpen: cannot stop the closing motor" << sendLog;
+			return -1;
+		}
 		sleep (2);
 	}
 
 	// TODO: Pridat check na reseni zaparkovani dalekohledu atd.
 
-	ZAP (OTEVIRANI);
+	if (ZAP (OTEVIRANI))
+	{
+		logStream (MESSAGE_ERROR) << "startOpen: cannot switch on the opening motor" << sendLog;
+		return -1;
+	}
 	logStream (MESSAGE_DEBUG) << "opening the dome" << sendLog;
 
 	time (&timeToMoveMax);
@@ -201,7 +209,8 @@ long D50::isOpened ()
 int D50::endOpen ()
 {
 	int ret;
-	VYP (OTEVIRANI);
+	if (VYP (OTEVIRANI))
+		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "endOpen: cannot switch off the opening motor!" << sendLog;
 	ret = zjisti_stav_portu ();	//kdyz se to vynecha, neposle to posledni prikaz nebo znak
 	if (ret)
 	{
@@ -238,7 +247,7 @@ int D50::startClose ()
 				return -1;
 				break;
 			case 1:
-				logStream (MESSAGE_DEBUG) << "startClose: Mount is not within limits at the moment, parking is already in progress" << sendLog;
+				logStream (MESSAGE_DEBUG) << "startClose: Mount is moving or parking, waiting for it to stop" << sendLog;
 				return 1;
 				break;
 			case 2:
@@ -265,11 +274,19 @@ int D50::startClose ()
 	if (getPortState (OTEVIRANI))
 	{
 		// the dome is just opening, but this is a decent dome, we can simply stop, wait a bit and then start the closing as requested
-		VYP (OTEVIRANI);
+		if (VYP (OTEVIRANI))
+		{
+			logStream (MESSAGE_ERROR) << "startClose: cannot stop the opening motor" << sendLog;
+			return -1;
+		}
 		sleep (2);
 	}
 
-	ZAP (ZAVIRANI);
+	if (ZAP (ZAVIRANI))
+	{
+		logStream (MESSAGE_ERROR) << "startClose: cannot switch on the closing motor" << sendLog;
+		return -1;
+	}
 	logStream (MESSAGE_DEBUG) << "closing the dome" << sendLog;
 
 	time (&timeToMoveMax);
@@ -305,7 +322,8 @@ long D50::isClosed ()
 int D50::endClose ()
 {
 	int ret;
-	VYP (ZAVIRANI);
+	if (VYP (ZAVIRANI))
+		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "endClose: cannot switch off the closing motor!" << sendLog;
 	ret = zjisti_stav_portu ();
 	if (ret)
 	{
@@ -323,15 +341,9 @@ int D50::endClose ()
 int D50::stop ()
 {
 	if (getPortState (ZAVIRANI))
-	{
-		VYP (ZAVIRANI);
-		return 0;
-	}
+		return VYP (ZAVIRANI);
 	if (getPortState (OTEVIRANI))
-	{
-		VYP (OTEVIRANI);
-		return 0;
-	}
+		return VYP (OTEVIRANI);
 
 	return -1;
 }
@@ -371,15 +383,23 @@ int D50::getMountState ()
 		logStream (MESSAGE_ERROR) << "getMountState: wrong mountInsideDomeVariable variable name?" << sendLog;
 		return -1;
 	}
-	if (tmpValue->getValueInteger () == 1)
-	{
-		return 0;	// telescope is in the safe zone, we can close!
-	}
 	logStream (MESSAGE_DEBUG) << "startClose: getState () & TEL_MASK_MOVING: " << std::hex << (connMount->getState () & TEL_MASK_MOVING) << sendLog;
+	// base note: classic trusted inside_dome_limit before looking at the state. The value
+	// reaches us with the mount's info, the state at once - a mount that has just started
+	// to leave the dome can still show the "inside" of its last park. Wait for it to stop.
 	if ((connMount->getState () & TEL_MASK_MOVING) == TEL_PARKING)
 	{
 		// telescope is just parking...
 		return 1;
+	}
+	if ((connMount->getState () & TEL_MASK_MOVING) == TEL_MOVING)
+	{
+		logStream (MESSAGE_DEBUG) << "getMountState: mount is moving, waiting for it to stop before trusting " << mountInsideDomeVariable << sendLog;
+		return 1;
+	}
+	if (tmpValue->getValueInteger () == 1)
+	{
+		return 0;	// telescope is in the safe zone, we can close!
 	}
 	return 2; // telescope in obstructing the safe dome-close, it also is not parking
 }

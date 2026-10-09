@@ -109,8 +109,9 @@ FordConn::zapni_pin (unsigned char c_port, unsigned char pin)
 
 	c = stav_portu[c_port] | pin;
 
-	writePort (c);
-	return 0;
+	// base note: classic ignored this write and always returned 0, so a motor
+	// command lost on the serial line looked like a success
+	return writePort (c) ? -1 : 0;
 }
 
 
@@ -130,8 +131,9 @@ FordConn::vypni_pin (unsigned char c_port, unsigned char pin)
 
 	c = stav_portu[c_port] & (~pin);
 
-	writePort (c);
-	return 0;
+	// base note: classic ignored this write and always returned 0, so a motor
+	// command lost on the serial line looked like a success
+	return writePort (c) ? -1 : 0;
 }
 
 
@@ -191,7 +193,7 @@ FordConn::switchOffPins (int pin1, int pin2, int pin3, int pin4)
 		return -1;
 
 	}
-	return vypni_pin (adresa[pin1].port, adresa[pin1].pin | adresa [pin2].pin | adresa[pin3].pin | adresa[pin4].port);
+	return vypni_pin (adresa[pin1].port, adresa[pin1].pin | adresa [pin2].pin | adresa[pin3].pin | adresa[pin4].pin);	// base note: classic OR-ed adresa[pin4].port here
 }
 
 
