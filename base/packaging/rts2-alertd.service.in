@@ -1,0 +1,16 @@
+# Forwards RTS2 emergencies (critical messages, rts2@ watchdog/restarts) to
+# Telegram - see rts2-alertd --help. Needs @BASE_CONFDIR@/rts2/alertd with the
+# bot token and chat id; check it with `rts2-alertd --test` before enabling.
+[Unit]
+Description=RTS2 alerts to Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-alertd --config @BASE_CONFDIR@/rts2/alertd
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""rts2-alertd - forward RTS2 emergencies to Telegram.
+
+Follows the systemd journal and sends a Telegram message for
+  - every CRITICAL message of an RTS2 daemon (syslog ident "rts2", priority
+    crit or worse) - e.g. "cannot start closing of the dome", "dome is not
+    closed after 3 retries", "THE DOME WILL NOT BE CLOSED" - with the last few
+    errors of the same daemon as context;
+  - systemd stopping or restarting an rts2@NAME unit: watchdog timeout (the
+    daemon hung), failure, scheduled restart.
+
+The same alert is not repeated within repeat_seconds; a daemon that keeps
+reporting (the dome repeats "cannot start closing" every 5 minutes while the
+roof stays open) therefore keeps alerting until the problem is gone.
+
+Configuration: /etc/rts2/alertd (or --config), keep it mode 0600:
+
+    [telegram]
+    bot_token = 123456:ABC...
+    chat_id = -100123456789
+
+    [alert]
+    # label put in front of every message, default: the host name
+    site = D50
+    repeat_seconds = 60
+
+Usage: rts2-alertd [--config FILE] [--dry-run]   follow the journal
+       rts2-alertd --test [TEXT]                 send one message and exit
+"""
+
+import argparse
+import collections
+import configparser
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PRIO_CRIT = 2
+PRIO_ERR = 3
+CONTEXT_LINES = 3
+CONTEXT_SECONDS = 120
+MAX_PER_MINUTE = 20
+SYSTEMD_EVENTS = ('Watchdog timeout', 'Failed with result', 'Scheduled restart job', 'Main process exited')
+
+
+def log (msg):
+	print (msg, file=sys.stderr, flush=True)
+
+
+class Telegram:
+	def __init__ (self, token, chat_id, dry_run=False):
+		self.url = 'https://api.telegram.org/bot%s/sendMessage' % token
+		self.chat_id = chat_id
+		self.dry_run = dry_run
+		self.sent = collections.deque ()
+
+	def send (self, text):
+		if self.dry_run:
+			print ('[dry-run] ' + text, flush=True)
+			return True
+		now = time.time ()
+		while self.sent and now - self.sent[0] > 60:
+			self.sent.popleft ()
+		if len (self.sent) >= MAX_PER_MINUTE:
+			log ('rate limit reached, dropped: ' + text.splitlines ()[0])
+			return False
+		self.sent.append (now)
+		data = urllib.parse.urlencode ({'chat_id': self.chat_id, 'text': text[:4000]}).encode ()
+		for attempt in range (3):
+			try:
+				with urllib.request.urlopen (self.url, data=data, timeout=15) as r:
+					r.read ()
+				return True
+			except (urllib.error.URLError, OSError) as e:
+				# never print the URL - it contains the token
+				log ('telegram send failed (attempt %d): %s' % (attempt + 1, getattr (e, 'reason', e)))
+				time.sleep (5 * (attempt + 1))
+		return False
+
+
+def source_of (entry):
+	"""Device name: rts2@NAME.service, else -d NAME from the command line, else the PID."""
+	unit = entry.get ('_SYSTEMD_UNIT') or entry.get ('UNIT') or ''
+	m = re.match (r'rts2@(.+)\.service$', unit)
+	if m:
+		return m.group (1)
+	pid = entry.get ('_PID') or entry.get ('SYSLOG_PID')
+	if pid:
+		try:
+			args = open ('/proc/%s/cmdline' % pid, 'rb').read ().split (b'\0')
+			for i, a in enumerate (args[:-1]):
+				if a == b'-d':
+					return args[i + 1].decode ()
+			return os.path.basename (args[0].decode ()) + '[' + pid + ']'
+		except OSError:
+			return 'pid ' + pid
+	return '?'
+
+
+def follow (cfg, telegram):
+	site = cfg.get ('alert', 'site', fallback=socket.gethostname ())
+	repeat = cfg.getint ('alert', 'repeat_seconds', fallback=60)
+	last_sent = {}
+	context = collections.defaultdict (lambda: collections.deque (maxlen=CONTEXT_LINES))
+
+	def alert (key, text):
+		now = time.time ()
+		if now - last_sent.get (key, 0) < repeat:
+			return
+		if telegram.send (text):
+			last_sent[key] = now
+
+	while True:
+		# -n 0: only what happens from now on (no replay of old alerts on restart)
+		proc = subprocess.Popen (['journalctl', '-f', '-n', '0', '-o', 'json', '-t', 'rts2', '-t', 'systemd'],
+			stdout=subprocess.PIPE, text=True)
+		for line in proc.stdout:
+			try:
+				e = json.loads (line)
+			except ValueError:
+				continue
+			msg = e.get ('MESSAGE')
+			if not isinstance (msg, str):
+				continue
+			ident = e.get ('SYSLOG_IDENTIFIER')
+			prio = int (e.get ('PRIORITY', 6))
+			if ident == 'rts2':
+				src = source_of (e)
+				if prio <= PRIO_CRIT:
+					text = '\U0001F6A8 %s %s: %s' % (site, src, msg)
+					ctx = [m for t, m in context[src] if time.time () - t < CONTEXT_SECONDS]
+					if ctx:
+						text += '\n\nbefore that:\n' + '\n'.join (ctx)
+					alert ((src, msg), text)
+				elif prio == PRIO_ERR:
+					context[src].append ((time.time (), msg))
+			else:
+				unit = e.get ('UNIT') or e.get ('USER_UNIT') or ''
+				if unit.startswith ('rts2@') and any (ev in msg for ev in SYSTEMD_EVENTS):
+					src = source_of (e)
+					alert ((src, msg), '⚠️ %s %s: %s' % (site, src, msg))
+		log ('journalctl ended (%s), restarting in 5 s' % proc.wait ())
+		time.sleep (5)
+
+
+def main ():
+	ap = argparse.ArgumentParser (description='forward RTS2 emergencies to Telegram')
+	ap.add_argument ('--config', default='/etc/rts2/alertd')
+	ap.add_argument ('--dry-run', action='store_true', help='print alerts instead of sending them')
+	ap.add_argument ('--test', nargs='?', const='rts2-alertd test message', metavar='TEXT', help='send one message and exit')
+	args = ap.parse_args ()
+
+	cfg = configparser.ConfigParser ()
+	if not cfg.read (args.config) and not args.dry_run:
+		sys.exit ('cannot read ' + args.config)
+	token = cfg.get ('telegram', 'bot_token', fallback='')
+	chat = cfg.get ('telegram', 'chat_id', fallback='')
+	if (not token or not chat) and not args.dry_run:
+		sys.exit (args.config + ': [telegram] bot_token and chat_id are required')
+	telegram = Telegram (token, chat, args.dry_run)
+
+	if args.test is not None:
+		site = cfg.get ('alert', 'site', fallback=socket.gethostname ())
+		sys.exit (0 if telegram.send ('%s: %s' % (site, args.test)) else 1)
+	follow (cfg, telegram)
+
+
+if __name__ == '__main__':
+	main ()

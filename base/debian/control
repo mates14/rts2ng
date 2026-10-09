@@ -14,7 +14,7 @@ Homepage: https://github.com/RTS2/rts2
 
 Package: rts2-base
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3
 Recommends: rsyslog
 Description: Remote Telescope System 2 - core daemons and drivers
  RTS2 (Remote Telescope System, 2nd version) is a distributed control

@@ -62,6 +62,7 @@ EXIT_LOCK_ERROR=254
 progname=$(basename "$0")
 mode=start
 interactive=0
+foreground=0
 stop_timeout=10
 ret=0
 
@@ -79,6 +80,8 @@ Options:
   -r, --restart    stop the named daemons, then start them again
   -s, --status     report whether the named daemons are running
   -i, --local      run in the foreground with debugging on (also -l; one name)
+  -f, --foreground replace this script with the daemon, in the foreground
+                   (one name; for systemd units with Type=notify)
       --timeout N  seconds to wait for a daemon to stop before SIGKILL ($stop_timeout)
       --list       list the configured daemons
   -h, --help       this text
@@ -230,6 +233,13 @@ start_one ()
 		return $?
 	fi
 
+	# systemd runs the daemon itself as the unit's main process: it must not
+	# fork away (-i), and exec keeps the PID systemd watches (Type=notify,
+	# WatchdogSec) the daemon's own
+	if [ $foreground -eq 1 ]; then
+		eval exec "$bin" -i $dev_opt $args
+	fi
+
 	lock=$(lock_file_for "$args" "$lockname")
 	is_running "$lock"
 	case $? in
@@ -368,6 +378,7 @@ while [ $# -gt 0 ]; do
 	-r|--restart)	mode=restart ;;
 	-s|--status)	mode=status ;;
 	-i|-l|--local|--interactive)	interactive=1 ;;
+	-f|--foreground)	foreground=1 ;;
 	--timeout)	[ $# -ge 2 ] || { echo "$progname: --timeout needs a value" >&2; exit 2; }
 			stop_timeout=$2; shift ;;
 	--list)		mode=list ;;
@@ -380,8 +391,8 @@ done
 
 if [ ${#names[@]} -eq 0 ]; then
 	names=(all)
-	if [ $interactive -eq 1 ]; then
-		echo "$progname: -i needs the name of a single daemon" >&2
+	if [ $interactive -eq 1 ] || [ $foreground -eq 1 ]; then
+		echo "$progname: -i/-f needs the name of a single daemon" >&2
 		exit 2
 	fi
 fi

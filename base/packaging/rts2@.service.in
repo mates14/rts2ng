@@ -1,15 +1,32 @@
-# systemd template unit to start a single named device/service, e.g.
-# `systemctl enable --now rts2@C0` for a device named C0 in
+# systemd template unit to run a single named device/service, e.g.
+# `systemctl enable --now rts2@T0` for a device named T0 in
 # @BASE_CONFDIR@/rts2/devices (or a name from centrald/services).
+#
+# The daemon runs in the foreground as the unit's main process and talks to
+# systemd: READY=1 once initialised (Type=notify), and a heartbeat from its
+# main loop. A daemon that crashes, exits, or stops sending the heartbeat for
+# WatchdogSec (hung in a driver loop, blocked on a dead device) is killed and
+# started again after RestartSec. Do not combine with --autorestart: its
+# watcher process would be the main PID instead of the daemon.
+#
+# Override per device with `systemctl edit rts2@NAME`, e.g. a longer
+# WatchdogSec for a driver whose init legitimately takes long.
 [Unit]
 Description=RTS2 %I
 Documentation=https://github.com/RTS2/rts2
+After=network.target
 
 [Service]
-Type=forking
-ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-start %I
-ExecStop=@CMAKE_INSTALL_FULL_BINDIR@/rts2-stop %I
-PIDFile=@RTS2_LOCK_PREFIX@%i
+Type=notify
+NotifyAccess=main
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-start --foreground %I
+Restart=always
+RestartSec=10
+WatchdogSec=60
+TimeoutStartSec=180
+TimeoutStopSec=20
+# never give up restarting
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

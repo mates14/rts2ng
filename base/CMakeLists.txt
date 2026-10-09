@@ -137,6 +137,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/rts2-start.in ${CMAKE_CURRE
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/rts2-stop.in ${CMAKE_CURRENT_BINARY_DIR}/packaging/rts2-stop @ONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/rts2.service.in ${CMAKE_CURRENT_BINARY_DIR}/packaging/rts2.service @ONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/rts2@.service.in ${CMAKE_CURRENT_BINARY_DIR}/packaging/rts2@.service @ONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/rts2-alertd.service.in ${CMAKE_CURRENT_BINARY_DIR}/packaging/rts2-alertd.service @ONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/rts2.ini ${CMAKE_CURRENT_BINARY_DIR}/packaging/rts2.ini @ONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/centrald.conf ${CMAKE_CURRENT_BINARY_DIR}/packaging/centrald @ONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/devices.conf ${CMAKE_CURRENT_BINARY_DIR}/packaging/devices @ONLY)
