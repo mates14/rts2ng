@@ -96,6 +96,9 @@
 // We should never get closer to Sun than... [deg]
 #define SUN_AVOID_DISTANCE 10.0
 
+// how long [s] to wait for the servos to report they stopped
+#define DRIVES_STOP_TIMEOUT 30.0
+
 
 namespace rts2teld
 {
@@ -324,6 +327,13 @@ class D50:public Fork
 		 * so it must never wait for the next info cycle to learn it was cleared.
 		 */
 		void setInsideDomeOnlyMovement (bool inside);
+
+		/**
+		 * Wait for both servos to report they stopped (after stop ()), at most DRIVES_STOP_TIMEOUT.
+		 *
+		 * @return 0 when stopped, -1 on timeout (logged as critical)
+		 */
+		int waitDrivesStopped ();
 
 		// high-level functions for managing the REMOTES things
 		int setMotorsPower (bool power);
@@ -710,10 +720,8 @@ int D50::init ()
 	// for special cases of persisting movement, try to gently stop motors first...
 	raDrive->stop ();
 	decDrive->stop ();
-	while (raDrive->checkStopPlain () || decDrive->checkStopPlain ())
-	{
-		usleep (USEC_SEC / 5);
-	}
+	if (waitDrivesStopped ())
+		return -1;
 
 	setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
 	if (readAbsEncoders ())
@@ -1083,22 +1091,20 @@ int D50::stopMove ()
 #ifdef DEBUG_BRUTAL
 	logStream (MESSAGE_DEBUG) << "****** stopMove ()" << sendLog;
 #endif
+	int ret = 0;
 	if (raDrive->isMoving () || decDrive->isMoving ())	// otherwise it's only about cleaning the TEL_MOVING state, we don't want to clean parking flag and other things then
 	{
         	parking = false;
         	raDrive->stop ();
         	decDrive->stop ();
-		while (raDrive->checkStopPlain () || decDrive->checkStopPlain ())
-		{
-			usleep (USEC_SEC / 5);
-		}
+		ret = waitDrivesStopped ();	// on timeout still clean up below, then report the failure
 	}
 	setWormPressureLimiter (false);
 	deleteTimers (RTS2_D50_BOOSTSPEED);
 	deleteTimers (RTS2_D50_SUCCESSIVE_POINTS);
 	raDrive->setMaxSpeed (RA_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	decDrive->setMaxSpeed (DEC_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
-        return 0;
+        return ret;
 }
 
 int D50::setTo (double set_ra, double set_dec)
@@ -1950,6 +1956,23 @@ int D50::checkAbsEncDifference (double limitRa, double limitDec)
 	// negative difference, however large, passed
 	if (fabs (remotesAbsEncDegDifference->getRa ()) > limitRa || fabs (remotesAbsEncDegDifference->getDec ()) > limitDec)
 		return 1;
+	return 0;
+}
+
+int D50::waitDrivesStopped ()
+{
+	// base note: classic waited here for ever - a servo that never reports
+	// "stopped" hung the whole daemon (no info, so the dome cannot close either)
+	double deadline = getNow () + DRIVES_STOP_TIMEOUT;
+	while (raDrive->checkStopPlain () || decDrive->checkStopPlain ())
+	{
+		if (getNow () > deadline)
+		{
+			logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "servos did not report stopped within " << DRIVES_STOP_TIMEOUT << " s" << sendLog;
+			return -1;
+		}
+		usleep (USEC_SEC / 5);
+	}
 	return 0;
 }
 
