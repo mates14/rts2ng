@@ -31,7 +31,7 @@ Dome::Dome (int in_argc, char **in_argv, int in_device_type, bool inhibit_auto_c
 {
 	stateMaster = NULL;
 
-	closeFailReported = false;
+	closeFailReported = 0;
 	closeRetries = 0;
 
 	createValue (weatherOpensDome, "weather_open", "if true, good weather can open dome", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
@@ -146,7 +146,7 @@ int Dome::domeOpenStart ()
 		return -1;
 	}
 
-	closeFailReported = false;
+	closeFailReported = 0;
 	closeRetries = 0;
 
 	// base note: classic blocked only exposures while opening. A move queued by the
@@ -173,9 +173,16 @@ int Dome::domeCloseStart ()
 
 	if (ret < 0)
 	{
-		if (closeFailReported == false)
-			logStream (MESSAGE_REPORTIT | MESSAGE_ERROR) << "cannot start closing of the dome" << sendLog;
-		closeFailReported = true;
+		// base note: classic reported this once; an open roof that cannot close
+		// is an emergency for as long as it lasts, so repeat it (as critical)
+		if (closeFailReported == 0 || getNow () - closeFailReported >= DOME_CLOSE_FAIL_REPEAT)
+		{
+			logStream (MESSAGE_REPORTIT | MESSAGE_CRITICAL) << "cannot start closing of the dome" << sendLog;
+			closeFailReported = getNow ();
+		}
+		// and keep trying - outside bad weather nothing else would call us again
+		// (a morning close with the mount down left the roof open all day)
+		addTimer (DOME_CLOSE_FAIL_RETRY, new rts2core::Event (EVENT_DOMECLOSE_RETRY));
 		return -1;
 	}
 	else if (ret > 0)
@@ -189,7 +196,7 @@ int Dome::domeCloseStart ()
 		return 0;
 	}
 
-	closeFailReported = false;
+	closeFailReported = 0;
 
 	if ((getState () & DOME_DOME_MASK) != DOME_CLOSING)
 	{

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run the D50 dome bench scenarios (about 4 minutes) and report PASS/FAIL.
+# Run the D50 dome bench scenarios (about 6 minutes) and report PASS/FAIL.
 # Same environment as bench.sh. Exit status is the number of failed scenarios.
 
 HERE=$(dirname "$(readlink -f "$0")")
@@ -117,6 +117,28 @@ elif new bop | grep "^[0-9.]* T0 " | tail -1 | grep -q BLOCK || new bop | grep "
 else
 	result "stop while opening lifts the blocks" 0
 fi
+
+# 6. mount daemon dead: the roof must not close blind, must say so loudly, and
+#    must close by itself once the mount is back (retry every 30 s)
+open_roof
+wait_for DOME "dome opened" 20
+"$B" mount-down
+sleep 2
+mark
+"$B" cmd DOME close > /dev/null
+if ! wait_for DOME "cannot start closing" 10; then
+	result "mount down: close refused, reported" 1 "no 'cannot start closing'"
+elif new DOME | grep "cannot start closing" | grep -qv " 1048592 "; then
+	result "mount down: close refused, reported as critical" 1 "not logged as REPORTIT|CRITICAL"
+elif new fordsim | grep -q "motors B=0x02"; then
+	result "mount down: roof must not move" 1 "closing motor started"
+else
+	result "mount down: close refused, reported as critical" 0
+fi
+mark
+"$B" mount-up
+wait_for DOME "dome closed" 60
+result "mount back: roof closes by itself" $? "no 'dome closed' within 60 s"
 
 echo "$failed failed, logs in $BENCH_DIR"
 exit $failed
