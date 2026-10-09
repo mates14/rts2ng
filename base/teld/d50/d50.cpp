@@ -244,6 +244,7 @@ class D50:public Fork
 		rts2core::ValueSelection *backlashCrossStrategy;
 		rts2core::ValueInteger *backlashCrossEncoderTicks;
 		unsigned short backlashCrossEncoderStartRA, backlashCrossEncoderStartDec;
+		bool backlashCrossEncoderStartValid;	// false when the start positions could not be read
 		rts2core::ValueDouble *moveSpeedBacklash;
 		rts2core::ValueDouble *moveSpeedBacklashInterval;
 		rts2core::ValueDouble *moveSpeedFull;
@@ -298,6 +299,31 @@ class D50:public Fork
 		rts2core::ValueRaDec *remotesAbsEncDegDifference;
 		rts2core::ValueDouble *remotesAbsEncDegDifferenceLimit;
 		rts2core::ValueBool *remotesAbsEncDegDifferenceIgnore;
+
+		// false when the last read of the ABS encoders failed - their
+		// values (and the difference) are then unknown, not zero
+		bool absEncValid;
+
+		/**
+		 * Read both ABS encoders into remotesAbsEncRA/Dec and remotesAbsEncDeg.
+		 * ConnREMOTES already retries a lost packet.
+		 *
+		 * @return 0 on success, -1 when either axis could not be read (absEncValid is then false)
+		 */
+		int readAbsEncoders ();
+
+		/**
+		 * Compare the motor-vs-encoder difference with the limits, in both directions.
+		 *
+		 * @return 0 within limits, 1 above a limit, -1 encoders not read (difference unknown)
+		 */
+		int checkAbsEncDifference (double limitRa, double limitDec);
+
+		/**
+		 * Set inside_dome_limit and send it at once - the dome closes on this value,
+		 * so it must never wait for the next info cycle to learn it was cleared.
+		 */
+		void setInsideDomeOnlyMovement (bool inside);
 
 		// high-level functions for managing the REMOTES things
 		int setMotorsPower (bool power);
@@ -419,7 +445,7 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	addOption (OPT_CEILING, "ceiling", 1, "telescope hard ceiling (anti-horizon) when the dome is closed");
 
 	addOption (OPT_DOME_DEVICE, "dome_device", 1, "name of dome device [DOME]");
-	addOption (OPT_DOME_OPENSWITCH_VARIABLE, "dome-openswitch-variable", 1, "name of variable in dome, which holds the dome-open info [roof_open]");
+	addOption (OPT_DOME_OPENSWITCH_VARIABLE, "dome-openswitch-variable", 1, "name of variable in dome, which holds the dome-open info [roof_opened]");
 
 	addParkPosOption ();
 
@@ -450,6 +476,8 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	remotesAbsEncDegDifferenceLimit->setValueDouble (0.5);
 	createValue (remotesAbsEncDegDifferenceIgnore, "ignore_remotes_abs_encoder_difference", "ignore limit of difference of positions", false, RTS2_VALUE_WRITABLE);
 	remotesAbsEncDegDifferenceIgnore->setValueBool (false);
+	absEncValid = false;
+	backlashCrossEncoderStartValid = false;
 
 	closedDomeCeilingFile = nullptr;
 
@@ -495,11 +523,17 @@ void D50::postEvent (rts2core::Event *event)
                 case RTS2_D50_BOOSTSPEED:
                         if (getState () & TEL_MOVING || getState () & TEL_PARKING)
                         {
-				if (backlashCrossStrategy->getValueInteger () == BACKLASH_CROSS_STRATEGY_ENCODER_TICKS)
+				if (backlashCrossStrategy->getValueInteger () == BACKLASH_CROSS_STRATEGY_ENCODER_TICKS && backlashCrossEncoderStartValid)
 				{
 					unsigned short encodersCurrentRA, encodersCurrentDec;
-					remotesGetAbsolutePosition (remotesRA, &encodersCurrentRA);
-					remotesGetAbsolutePosition (remotesDec, &encodersCurrentDec);
+					// without encoder readings we cannot see the backlash being crossed - boost
+					// now, as the time-interval strategy would, rather than compare garbage
+					if (remotesGetAbsolutePosition (remotesRA, &encodersCurrentRA) || remotesGetAbsolutePosition (remotesDec, &encodersCurrentDec))
+					{
+						logStream (MESSAGE_WARNING) << "cannot read ABS encoders while crossing backlash, boosting speed now" << sendLog;
+					}
+					else
+					{
 					encodersCurrentRA = (encodersCurrentRA - remotesAbsEncRAOffset->getValueInteger () + 12288)%8192;	// in encoder units, but normalized and zero in "zeto" (ha/dec = 0/0) position;
 					encodersCurrentDec = (encodersCurrentDec - remotesAbsEncDecOffset->getValueInteger () + 12288)%8192;
 					#ifdef DEBUG_EXTRA
@@ -509,6 +543,7 @@ void D50::postEvent (rts2core::Event *event)
 					{
 						addTimer (0.1, new rts2core::Event (RTS2_D50_BOOSTSPEED));
 						return;
+					}
 					}
 				}
 
@@ -614,7 +649,6 @@ int D50::init ()
 	unsigned char remotesMacDec[6] = {0x00, 0x04, 0xa3, 0x12, 0x34, 0x55};
 	char remotesEthRA [] = "eth1";
 	char remotesEthDec [] = "eth1";
-	unsigned short us;
 
 	ret = Fork::init ();
 	if (ret)
@@ -682,13 +716,8 @@ int D50::init ()
 	}
 
 	setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
-	remotesGetAbsolutePosition (remotesRA, &us);
-	remotesAbsEncRA->setValueInteger (us);
-	remotesAbsEncDeg->setRa ( ln_range_degrees ( (double) (us - remotesAbsEncRAOffset->getValueInteger ()) * remotesAbsEncDegsPerStep + 180.0) - 180.0);
-
-	remotesGetAbsolutePosition (remotesDec, &us);
-	remotesAbsEncDec->setValueInteger (us);
-	remotesAbsEncDeg->setDec ( ln_range_degrees ( (double) (us - remotesAbsEncDecOffset->getValueInteger ()) * remotesAbsEncDegsPerStep + 180.0) - 180.0);
+	if (readAbsEncoders ())
+		logStream (MESSAGE_WARNING) << "cannot read ABS encoders during init, the position cross-check stays unknown until they answer" << sendLog;
 
 	// safe initial values for low-level "last safe" ac/dc - 0:0 is close to the "park" position
 	lastSafeRaPos = 0;
@@ -728,7 +757,6 @@ int D50::init ()
 
 int D50::info ()
 {
-	unsigned short usRA, usDec;
 #ifdef DEBUG_BRUTAL
 	logStream (MESSAGE_DEBUG) << "****** info ()" << sendLog;
 #endif
@@ -741,16 +769,12 @@ int D50::info ()
 	remotesWormStepsGenerator->setValueBool ((remotesMCRegisterRAState & REMOTES_REG_MC_STEPPERSIGNALENABLED) == 0x00 ? false : true);
 	updateWormStepsFreq ();
 
-	if (guidePulseRA == 0 && remotesWormStepsFreqTarget->getValueDouble () != remotesWormStepsFreqDefault->getValueDouble ())	// safe check
+	// base note: classic compared the pointer (guidePulseRA == 0), which is never
+	// true, so this reset never ran
+	if (guidePulseRA->getValueInteger () == 0 && remotesWormStepsFreqTarget->getValueDouble () != remotesWormStepsFreqDefault->getValueDouble ())	// safe check
 		setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
 
-	remotesGetAbsolutePosition (remotesRA, &usRA);
-	remotesAbsEncRA->setValueInteger (usRA);
-	remotesAbsEncDeg->setRa (ln_range_degrees ( (double) (usRA - remotesAbsEncRAOffset->getValueInteger ()) * remotesAbsEncDegsPerStep + 180.0) - 180.0);
-
-	remotesGetAbsolutePosition (remotesDec, &usDec);
-	remotesAbsEncDec->setValueInteger (usDec);
-	remotesAbsEncDeg->setDec (ln_range_degrees ( (double) (usDec - remotesAbsEncDecOffset->getValueInteger ()) * remotesAbsEncDegsPerStep + 180.0) - 180.0);
+	readAbsEncoders ();
 
         double t_telRa;
         double t_telDec;
@@ -763,8 +787,17 @@ int D50::info ()
 	setTelRaDec (t_telRa, t_telDec);
 	telFlip->setValueInteger (t_telFlip);
 	setTelUnRaDec (ut_telRa, ut_telDec);
-	remotesAbsEncDegDifference->setRa ((double) (raPos / haCpd) + haZero - remotesAbsEncDeg->getRa ());	// it's probably better this way than getting and subtracting LST from ut_telRa
-	remotesAbsEncDegDifference->setDec (ut_telDec - remotesAbsEncDeg->getDec ());
+	if (absEncValid)
+	{
+		// it's probably better this way than getting and subtracting LST from ut_telRa;
+		// wrapped to <-180,180), so a mount near HA +-180 does not show a 360 deg difference
+		remotesAbsEncDegDifference->setRa (ln_range_degrees ((double) (raPos / haCpd) + haZero - remotesAbsEncDeg->getRa () + 180.0) - 180.0);
+		remotesAbsEncDegDifference->setDec (ut_telDec - remotesAbsEncDeg->getDec ());
+	}
+	else
+	{
+		remotesAbsEncDegDifference->setValueRaDec (NAN, NAN);
+	}
 
 	return Fork::info ();
 }
@@ -841,8 +874,25 @@ int D50::startResync ()
 	int retFP;
 	int32_t dc;
 
+	// timers of a previous path must not fire into this one (startResyncMove calls
+	// stopMove only for TEL_MOVING/TEL_CORRECTING, not e.g. for a move during parking)
+	deleteTimers (RTS2_D50_BOOSTSPEED);
+	deleteTimers (RTS2_D50_SUCCESSIVE_POINTS);
+
 	if (!disableDomeOpenCheck->getValueBool ())
 	{
+		// The dome may already be waiting to close (or closing) - it asked us to park and
+		// closes as soon as inside_dome_limit says we are inside. Only the park may move
+		// us then; any other move would race the roof.
+		if (!parking)
+		{
+			rts2core::Connection *connDome = getOpenConnection (domeDevice);
+			if (connDome != nullptr && ((connDome->getState () & DOME_DOME_MASK) == DOME_CLOSING || (connDome->getState () & DOME_DOME_MASK) == DOME_WAIT_CLOSING))
+			{
+				logStream (MESSAGE_ERROR) << "the dome is closing (or waiting to close), only park is allowed now" << sendLog;
+				return -1;
+			}
+		}
 		if (getDomeState ())		// when DOME is not fully open or not reachable (AND domeopen_check is not disabled), limit the movement of the telescope to the "inside dome" space (only if we already are in this area - as setting this variable insideDomeOnlyMovement also implies the roof closing can start!)
 		{
 			logStream (MESSAGE_DEBUG) << "****** startResync () - domestate bad, limit the movement" << sendLog;
@@ -854,18 +904,25 @@ int D50::startResync ()
 				logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "Something is PRETTY WRONG!!! The dome is not open (or responding) and we are not below ceiling... Aborting movement (including park attempts)! It you insist, you can set the 'disable_domeopen_check' to on." << sendLog;
 				return -1;
 			}
-			if (!remotesAbsEncDegDifferenceIgnore->getValueBool () && (remotesAbsEncDegDifference->getRa () > remotesAbsEncDegDifferenceLimit->getValueDouble () || remotesAbsEncDegDifference->getDec () > remotesAbsEncDegDifferenceLimit->getValueDouble ()))
+			if (!remotesAbsEncDegDifferenceIgnore->getValueBool () && checkAbsEncDifference (remotesAbsEncDegDifferenceLimit->getValueDouble (), remotesAbsEncDegDifferenceLimit->getValueDouble ()) != 0)
 			{
-				logStream (MESSAGE_ERROR) << "The dome is not open, which would normaly lead to a movement within the inside_dome limits. But the position from ABS encoders differs too much, so we rather cancel the movement... You can use the 'ignore_remotes_abs_encoder_difference' switch for bypass." << sendLog;
+				logStream (MESSAGE_ERROR) << "The dome is not open, which would normaly lead to a movement within the inside_dome limits. But the position from ABS encoders differs too much (or cannot be read), so we rather cancel the movement... You can use the 'ignore_remotes_abs_encoder_difference' switch for bypass." << sendLog;
 				return -1;
 			}
-			insideDomeOnlyMovement->setValueBool (true);
+			setInsideDomeOnlyMovement (true);
 		}
 		else
 		{
-			insideDomeOnlyMovement->setValueBool (false);
+			// sent before the drives get their targets - the dome must not see a stale
+			// "inside" while we are already leaving
+			setInsideDomeOnlyMovement (false);
 			logStream (MESSAGE_DEBUG) << "****** startResync () - domestate good" << sendLog;
 		}
+	}
+	else
+	{
+		// with the check disabled, nothing keeps us inside - never let the dome believe otherwise
+		setInsideDomeOnlyMovement (false);
 	}
 
 	retFP = findPath ();
@@ -898,10 +955,16 @@ int D50::startResync ()
 			addTimer (moveSpeedBacklashInterval->getValueDouble (), new rts2core::Event (RTS2_D50_BOOSTSPEED));
 			break;
 		case BACKLASH_CROSS_STRATEGY_ENCODER_TICKS:
-			remotesGetAbsolutePosition (remotesRA, &backlashCrossEncoderStartRA);
-			remotesGetAbsolutePosition (remotesDec, &backlashCrossEncoderStartDec);
+			if (remotesGetAbsolutePosition (remotesRA, &backlashCrossEncoderStartRA) || remotesGetAbsolutePosition (remotesDec, &backlashCrossEncoderStartDec))
+			{
+				logStream (MESSAGE_WARNING) << "cannot read ABS encoders, crossing backlash by time interval" << sendLog;
+				backlashCrossEncoderStartValid = false;
+				addTimer (moveSpeedBacklashInterval->getValueDouble (), new rts2core::Event (RTS2_D50_BOOSTSPEED));
+				break;
+			}
 			backlashCrossEncoderStartRA = (backlashCrossEncoderStartRA - remotesAbsEncRAOffset->getValueInteger () + 12288)%8192;	// in encoder units, but normalized and zero in "zeto" (ha/dec = 0/0) position;
 			backlashCrossEncoderStartDec = (backlashCrossEncoderStartDec - remotesAbsEncDecOffset->getValueInteger () + 12288)%8192;
+			backlashCrossEncoderStartValid = true;
 			addTimer (0.1, new rts2core::Event (RTS2_D50_BOOSTSPEED));
 			break;
 	}
@@ -934,7 +997,7 @@ int D50::isMoving ()
                         // if difference in HA is greater than tolerance...
                         if (fabs (diffAc) > haCpd * moveTolerance->getValueDouble ())
                         {
-                                tAc = ac + 1/10 / 3600 * 15 * haCpd;	// setting value in advance - the sidereal tracking ("worm") will not be started sooner than in next cycle of isMoving () (the 1/10s corresponds to returned value below)
+                                tAc = ac + (int32_t) (0.1 / 3600.0 * 15.0 * haCpd);	// base note: classic wrote 1/10 / 3600 * 15 * haCpd, integer division made it 0; setting value in advance - the sidereal tracking ("worm") will not be started sooner than in next cycle of isMoving () (the 1/10s corresponds to returned value below)
                                 raDrive->setTargetPos (tAc);
 				return USEC_SEC / 10;
                         }
@@ -964,10 +1027,18 @@ int D50::endMove ()
 	decDrive->setPositionKp (decPosKpTrack->getValueFloat ());
 	setTimeout (USEC_SEC);
 	info ();
-	if (! remotesAbsEncDegDifferenceIgnore->getValueBool () && (remotesAbsEncDegDifference->getRa () > remotesAbsEncDegDifferenceLimit->getValueDouble () || remotesAbsEncDegDifference->getDec () > remotesAbsEncDegDifferenceLimit->getValueDouble ()))
+	if (!remotesAbsEncDegDifferenceIgnore->getValueBool ())
 	{
 		// TODO: just scream for now, we will solve this more appropriately in the future
-		logStream (MESSAGE_ERROR) << "Remotes ABS encoders difference above the limit: " << remotesAbsEncDegDifference->getRa () << ":" << remotesAbsEncDegDifference->getDec () << sendLog;
+		switch (checkAbsEncDifference (remotesAbsEncDegDifferenceLimit->getValueDouble (), remotesAbsEncDegDifferenceLimit->getValueDouble ()))
+		{
+			case 1:
+				logStream (MESSAGE_ERROR) << "Remotes ABS encoders difference above the limit: " << remotesAbsEncDegDifference->getRa () << ":" << remotesAbsEncDegDifference->getDec () << sendLog;
+				break;
+			case -1:
+				logStream (MESSAGE_ERROR) << "Remotes ABS encoders cannot be read after the move, position not cross-checked" << sendLog;
+				break;
+		}
 	}
 	return Fork::endMove ();
 }
@@ -995,6 +1066,8 @@ int D50::abortMoveTracking ()
 	if (labs (raDrive->getPosition () - lastSafeRaPos) < (int32_t) fabs (10.0 * haCpd) && labs (decDrive->getPosition () - lastSafeDecPos) < (int32_t) fabs (10.0 * decCpd)) // safety limit
 	{
 		logStream (MESSAGE_DEBUG) << "abortMoveTracking - returning back to last known safe position: " << lastSafeRaPos << " " << lastSafeDecPos << sendLog;
+		// this move is not checked against the ceiling, so we can no longer promise the dome we stay inside
+		setInsideDomeOnlyMovement (false);
 		raDrive->setTargetPos (lastSafeRaPos);
 		decDrive->setTargetPos (lastSafeDecPos);
 	}
@@ -1119,26 +1192,34 @@ int D50::endPark ()
 	decDrive->setMaxSpeed (DEC_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	setTimeout (USEC_SEC);
 
+	// base note: classic decided on the position and encoder difference of the last info ()
+	// cycle, taken while still moving; refresh them now, at rest (as endMove does)
+	info ();
+
 	struct ln_hrz_posn hrpos;
 	hrpos.alt = telAltAz->getAlt ();
 	hrpos.az = telAltAz->getAz ();
 	if (hardCeiling.is_good (&hrpos))	// !!! we use the "horizon" object, but need a ceiling test, so the logic is reversed
 	{
 		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "THE DOME WILL NOT BE CLOSED, EMERGENCY INTERVENTION NECESSARY!!! Reason: the telescope has parked, but it's position prevents to close the dome." << sendLog;
+		setInsideDomeOnlyMovement (false);
 		return -1;
 	}
 
-	// we don't refresh the remotesAbsEncDegDifference values, it's made within the "info ()" function (it's called every 1s during the movement).
-	if (!remotesAbsEncDegDifferenceIgnore->getValueBool () && (remotesAbsEncDegDifference->getRa () > 10.0 || remotesAbsEncDegDifference->getDec () > 6.0))	// we set this VERY loose, we do not want to obstruct dome-closing, unless it's really necessary
+	int encCheck = remotesAbsEncDegDifferenceIgnore->getValueBool () ? 0 : checkAbsEncDifference (10.0, 6.0);	// we set this VERY loose, we do not want to obstruct dome-closing, unless it's really necessary
+	if (encCheck == 1)
 	{
 		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "THE DOME WILL NOT BE CLOSED, EMERGENCY INTERVENTION NECESSARY!!! Reason: the telescope has parked (according to the servos), but the position from ABS sensors differs too much... You can use the 'ignore_remotes_abs_encoder_difference' switch to bypass this check." << sendLog;
+		setInsideDomeOnlyMovement (false);
 		return -1;
 	}
-	else
+	if (encCheck == -1)
 	{
-		insideDomeOnlyMovement->setValueBool (true);
-		sendValueAll (insideDomeOnlyMovement);		// to let the DOME know we will not cross it's border :-) so the roof can be closed
+		// the servos say we are parked below the ceiling (checked above); the encoders are only a
+		// cross-check - an unreadable cross-check must not keep the roof open in rain
+		logStream (MESSAGE_WARNING | MESSAGE_REPORTIT) << "parked, but the ABS encoders cannot be read - letting the dome close on the servo position alone" << sendLog;
 	}
+	setInsideDomeOnlyMovement (true);		// to let the DOME know we will not cross it's border :-) so the roof can be closed
 
 	usleep (USEC_SEC * 2);
 	raDrive->sleep ();
@@ -1339,9 +1420,9 @@ int D50::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 				logStream (MESSAGE_ERROR) << "Cannot limit movement to 'inside dome', while not being in this area!" << sendLog;
 				return -2;
 			}
-			if (!remotesAbsEncDegDifferenceIgnore->getValueBool () && (remotesAbsEncDegDifference->getRa () > remotesAbsEncDegDifferenceLimit->getValueDouble () || remotesAbsEncDegDifference->getDec () > remotesAbsEncDegDifferenceLimit->getValueDouble ()))
+			if (!remotesAbsEncDegDifferenceIgnore->getValueBool () && checkAbsEncDifference (remotesAbsEncDegDifferenceLimit->getValueDouble (), remotesAbsEncDegDifferenceLimit->getValueDouble ()) != 0)
 			{
-				logStream (MESSAGE_ERROR) << "Cannot limit movement to 'inside dome', the position from ABS encoders differs too much... If you insist, use the 'ignore_remotes_abs_encoder_difference' switch." << sendLog;
+				logStream (MESSAGE_ERROR) << "Cannot limit movement to 'inside dome', the position from ABS encoders differs too much (or cannot be read)... If you insist, use the 'ignore_remotes_abs_encoder_difference' switch." << sendLog;
 				return -2;
 			}
 		}
@@ -1838,6 +1919,44 @@ int D50::setWormStepsFreq (double freq)
 		return 0;
 	}
 	return -1;
+}
+
+int D50::readAbsEncoders ()
+{
+	unsigned short usRA, usDec;
+	if (remotesGetAbsolutePosition (remotesRA, &usRA) || remotesGetAbsolutePosition (remotesDec, &usDec))
+	{
+		if (absEncValid)
+			logStream (MESSAGE_ERROR) << "cannot read ABS encoders, motor/encoder position cross-check unknown" << sendLog;
+		absEncValid = false;
+		return -1;
+	}
+	if (!absEncValid)
+		logStream (MESSAGE_INFO) << "ABS encoders read" << sendLog;
+	absEncValid = true;
+
+	remotesAbsEncRA->setValueInteger (usRA);
+	remotesAbsEncDeg->setRa (ln_range_degrees ( (double) (usRA - remotesAbsEncRAOffset->getValueInteger ()) * remotesAbsEncDegsPerStep + 180.0) - 180.0);
+	remotesAbsEncDec->setValueInteger (usDec);
+	remotesAbsEncDeg->setDec (ln_range_degrees ( (double) (usDec - remotesAbsEncDecOffset->getValueInteger ()) * remotesAbsEncDegsPerStep + 180.0) - 180.0);
+	return 0;
+}
+
+int D50::checkAbsEncDifference (double limitRa, double limitDec)
+{
+	if (!absEncValid || std::isnan (remotesAbsEncDegDifference->getRa ()) || std::isnan (remotesAbsEncDegDifference->getDec ()))
+		return -1;
+	// base note: classic compared the signed difference (diff > limit), so any
+	// negative difference, however large, passed
+	if (fabs (remotesAbsEncDegDifference->getRa ()) > limitRa || fabs (remotesAbsEncDegDifference->getDec ()) > limitDec)
+		return 1;
+	return 0;
+}
+
+void D50::setInsideDomeOnlyMovement (bool inside)
+{
+	insideDomeOnlyMovement->setValueBool (inside);
+	sendValueAll (insideDomeOnlyMovement);
 }
 
 int D50::getDomeState ()
