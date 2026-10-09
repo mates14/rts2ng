@@ -34,6 +34,8 @@
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/wait.h>
+#include <sys/un.h>
+#include <cstddef>
 
 #include "daemon.h"
 #include "base-config.h"
@@ -68,6 +70,50 @@
 //
 // which makes rts2-start's "started"/"failed" mean what it says.
 static int daemonize_notify_fd = -1;
+
+// systemd notification (sd_notify protocol, without libsystemd). Under a unit
+// with Type=notify the daemon reports READY=1 once it is up, and with
+// WatchdogSec= it must send WATCHDOG=1 from its main loop - a daemon hung in
+// a driver loop stops sending, and systemd kills and restarts it. Outside
+// systemd NOTIFY_SOCKET is unset and all of this does nothing.
+static std::string sd_notify_socket;
+static double sd_watchdog_interval = 0;	// seconds between WATCHDOG=1, 0 = no watchdog
+static double sd_watchdog_last = 0;
+
+static void sdNotifyInit ()
+{
+	const char *ns = getenv ("NOTIFY_SOCKET");
+	if (ns == nullptr || (ns[0] != '/' && ns[0] != '@'))
+		return;
+	sd_notify_socket = ns;
+	const char *wu = getenv ("WATCHDOG_USEC");
+	const char *wp = getenv ("WATCHDOG_PID");
+	if (wu != nullptr && (wp == nullptr || atol (wp) == (long) getpid ()))
+		sd_watchdog_interval = atof (wu) / 2e6;	// half the period, as systemd recommends
+	// scripts and programs started by the daemon must not report in its name
+	unsetenv ("NOTIFY_SOCKET");
+	unsetenv ("WATCHDOG_USEC");
+	unsetenv ("WATCHDOG_PID");
+}
+
+static void sdNotify (const char *msg)
+{
+	if (sd_notify_socket.empty ())
+		return;
+	struct sockaddr_un sa;
+	if (sd_notify_socket.length () >= sizeof (sa.sun_path))
+		return;
+	int fd = socket (AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return;
+	memset (&sa, 0, sizeof (sa));
+	sa.sun_family = AF_UNIX;
+	memcpy (sa.sun_path, sd_notify_socket.c_str (), sd_notify_socket.length ());
+	if (sa.sun_path[0] == '@')
+		sa.sun_path[0] = '\0';	// abstract namespace
+	sendto (fd, msg, strlen (msg), MSG_NOSIGNAL, (struct sockaddr *) &sa, offsetof (struct sockaddr_un, sun_path) + sd_notify_socket.length ());
+	close (fd);
+}
 
 /**
  * Block until the just-forked daemon child reports the outcome of its
@@ -154,6 +200,7 @@ Daemon::Daemon (int _argc, char **_argv, int _init_state):rts2core::Block (_argc
 	// one shared ident ("rts2") regardless of whether centrald is
 	// reachable - see the rewritten Daemon::sendMessage below for why.
 	openlog ("rts2", LOG_PID, LOG_DAEMON);
+	sdNotifyInit ();
 
 	lockPrefix = nullptr;
 	lock_file = 0;
@@ -406,6 +453,7 @@ int Daemon::doDaemonize ()
 
 void Daemon::daemonizeReady ()
 {
+	sdNotify ("READY=1");
 	if (daemonize_notify_fd < 0)
 	{
 		// -i/interactive, a multidev sub-device, or already reported
@@ -707,6 +755,12 @@ void Daemon::endRunLoop ()
 
 int Daemon::idle ()
 {
+	if (sd_watchdog_interval > 0 && getNow () - sd_watchdog_last >= sd_watchdog_interval)
+	{
+		sdNotify ("WATCHDOG=1");
+		sd_watchdog_last = getNow ();
+	}
+
 	if (doHupIdleLoop)
 	{
 		signaledHUP ();
@@ -775,27 +829,27 @@ void Daemon::sendMessage (messageType_t in_messageType, const char *in_messageSt
 	// reachable at all. The wire relay to centrald (still done by
 	// Device::sendMessage/Centrald::processMessage) is now purely for
 	// live rts2-mon display, not persistence.
+	// base note: this switched on the whole type, so a message with a flag bit
+	// (MESSAGE_CRITICAL | MESSAGE_REPORTIT - every roof/park emergency) matched
+	// no case and went to syslog as LOG_DEBUG; and CRITICAL was filed as plain
+	// LOG_ERR. Test the level bits, and give CRITICAL its own priority, which
+	// is what rts2-alertd forwards.
 	int prio;
-	switch (in_messageType)
-	{
-		case MESSAGE_CRITICAL:
-		case MESSAGE_ERROR:
-			prio = LOG_ERR;
-			break;
-		case MESSAGE_WARNING:
-			prio = LOG_WARNING;
-			break;
-		case MESSAGE_INFO:
-			prio = LOG_INFO;
-			break;
-		case MESSAGE_DEBUG:
-		default:
-			prio = LOG_DEBUG;
-			break;
-	}
+	if (in_messageType & MESSAGE_CRITICAL)
+		prio = LOG_CRIT;
+	else if (in_messageType & MESSAGE_ERROR)
+		prio = LOG_ERR;
+	else if (in_messageType & MESSAGE_WARNING)
+		prio = LOG_WARNING;
+	else if (in_messageType & MESSAGE_INFO)
+		prio = LOG_INFO;
+	else
+		prio = LOG_DEBUG;
 	syslog (prio, "%s", in_messageString);
 
-	if (daemonize == DO_DAEMONIZE || daemonize == DONT_DAEMONIZE)
+	// under systemd (NOTIFY_SOCKET) stderr goes to the journal too - echoing
+	// there would log every message twice
+	if (sd_notify_socket.empty () && (daemonize == DO_DAEMONIZE || daemonize == DONT_DAEMONIZE))
 	{
 		// not (yet) daemonized/interactive (-i) - also print to stderr so the user sees it directly
 		rts2core::Block::sendMessage (in_messageType, in_messageString);
