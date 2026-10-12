@@ -13,11 +13,20 @@ if [ "$1" = configure ]; then
 	dkms add -m $NAME -v $VERSION
 	# A missing headers package for the running kernel should not leave
 	# the package half-configured - DKMS builds it at the next kernel
-	# install, or by hand with `dkms autoinstall`.
+	# install, or by hand with `dkms autoinstall`. The headers metapackage
+	# in Depends only covers the newest kernel, not one still running
+	# from before an upgrade.
 	if [ -d "/lib/modules/$(uname -r)/build" ]; then
-		dkms build -m $NAME -v $VERSION && dkms install -m $NAME -v $VERSION || true
+		# A camera plugged in before the module existed got no driver:
+		# load it now rather than at the next replug or reboot.
+		if dkms build -m $NAME -v $VERSION && dkms install -m $NAME -v $VERSION; then
+			modprobe $NAME || true
+		else
+			echo "fliusb-dkms: module build for $(uname -r) FAILED, see above" >&2
+		fi
 	else
-		echo "fliusb-dkms: no headers for $(uname -r), module not built now" >&2
+		echo "fliusb-dkms: no headers for $(uname -r), module not built;" \
+			"install linux-headers-$(uname -r), then run dkms autoinstall" >&2
 	fi
 fi
 

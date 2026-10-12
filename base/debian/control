@@ -49,13 +49,15 @@ Description: Remote Telescope System 2 - Finger Lakes Instrumentation drivers
 
 Package: fliusb-dkms
 Architecture: all
-Depends: ${misc:Depends}, dkms
+Depends: ${misc:Depends}, dkms,
+ linux-headers-amd64 | linux-headers-arm64 | linux-headers-generic | linux-headers
 Description: Finger Lakes Instrumentation USB kernel module (DKMS)
  Kernel module for Finger Lakes Instrumentation (FLI) USB cameras,
  focusers and filter wheels: creates /dev/fliusb<n> for each attached
  device, which FLI's libfli (and so rts2-drivers-fli) talks to. FLI's
  module 1.5 with fixes for current kernels, built by DKMS for every
- installed kernel.
+ installed kernel; depends on the headers metapackage so that a kernel
+ upgrade brings the headers to build it with.
 
 Package: rts2-drivers-gxccd
 Architecture: any

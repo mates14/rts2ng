@@ -72,7 +72,7 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
 | SBT/BART | `dome-bart`, `teld-gemini` / `teld-gemini-udp`, `focusd-aaf`, `sensor-bart-rain`, `sensor-aws-mlab` |
 | FRAM Los Leones | `focusd-aaf`, `sensor-fram-weather`, `dome-zelio`, `teld-lx200`, `sensor-nut`, `camd-gxccd` |
 | FRAM Paranal (brown, white) | `teld-paramount`, `dome-zelio`, `camd-gxccd`, `focusd-nstep`, `sensor-windrs`, `sensor-external` |
-| FLORES | `camd-fli` (with a filter wheel) |
+| FLORES | `camd-fli` (with a filter wheel), `rts2-toptec` (focuser, Perek-specific, not in this repo) |
 | makak | `camd-gxccd`, `sensor-makak-shutter` |
 | AVE lab | `sensor-avelab` |
 

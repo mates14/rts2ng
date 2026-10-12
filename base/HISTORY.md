@@ -3005,6 +3005,20 @@ reachable over UDP at all on this firmware - the handshake is documented for
 the serial protocol, which the UDP layer tunnels, but nobody here has seen a
 `b#` come back over a datagram yet.
 
+## fliusb-dkms pulls in kernel headers (2026-10-12) [MJ]
+
+At FLORES the FLI camera had no `/dev/fliusb*` after installing
+`fliusb-dkms`: `dkms status` said `added`, never built. The machine had
+headers only for the old kernel 6.12.94, while 6.12.111 was running, and
+the postinst skips the build without headers. trixie's dkms 3.2 does not
+recommend a headers package, so nothing brought them in. `fliusb-dkms` now
+depends on the headers metapackage (`linux-headers-amd64 | -arm64 |
+-generic | linux-headers`), so every kernel upgrade brings its headers. The
+postinst also loads the module after a successful build, so a camera that
+is already plugged in works without a replug, and it reports a failed
+build instead of hiding it behind `|| true`. At FLORES, installing the
+headers made DKMS build and load the module by itself; the camera works.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
