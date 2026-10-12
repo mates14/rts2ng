@@ -855,6 +855,12 @@
             // single roof with no north/south distinction at all).
             const opened = safeValue(systemData.DOME, 'roof_opened', 0) == 1;
             const closed = safeValue(systemData.DOME, 'roof_closed', 0) == 1;
+            // weather_open is whether the system switches itself from
+            // standby to on by the weather, with no one at the controls -
+            // not whether the weather is good now. D50 doesn't use that
+            // (as of 2026-10-12 the operator switches to on by hand each
+            // evening), so "No" with the roof open and the system observing
+            // is normal here.
             const weatherOpen = safeValue(systemData.DOME, 'weather_open', 0) == 1;
             div.innerHTML = `
                 <div class="status-value"><strong>Roof:</strong> <span class="${opened ? 'warn' : 'good'}">${opened ? 'Open' : (closed ? 'Closed' : 'Moving/unknown')}</span></div>

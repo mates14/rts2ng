@@ -2751,3 +2751,13 @@ Tested live: the page in headless Firefox on lascaux50, served through a
 local proxy to the running rts2-httpd (:8889), during an observation of
 Mrk 501. All values filled in and CORR_ matched the raw value. Not in
 `bart-monitor.html`.
+
+### D50 monitor: what "Weather allows opening" means (2026-10-12) [JS]
+
+DOME's `weather_open`, shown as "Weather allows opening", says whether the
+system switches itself from standby to on by the weather, with no human at
+the controls; it is not "the weather is good now". D50 does not use it yet:
+the operator switches to on by hand each evening once it is safe, so "No"
+next to an open roof and "ON night" is normal (user's explanation; they
+may turn automatic opening on later). Comment added at the code; display
+unchanged.
