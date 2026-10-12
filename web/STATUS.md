@@ -2717,4 +2717,10 @@ is the sign bit of a JS bitwise result, hence the `>>> 0`.
 
 Tested in headless Firefox with the function lifted out of the page and fed
 the states above, plus an unreachable centrald (`N/A`). Not tried against the
-live daemon; `bart-monitor.html` is unchanged.
+live daemon.
+
+`bart-monitor.html` got the same function and reason line, on the user's
+call: its old comment said weather was left out deliberately because "Weather
+allows opening" under Dome covers it, but that row says only whether the roof
+may open, not why, nor anything about stop or blocks. Same headless-Firefox
+test against BART's copy.
