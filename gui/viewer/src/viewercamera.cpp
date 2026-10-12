@@ -126,15 +126,89 @@ namespace
 }
 
 ViewerCamera::ViewerCamera (rts2core::Connection *_connection):
-	rts2image::DevClientCameraImage (_connection)
+	rts2script::DevClientCameraExec (_connection)
 {
 }
 
 rts2image::Image *ViewerCamera::createImage (const struct timeval *expStart)
 {
+	// what DevClientCameraExec::createImage() does besides naming the file:
+	// the script that took the image gets to see it in processImage()
+	exposureScript = getScript ();
 	if (saveImage && !archiveExpandPath.empty ())
 		return new rts2image::Image (archiveExpandPath.c_str (), getExposureNumber (), expStart, connection, false, writeConnection, writeRTS2Values);
 	return rts2image::DevClientCameraImage::createImage (expStart);
+}
+
+void ViewerCamera::runScript (Rts2Target *target)
+{
+	// Delivered synchronously: DevScript::postEvent() calls startTarget()
+	// right away unless a script is already running.
+	startRequested = true;
+	getConnection ()->postEvent (new rts2core::Event (EVENT_SET_TARGET_NOT_CLEAR, (void *) target));
+	if (startRequested)
+	{
+		startRequested = false;
+		emit scriptEnded ("a script is already running on " + QString (getName ()));
+	}
+}
+
+void ViewerCamera::stopScript ()
+{
+	// DevScript::postEvent() -> deleteScript(), purely local: EVENT_KILL_ALL
+	// would also send killall, which ends with the device's script_ends
+	// resetting values the user set.
+	getConnection ()->postEvent (new rts2core::Event (EVENT_STOP_OBSERVATION));
+}
+
+void ViewerCamera::startTarget (bool callScriptEnds)
+{
+	// Never script_ends: on the device that resets every value the script
+	// changed back to its default, which in a viewer means undoing the
+	// user's binning, filter or cooling at the start of each exposure.
+	// rts2-scriptexec only sends it with --reset.
+	(void) callScriptEnds;
+	bool requested = startRequested;
+	startRequested = false;
+	QString error;
+	try
+	{
+		rts2script::DevClientCameraExec::startTarget (false);
+	}
+	catch (rts2core::Error &er)
+	{
+		// a script that does not parse - DevScript::startTarget() lets the
+		// parser's exception out with the target already taken
+		currentTarget = nullptr;
+		error = QString ("script does not parse: ") + er.what ();
+		logStream (MESSAGE_ERROR) << getName () << ": " << er.what () << sendLog;
+	}
+	// startTarget() also runs after every script ends, looking for the
+	// next target; only report the one runScript() asked for
+	if (requested && !haveScript ())
+		// the parser drops a command it cannot read (e.g. "E" without a
+		// time) without an error, so an empty script is usually a typo
+		emit scriptEnded (error.isEmpty () ? QString ("no command in the script could be read") : error);
+}
+
+void ViewerCamera::deleteScript ()
+{
+	bool hadScript = haveScript ();
+	rts2script::DevClientCameraExec::deleteScript ();
+	if (hadScript)
+		emit scriptEnded (QString ());
+}
+
+rts2image::imageProceRes ViewerCamera::processImage (rts2image::Image *image)
+{
+	// Not DevClientCameraExec::processImage(): that queues every image to
+	// the site's image processor (rts2-imgproc), and viewer frames are not
+	// observations. What it does for the script is kept - a script waiting
+	// for this image's metadata goes on (nextCommand() is a no-op when
+	// nothing waits).
+	if (haveScript ())
+		nextCommand ();
+	return rts2image::DevClientCameraImage::processImage (image);
 }
 
 void ViewerCamera::setMeasureRegion (int x, int y, int w, int h)
@@ -341,13 +415,13 @@ void ViewerCamera::runFitOnData (const void *data, int dataType, long width, lon
 
 void ViewerCamera::exposureStarted (bool expectImage)
 {
-	rts2image::DevClientCameraImage::exposureStarted (expectImage);
+	rts2script::DevClientCameraExec::exposureStarted (expectImage);
 	emit exposureStateChanged (true);
 }
 
 void ViewerCamera::exposureEnd (bool expectImage)
 {
-	rts2image::DevClientCameraImage::exposureEnd (expectImage);
+	rts2script::DevClientCameraExec::exposureEnd (expectImage);
 	emit exposureStateChanged (false);
 }
 
@@ -398,7 +472,7 @@ void ViewerCamera::snapshotValues (QMap<QString, double> &values, QMap<QString, 
 
 void ViewerCamera::stateChanged (rts2core::ServerState *state)
 {
-	rts2image::DevClientCameraImage::stateChanged (state);
+	rts2script::DevClientCameraExec::stateChanged (state);
 
 	// Connection::getStateString() (what rts2-mon shows) is a "|"-joined
 	// dump of every set status/shutter/bop bit ("0 EXPOSING |

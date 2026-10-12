@@ -22,6 +22,7 @@
 #include "gui/viewercamera.h"
 #include "gui/imagecanvas.h"
 #include "gui/focusgraphwidget.h"
+#include "gui/modes.h"
 
 namespace gui
 {
@@ -122,7 +123,8 @@ class MainWindow : public QMainWindow
 		void onCameraComboChanged (int index);
 		void onFilterComboChanged (int index);
 		void onBinningComboChanged (int index);
-		void onShutterComboChanged (int index);
+		void onModeComboChanged (int index);
+		void onModesFileResolved (QString path);
 		void onCcdSetChanged ();
 		void onCoolingToggled (bool checked);
 		void onWindowingToggled (bool checked);
@@ -154,6 +156,11 @@ class MainWindow : public QMainWindow
 		void updateWindowBoxSize ();
 		void sendWindowForNextExposure ();
 		void startNextRunExposure ();
+		void startScript ();
+		void onScriptEnded (const QString &cameraName, const QString &error);
+		void finishRun (const QString &message);
+		void updateExposeControls ();
+		void updateModeStyle ();
 		void log (const QString &message);
 		QString zoomedViewStyle () const;
 
@@ -165,6 +172,15 @@ class MainWindow : public QMainWindow
 		// Run/Stop sequence state (repeated exposures - see onRunStopClicked).
 		// runTotal < 0 means "run until Stop is pressed" (repeatSpin's
 		// special zero value); runIndex counts completed exposures so far.
+		QVector<ExposureMode> modes;
+
+		// Camera a script was started on and has not ended yet (empty when
+		// none) - Expose, Run, the mode and the camera stay locked until
+		// its ViewerCamera::scriptEnded() arrives. stopping: Stop was
+		// pressed, waiting for that.
+		QString busyCamera;
+		bool stopping = false;
+
 		bool runActive = false;
 		int runTotal = 0;
 		int runIndex = 0;
@@ -180,7 +196,9 @@ class MainWindow : public QMainWindow
 
 		QComboBox *cameraCombo;
 		QCheckBox *nightCheck;
+		QComboBox *modeCombo;
 		QDoubleSpinBox *exptimeSpin;
+		QDoubleSpinBox *caltimeSpin;
 		QSpinBox *repeatSpin;
 		QPushButton *exposeButton;
 		QPushButton *runButton;
@@ -192,7 +210,6 @@ class MainWindow : public QMainWindow
 
 		QComboBox *filterCombo;
 		QComboBox *binningCombo;
-		QComboBox *shutterCombo;
 		QLabel *ccdTempLabel;
 		QDoubleSpinBox *ccdSetSpin;
 		QCheckBox *coolingCheck;

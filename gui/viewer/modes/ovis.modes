@@ -1,0 +1,32 @@
+# rts2-viewer exposure modes for OVIS, the long-slit imaging spectrograph
+# (see gui/viewer/include/gui/modes.h for the format). Enable with
+#   [viewer]
+#   modes = /usr/share/rts2/viewer-modes/ovis.modes
+# in rts2.ini, or rts2-viewer --modes <file>.
+#
+# Taken from python/sites/ovis/ovis-acquire.sh: on the camera, FILTA is
+# N (nothing) or grism and FILTB open or jogurt (the slit); W1 is the
+# spectrograph device with the NEON calibration lamp. Every mode sets all
+# three itself, so it does not depend on what ran before. Bare value names
+# (FILTA=...) go to the camera the mode runs on.
+#
+# Not here from ovis-acquire.sh: the flood image (neon through the open
+# beam, thrown away) taken before spectra - a script cannot delete its
+# frame, so it would land on disk; and NCLEARS, until it is clear the
+# camera has it. No flat lamp at OVIS.
+
+[Direct image]
+color = cyan
+script = FILTA=N FILTB=open W1.NEON=off E $EXPTIME
+
+[Spectrum]
+color = green
+script = FILTB=jogurt FILTA=grism W1.NEON=off E $EXPTIME
+
+[Lambda calib]
+color = purple
+script = FILTB=jogurt FILTA=grism W1.NEON=on E $CALTIME W1.NEON=off
+
+[Dark]
+color = red
+script = D $EXPTIME

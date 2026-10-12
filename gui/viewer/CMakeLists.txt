@@ -17,7 +17,8 @@ add_executable(rts2-viewer
 	src/sightitem.cpp include/gui/sightitem.h
 	src/focusgraphwidget.cpp include/gui/focusgraphwidget.h
 	src/nightmode.cpp include/gui/nightmode.h
+	src/modes.cpp include/gui/modes.h
 )
 
 target_include_directories(rts2-viewer PRIVATE include)
-target_link_libraries(rts2-viewer PRIVATE base_kernel Qt5::Widgets)
+target_link_libraries(rts2-viewer PRIVATE base_script base_kernel Qt5::Widgets)

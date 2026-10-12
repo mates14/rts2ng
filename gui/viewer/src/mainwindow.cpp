@@ -172,12 +172,30 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	QGroupBox *exposeBox = new QGroupBox ("Expose", controlWidget);
 	QFormLayout *exposeForm = new QFormLayout (exposeBox);
 
+	// What Expose and Run do: each mode is an RTS2 script (gui/modes.h),
+	// built-in Light/Dark until the site's modes file arrives
+	// (onModesFileResolved()). Coloured by the mode, the buttons too
+	// (updateModeStyle()), so a dark is never taken by accident - with
+	// darks behind a separate shutter combo, it was easy to leave it on
+	// DARK and lose a night's light.
+	modeCombo = new QComboBox (exposeBox);
+	exposeForm->addRow ("Mode:", modeCombo);
+
 	exptimeSpin = new QDoubleSpinBox (exposeBox);
 	exptimeSpin->setRange (0.0, 3600.0);
 	exptimeSpin->setDecimals (3);
 	exptimeSpin->setValue (1.0);
 	exptimeSpin->setSuffix (" s");
 	exposeForm->addRow ("Exposure time:", exptimeSpin);
+
+	// $CALTIME in a mode's script - e.g. the short arc exposure
+	// interleaved with spectra; only enabled for modes that use it
+	caltimeSpin = new QDoubleSpinBox (exposeBox);
+	caltimeSpin->setRange (0.0, 3600.0);
+	caltimeSpin->setDecimals (3);
+	caltimeSpin->setValue (1.0);
+	caltimeSpin->setSuffix (" s");
+	exposeForm->addRow ("Calib time:", caltimeSpin);
 
 	repeatSpin = new QSpinBox (exposeBox);
 	repeatSpin->setRange (0, 9999);
@@ -226,14 +244,6 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	binningCombo = new QComboBox (cameraBox);
 	binningCombo->setEnabled (false);
 	cameraForm->addRow ("Binning:", binningCombo);
-
-	// SHUTTER is a plain ValueSelection ("LIGHT"/"DARK",
-	// base/camd/include/camd.h's expType) - same generic
-	// combo/applyValueToWidgets/requestValueChange mechanism as filter and
-	// binning above. This is what actually lets a dark frame be taken.
-	shutterCombo = new QComboBox (cameraBox);
-	shutterCombo->setEnabled (false);
-	cameraForm->addRow ("Shutter:", shutterCombo);
 
 	QGroupBox *coolingBox = new QGroupBox ("Cooling", controlWidget);
 	QFormLayout *coolingForm = new QFormLayout (coolingBox);
@@ -341,7 +351,7 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	connect (saveButton, &QPushButton::toggled, this, &MainWindow::onSaveToggled);
 	connect (filterCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onFilterComboChanged);
 	connect (binningCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onBinningComboChanged);
-	connect (shutterCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onShutterComboChanged);
+	connect (modeCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onModeComboChanged);
 	connect (ccdSetSpin, &QDoubleSpinBox::editingFinished, this, &MainWindow::onCcdSetChanged);
 	connect (coolingCheck, &QCheckBox::toggled, this, &MainWindow::onCoolingToggled);
 	connect (windowingCheck, &QCheckBox::toggled, this, &MainWindow::onWindowingToggled);
@@ -353,6 +363,11 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	// --- RTS2 connection, on its own thread (see viewerclient.h) --------
 	clientThread = new ClientThread (argc, argv, this);
 	connect (clientThread, &ClientThread::cameraCreated, this, &MainWindow::onCameraCreated);
+	connect (clientThread, &ClientThread::modesFileResolved, this, &MainWindow::onModesFileResolved, Qt::QueuedConnection);
+	modes = builtinModes ();
+	for (const ExposureMode &mode : modes)
+		modeCombo->addItem (mode.label);
+	onModeComboChanged (0);
 	connect (clientThread, &ClientThread::progressUpdated, this, [this] (QString cameraName, double start, double end) { onProgressUpdated (cameraName, start, end); }, Qt::QueuedConnection);
 	clientThread->start ();
 
@@ -383,6 +398,7 @@ void MainWindow::onCameraCreated (QString name, ViewerCamera *camera)
 
 	connect (camera, &ViewerCamera::imageReady, this, [this, name] (QImage image) { onImageReady (name, image); }, Qt::QueuedConnection);
 	connect (camera, &ViewerCamera::exposureStateChanged, this, [this, name] (bool exposing) { onExposureStateChanged (name, exposing); }, Qt::QueuedConnection);
+	connect (camera, &ViewerCamera::scriptEnded, this, [this, name] (QString error) { onScriptEnded (name, error); }, Qt::QueuedConnection);
 	connect (camera, &ViewerCamera::valueUpdated, this, [this, name] (QString valueName, double numericValue, QStringList choices) { onValueUpdated (name, valueName, numericValue, choices); }, Qt::QueuedConnection);
 	connect (camera, &ViewerCamera::stateTextChanged, this, [this, name] (QString stateText, bool hasError) { onStateTextChanged (name, stateText, hasError); }, Qt::QueuedConnection);
 	connect (camera, &ViewerCamera::rectangleUpdated, this, [this, name] (QString valueName, int x, int y, int w, int h) { onRectangleUpdated (name, valueName, x, y, w, h); }, Qt::QueuedConnection);
@@ -433,7 +449,6 @@ void MainWindow::onCameraComboChanged (int index)
 	// full state a while ago, before it became the active one.
 	filterCombo->setEnabled (false);
 	binningCombo->setEnabled (false);
-	shutterCombo->setEnabled (false);
 	ccdSetSpin->setEnabled (false);
 	coolingCheck->setEnabled (false);
 	ccdTempLabel->setText ("...");
@@ -503,21 +518,6 @@ void MainWindow::onExposureStateChanged (const QString &cameraName, bool exposin
 	if (cameraName != activeCamera)
 		return;
 
-	if (!exposing && runActive)
-	{
-		if (runTotal != 0 && runIndex >= runTotal)
-		{
-			runActive = false;
-			runButton->setText ("Run");
-			exposeButton->setEnabled (true);
-			repeatSpin->setEnabled (true);
-			log ("run sequence finished");
-		}
-		else
-		{
-			startNextRunExposure ();
-		}
-	}
 }
 
 void MainWindow::onValueUpdated (const QString &cameraName, const QString &valueName, double numericValue, QStringList choices)
@@ -757,20 +757,6 @@ void MainWindow::applyValueToWidgets (const QString &valueName, double numericVa
 		binningCombo->blockSignals (false);
 		binningCombo->setEnabled (true);
 	}
-	else if (valueName == "SHUTTER")
-	{
-		if (!choices.isEmpty () && shutterCombo->count () != choices.size ())
-		{
-			shutterCombo->blockSignals (true);
-			shutterCombo->clear ();
-			shutterCombo->addItems (choices);
-			shutterCombo->blockSignals (false);
-		}
-		shutterCombo->blockSignals (true);
-		shutterCombo->setCurrentIndex ((int) numericValue);
-		shutterCombo->blockSignals (false);
-		shutterCombo->setEnabled (true);
-	}
 	else if (valueName == "CCD_TEMP")
 	{
 		ccdTempLabel->setText (QString ("%1 °C").arg (numericValue, 0, 'f', 1));
@@ -793,39 +779,169 @@ void MainWindow::applyValueToWidgets (const QString &valueName, double numericVa
 
 void MainWindow::onExposeClicked ()
 {
-	if (runActive)
+	if (!busyCamera.isEmpty () || activeCamera.isEmpty ())
 		return;
-	sendWindowForNextExposure ();
-	double exptime = exptimeSpin->value ();
-	log (QString ("requesting %1 s exposure").arg (exptime));
-	clientThread->requestExposure (exptime);
+	startScript ();
 }
 
 void MainWindow::onRunStopClicked ()
 {
-	if (runActive)
+	if (!busyCamera.isEmpty ())
 	{
+		if (stopping)
+		{
+			// The script's end never came (a device that went away, a
+			// script killed from outside) - a second Stop gives up waiting.
+			busyCamera.clear ();
+			stopping = false;
+			runActive = false;
+			log ("stop: no answer from the camera, controls released");
+			updateExposeControls ();
+			return;
+		}
+		// Expose and Run stay locked until the script's end arrives, so the
+		// next one cannot start under the old one's tail.
+		stopping = true;
 		runActive = false;
-		runButton->setText ("Run");
-		exposeButton->setEnabled (true);
-		repeatSpin->setEnabled (true);
 		clientThread->requestStop ();
-		log ("run sequence stopped");
+		log ("stopping");
+		updateExposeControls ();
 		return;
 	}
+	if (activeCamera.isEmpty ())
+		return;
 
 	runActive = true;
 	runIndex = 0;
 	runTotal = repeatSpin->value ();
-	runButton->setText ("Stop");
-	exposeButton->setEnabled (false);
-	repeatSpin->setEnabled (false);
 
 	log (runTotal == 0
 		? QString ("run sequence started (until stopped)")
-		: QString ("run sequence started (%1 exposures)").arg (runTotal));
+		: QString ("run sequence started (%1 times)").arg (runTotal));
 
 	startNextRunExposure ();
+}
+
+void MainWindow::startScript ()
+{
+	const ExposureMode &mode = modes[modeCombo->currentIndex ()];
+	QString script = expandModeScript (mode, exptimeSpin->value (), caltimeSpin->value ());
+	sendWindowForNextExposure ();
+	busyCamera = activeCamera;
+	stopping = false;
+	if (runActive)
+		log (QString ("run %1/%2: %3: %4").arg (runIndex)
+			.arg (runTotal == 0 ? QString ("∞") : QString::number (runTotal))
+			.arg (mode.label, script));
+	else
+		log (QString ("%1: %2").arg (mode.label, script));
+	clientThread->requestScript (script.toStdString ());
+	updateExposeControls ();
+}
+
+void MainWindow::onScriptEnded (const QString &cameraName, const QString &error)
+{
+	if (cameraName != busyCamera)
+		return;
+	busyCamera.clear ();
+
+	if (!error.isEmpty ())
+		log ("script failed: " + error);
+
+	if (stopping)
+	{
+		stopping = false;
+		log ("stopped");
+	}
+	else if (runActive)
+	{
+		if (!error.isEmpty ())
+			finishRun ("run sequence aborted");
+		else if (runTotal != 0 && runIndex >= runTotal)
+			finishRun ("run sequence finished");
+		else
+		{
+			startNextRunExposure ();
+			return;
+		}
+	}
+	updateExposeControls ();
+}
+
+void MainWindow::finishRun (const QString &message)
+{
+	runActive = false;
+	log (message);
+}
+
+void MainWindow::updateExposeControls ()
+{
+	bool busy = !busyCamera.isEmpty ();
+	exposeButton->setEnabled (!busy);
+	runButton->setText (busy ? (stopping ? "Stopping..." : "Stop") : "Run");
+	repeatSpin->setEnabled (!busy);
+	modeCombo->setEnabled (!busy);
+	// the script runs on the camera it started on, and Stop goes to the
+	// active one
+	cameraCombo->setEnabled (!busy);
+}
+
+void MainWindow::onModesFileResolved (QString path)
+{
+	if (path.isEmpty ())
+	{
+		log ("exposure modes: built-in Light and Dark");
+		return;
+	}
+	QString error;
+	QVector<ExposureMode> loaded = loadModes (path, error);
+	if (loaded.isEmpty ())
+	{
+		log ("exposure modes: " + error + " - using built-in Light and Dark");
+		return;
+	}
+	modes = loaded;
+	modeCombo->blockSignals (true);
+	modeCombo->clear ();
+	for (const ExposureMode &mode : modes)
+		modeCombo->addItem (mode.label);
+	// always the first mode after loading - never start the night on
+	// whatever a previous session ended with
+	modeCombo->setCurrentIndex (0);
+	modeCombo->blockSignals (false);
+	onModeComboChanged (0);
+	log (QString ("exposure modes: %1 from %2").arg (modes.size ()).arg (path));
+}
+
+void MainWindow::onModeComboChanged (int index)
+{
+	if (index < 0 || index >= modes.size ())
+		return;
+	caltimeSpin->setEnabled (modes[index].usesCaltime);
+	updateModeStyle ();
+}
+
+void MainWindow::updateModeStyle ()
+{
+	int index = modeCombo->currentIndex ();
+	if (index < 0 || index >= modes.size ())
+		return;
+	const ExposureMode &mode = modes[index];
+	QString style;
+	if (nightMode ())
+	{
+		// no colours at night - only darks stand out, as the alarm block
+		if (mode.takesDarks)
+			style = statusStyle (false);
+	}
+	else if (mode.color.isValid ())
+	{
+		QColor text = mode.color.lightnessF () > 0.5 ? Qt::black : Qt::white;
+		style = QString ("background-color: %1; color: %2;").arg (mode.color.name (), text.name ());
+	}
+	modeCombo->setStyleSheet (style.isEmpty () ? QString () : "QComboBox { " + style + " }");
+	exposeButton->setStyleSheet (style);
+	runButton->setStyleSheet (style);
 }
 
 void MainWindow::onSaveToggled (bool checked)
@@ -861,6 +977,7 @@ void MainWindow::onNightModeToggled (bool checked)
 	// colours have to be redone.
 	updateStatusPanel ();
 	updateSaveButton ();
+	updateModeStyle ();
 	zoomedView->setStyleSheet (zoomedViewStyle ());
 	focusGraphWidget->update ();
 }
@@ -1096,12 +1213,7 @@ void MainWindow::updateFocusGraph ()
 void MainWindow::startNextRunExposure ()
 {
 	runIndex++;
-	sendWindowForNextExposure ();
-	double exptime = exptimeSpin->value ();
-	log (QString ("run %1/%2: requesting %3 s exposure").arg (runIndex)
-		.arg (runTotal == 0 ? QString ("∞") : QString::number (runTotal))
-		.arg (exptime));
-	clientThread->requestExposure (exptime);
+	startScript ();
 }
 
 void MainWindow::onFilterComboChanged (int index)
@@ -1118,14 +1230,6 @@ void MainWindow::onBinningComboChanged (int index)
 		return;
 	log (QString ("binning -> %1").arg (binningCombo->currentText ()));
 	clientThread->requestValueChange ("binning", '=', index);
-}
-
-void MainWindow::onShutterComboChanged (int index)
-{
-	if (index < 0 || activeCamera.isEmpty ())
-		return;
-	log (QString ("shutter -> %1").arg (shutterCombo->currentText ()));
-	clientThread->requestValueChange ("SHUTTER", '=', index);
 }
 
 void MainWindow::onCcdSetChanged ()

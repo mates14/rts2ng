@@ -1,0 +1,35 @@
+# rts2-viewer exposure modes for FLORES, the fiber-fed spectrograph (see
+# gui/viewer/include/gui/modes.h for the format). Enable with
+#   [viewer]
+#   modes = /usr/share/rts2/viewer-modes/flores.modes
+# in rts2.ini, or rts2-viewer --modes <file>.
+#
+# The fiber slider selects what the spectrograph sees: the object fiber
+# (fiber2), the ThAr fiber for wavelength calibration, or the flat fiber.
+#
+# TODO FLORES: FIBER.POSITION and the position names fiber2/thar/flat
+# are placeholders - the slider's device, value and positions are not
+# known here yet (or not implemented). Until they are, a move only logs
+# "cannot find device FIBER" and the exposure is taken wherever the
+# slider is - fix these names before relying on the calibrations.
+
+[Plain exposure]
+color = cyan
+script = E $EXPTIME
+
+[Spectrum + lambda]
+color = green
+script = FIBER.POSITION=fiber2 E $EXPTIME
+  FIBER.POSITION=thar E $CALTIME
+
+[Spectral flat]
+color = yellow
+script = FIBER.POSITION=flat E $EXPTIME
+
+[Lambda calib]
+color = purple
+script = FIBER.POSITION=thar E $CALTIME E $EXPTIME
+
+[Dark]
+color = red
+script = D $EXPTIME

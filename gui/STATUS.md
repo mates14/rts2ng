@@ -236,6 +236,9 @@ confirmed by the agent - needs a live look from the user.
 
 ## Round 4: dark/light (SHUTTER), left-corner live status panel
 
+(The SHUTTER combo was replaced by exposure modes, 2026-10-12 - see the
+last section.) [MJ]
+
 User confirmed round 3 (progress bar, Run/Stop, repeat count) works
 live, then asked for two more things: a dark/light control (there's a
 `SHUTTER` variable on the camera) so darks can actually be taken, and a
@@ -1234,3 +1237,70 @@ focus graph draws FWHM X solid and FWHM Y dashed in red. The choice is
 remembered per program with QSettings (~/.config/rts2/rts2-viewer.conf,
 rts2-stacker.conf). The window title bar belongs to the window manager
 and stays as it is.
+
+## Exposure modes: every exposure is an RTS2 script (2026-10-12) [MJ]
+
+The SHUTTER combo (round 4) is gone. Darks were taken by switching it to
+DARK, it stayed there, and a night's light was lost at FLORES. Instead,
+Expose and Run run the selected **exposure mode**, an RTS2 script (the
+language rts2-scriptexec and the executor run, `base/script`). `E` sets
+SHUTTER to light and `D` to dark for every frame (`ElementImage`,
+`script/src/element.cpp`), so nothing is left switched.
+
+- **Modes file** (`viewer/include/gui/modes.h` has the format): one
+  `[label]` section per mode with `color` and `script`, continuation
+  lines start with whitespace, `$EXPTIME`/`$CALTIME` filled in from the
+  two time inputs (Calib time is enabled only for modes that use it).
+  Chosen with `--modes FILE` or rts2.ini's `[viewer] modes`; without one,
+  built-in Light (`E $EXPTIME`) and Dark (`D $EXPTIME`, red). After
+  loading, the first mode is selected, never a remembered one.
+- **Instrument files** in `viewer/modes/`, installed to
+  `/usr/share/rts2/viewer-modes/`: `ovis.modes` (direct image,
+  spectrum, lambda calib, dark - from `python/sites/ovis/ovis-acquire.sh`)
+  and `flores.modes` (plain, spectrum + interleaved lambda, spectral flat,
+  lambda calib, dark). **FLORES's fiber slider is a placeholder**
+  (`FIBER.POSITION=fiber2|thar|flat`) until its device and positions are
+  known; until then those modes refuse to start (see below).
+- **Colours**: the mode selector and the Expose/Run buttons take the
+  mode's colour. In night mode no colours, except that a mode that takes
+  darks (a `D` in its script) shows as the alarm block.
+- **Engine**: `ViewerCamera` is now an `rts2script::DevClientCameraExec`
+  and `ViewerClient` the `ScriptInterface` master (as in scriptexec.cpp).
+  A run posts `EVENT_SET_TARGET_NOT_CLEAR` with one `ScriptTarget`, a new
+  obs id per run (DevScript refuses a target id + obs id that failed
+  before). Must stay true:
+  - never `script_ends` (`ViewerCamera::startTarget()` forces it off): it
+    resets every value the script touched to its default on the device,
+    i.e. would undo the user's binning/filter/cooling;
+  - Stop is `EVENT_STOP_OBSERVATION` (local) + `stopexpo`, not
+    `EVENT_KILL_ALL`, which sends killall and so script_ends too;
+  - `processImage()` does not queue to rts2-imgproc
+    (`DevClientCameraExec::processImage()` would; viewer frames are not
+    observations);
+  - one `scriptEnded` per started script, including "did not start" -
+    MainWindow keeps Expose/Run/mode/camera locked until it arrives (a
+    second Stop releases them if it never does).
+- **Missing devices or values refuse the run**: the engine skips a value
+  change on a device that is not connected with only a log line, and a
+  device ignores an unknown value; the frames get taken regardless, so a
+  lambda calib without its lamp would look like a good one. Before
+  starting, `ViewerClient::checkScriptValues()` checks every
+  `[DEV.]NAME=` the script sets and refuses with "not started: device
+  FIBER is not connected" in the log.
+- Other devices (mount, focuser, wheels, sensors, dome, rotator) now get
+  scriptexec's header-writing clients, so their FITS-flagged values go
+  into the viewer's frames - the lamp and slider state a spectrum needs.
+
+**Verified** against centrald + camd-dummy + filterd-dummy (a second
+device for `W9.filter=...`) with the real MainWindow, offscreen, buttons
+pressed from a scratch harness: plain exposure; a 2x run of a two-frame
+script that moved the wheel between frames and waited for each move;
+dark (`SHUTTER = 1`, `IMAGETYP = 'dark'`, lights 0/`'object'`);
+a script that does not parse reported in the log; an endless run
+stopped; both instrument files loaded, their unavailable modes refused
+with the reason, the rest run. GCC and dpkg-buildflags builds clean, ctest
+10/10. **Not verified**: the header values of other devices (none of the
+dummies flags a value for FITS - scriptexec writes none from them
+either), the look on a real screen (colours, night mode), and anything
+at OVIS or FLORES.
+

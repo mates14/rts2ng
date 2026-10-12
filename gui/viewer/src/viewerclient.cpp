@@ -7,10 +7,13 @@
 #include <connection.h>
 #include <status.h>
 
+#include <sstream>
+
 using namespace gui;
 
 #define OPT_DEVICE   OPT_LOCAL + 900
 #define OPT_IMAGES   OPT_LOCAL + 901
+#define OPT_MODES    OPT_LOCAL + 902
 
 ViewerClient::ViewerClient (int argc, char **argv):
 	rts2core::Client (argc, argv, "rts2-viewer")
@@ -19,6 +22,7 @@ ViewerClient::ViewerClient (int argc, char **argv):
 	addOption (OPT_CONFIG, "config", 1, "configuration file");
 	addOption (OPT_DEVICE, "device", 1, "name of the camera device to select initially (optional - every camera device is watched and can be picked from the camera selector regardless)");
 	addOption (OPT_IMAGES, "images", 1, "expand-path expression for saved images (see image.h), overrides rts2.ini's [viewer] expand_path; default: %y%m%d%H%M%S-%s.fits, in the current directory");
+	addOption (OPT_MODES, "modes", 1, "exposure-modes file (see gui/modes.h), overrides rts2.ini's [viewer] modes; default: built-in Light and Dark");
 
 	// GUI requests are only picked up in idle(), which Block runs when a
 	// network message wakes the poll loop or, failing that, every 10 s -
@@ -40,6 +44,9 @@ int ViewerClient::processOption (int in_opt)
 			break;
 		case OPT_IMAGES:
 			imageExpandPath = optarg;
+			break;
+		case OPT_MODES:
+			modesFile = optarg;
 			break;
 		default:
 			return rts2core::Client::processOption (in_opt);
@@ -93,6 +100,26 @@ int ViewerClient::init ()
 	if (imageExpandPath.empty ())
 		imageExpandPath = config->getStringDefault ("viewer", "expand_path", "%y%m%d%H%M%S-%s.fits");
 
+	if (modesFile.empty ())
+		modesFile = config->getStringDefault ("viewer", "modes", "");
+	emit modesFileResolved (QString::fromStdString (modesFile));
+
+	scriptTarget = new rts2script::ScriptTarget (this);
+
+	return 0;
+}
+
+ViewerClient::~ViewerClient ()
+{
+	delete scriptTarget;
+}
+
+int ViewerClient::findScript (std::string in_deviceName, std::string &buf)
+{
+	// The camera client asks for its script with the device name; returning
+	// an empty one (not -1, which ScriptTarget turns into an error) leaves
+	// any other camera idle.
+	buf = (in_deviceName == runningScriptDevice) ? runningScript : std::string ();
 	return 0;
 }
 
@@ -120,7 +147,68 @@ rts2core::DevClient *ViewerClient::createOtherType (rts2core::Connection *conn, 
 		emit cameraCreated (QString::fromStdString (devName), cam);
 		return cam;
 	}
+	// The other devices' values go into the FITS headers, as with
+	// rts2-scriptexec (scriptexec.cpp's createOtherType()) - a spectrum is
+	// only usable with the lamp, fiber and wheel positions it was taken
+	// with, and the modes' scripts are what move them.
+	switch (other_device_type)
+	{
+		case DEVICE_TYPE_MOUNT:
+			return new rts2image::DevClientTelescopeImage (conn);
+		case DEVICE_TYPE_FOCUS:
+			return new rts2image::DevClientFocusImage (conn);
+		case DEVICE_TYPE_DOME:
+		case DEVICE_TYPE_SENSOR:
+		case DEVICE_TYPE_ROTATOR:
+		case DEVICE_TYPE_FW:
+			return new rts2image::DevClientWriteImage (conn);
+	}
 	return rts2core::Client::createOtherType (conn, other_device_type);
+}
+
+std::string ViewerClient::checkScriptValues (ViewerCamera *camera, const std::string &script)
+{
+	// Value changes look like [DEVICE.]NAME=VALUE (or +=, -=), see
+	// Script::parseBuf(). The script engine skips one whose device is not
+	// connected with only a log line, and the device refuses an unknown
+	// value - either way the frames are taken anyway, so a lambda calib
+	// without its lamp would look like a good one.
+	std::istringstream words (script);
+	std::string word;
+	std::string missing;
+	while (words >> word)
+	{
+		size_t eq = word.find ('=');
+		if (eq == std::string::npos || eq == 0)
+			continue;
+		std::string lhs = word.substr (0, eq);
+		if (lhs.back () == '+' || lhs.back () == '-')
+			lhs.pop_back ();
+		std::string dev = camera->getName ();
+		std::string valueName = lhs;
+		size_t dot = lhs.find ('.');
+		if (dot != std::string::npos)
+		{
+			dev = lhs.substr (0, dot);
+			valueName = lhs.substr (dot + 1);
+			// CX, TX, ... - every device of a type (execcli.cpp)
+			if (dev.size () == 2 && dev[1] == 'X')
+				continue;
+		}
+		rts2core::Connection *conn = (dev == camera->getName ()) ? camera->getConnection () : getOpenConnection (dev.c_str ());
+		std::string problem;
+		if (!conn)
+			problem = "device " + dev + " is not connected";
+		else if (!conn->getValue (valueName.c_str ()))
+			problem = dev + " has no value " + valueName;
+		else
+			continue;
+		if (missing.find (problem) == std::string::npos)
+			missing += (missing.empty () ? "" : ", ") + problem;
+	}
+	if (!missing.empty ())
+		missing = "not started: " + missing;
+	return missing;
 }
 
 void ViewerClient::setActiveCamera (const std::string &camName)
@@ -129,10 +217,11 @@ void ViewerClient::setActiveCamera (const std::string &camName)
 	activeCamera = camName;
 }
 
-void ViewerClient::requestExposure (double exptime)
+void ViewerClient::requestScript (const std::string &script)
 {
-	requestedExptime.store (exptime);
-	exposeRequested.store (true);
+	std::lock_guard<std::mutex> lock (scriptMutex);
+	pendingScript = script;
+	scriptPending = true;
 }
 
 void ViewerClient::requestStop ()
@@ -208,20 +297,40 @@ int ViewerClient::idle ()
 			}
 		}
 
-		if (exposeRequested.exchange (false))
+		bool startScript = false;
 		{
-			// Set "exposure" (the device's own exposure-time Value) before
-			// triggering it - CommandExposure itself takes no exposure-time
-			// argument, it just starts a CCD_WORKING exposure using whatever
-			// "exposure" is currently set to on the device. Commands queued
-			// on the same connection are processed in order, so this always
-			// applies before the exposure it's meant for.
-			active->getConnection ()->queCommand (new rts2core::CommandChangeValue (this, "exposure", '=', requestedExptime.load ()));
-			active->getConnection ()->queCommand (new rts2core::CommandExposure (this, active, 0));
+			std::lock_guard<std::mutex> lock (scriptMutex);
+			if (scriptPending)
+			{
+				startScript = true;
+				runningScript = pendingScript;
+				scriptPending = false;
+			}
+		}
+		std::string missing;
+		if (startScript)
+			missing = checkScriptValues (active, runningScript);
+		if (!missing.empty ())
+		{
+			emit active->scriptEnded (QString::fromStdString (missing));
+		}
+		else if (startScript)
+		{
+			// After the window change above, so a script's first exposure
+			// reads the window asked for with it. The script sets exposure
+			// time and SHUTTER itself for every frame (E = light, D = dark -
+			// script/src/element.cpp's ElementImage), so a dark cannot be
+			// left switched on by a previous frame.
+			runningScriptDevice = active->getName ();
+			scriptTarget->setObsId (++scriptRuns);
+			active->runScript (scriptTarget);
 		}
 
 		if (stopRequested.exchange (false))
 		{
+			// the script first, or it queues its next command as soon as
+			// the exposure stops
+			active->stopScript ();
 			// "stopexpo" is a plain text command (camd.cpp), same class of
 			// raw command rts2-sendcmd already sends elsewhere in this
 			// tree - no dedicated Command subclass exists for it.
@@ -283,6 +392,7 @@ void ClientThread::run ()
 {
 	ViewerClient c (argc, argv);
 	connect (&c, &ViewerClient::cameraCreated, this, &ClientThread::cameraCreated, Qt::DirectConnection);
+	connect (&c, &ViewerClient::modesFileResolved, this, &ClientThread::modesFileResolved, Qt::DirectConnection);
 	connect (&c, &ViewerClient::progressUpdated, this, &ClientThread::progressUpdated, Qt::DirectConnection);
 
 	client.store (&c);
@@ -297,11 +407,11 @@ void ClientThread::setActiveCamera (const std::string &name)
 		c->setActiveCamera (name);
 }
 
-void ClientThread::requestExposure (double exptime)
+void ClientThread::requestScript (const std::string &script)
 {
 	ViewerClient *c = client.load ();
 	if (c)
-		c->requestExposure (exptime);
+		c->requestScript (script);
 }
 
 void ClientThread::requestStop ()

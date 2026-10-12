@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "client.h"
+#include "scriptinterface.h"
+#include "scripttarget.h"
 
 namespace gui
 {
@@ -25,12 +27,13 @@ class ViewerCamera;
  * block.cpp's createOtherType dispatch), handing each one to its own
  * ViewerCamera instead of a focus/monitor client.
  */
-class ViewerClient : public QObject, public rts2core::Client
+class ViewerClient : public QObject, public rts2core::Client, public rts2script::ScriptInterface
 {
 	Q_OBJECT
 
 	public:
 		ViewerClient (int argc, char **argv);
+		virtual ~ViewerClient ();
 
 		/**
 		 * All of the below are thread-safe: callable from any thread (the
@@ -40,9 +43,23 @@ class ViewerClient : public QObject, public rts2core::Client
 		 * with no Qt event loop of its own to deliver a queued signal to.
 		 */
 		void setActiveCamera (const std::string &name);
-		void requestExposure (double exptime);
+
+		/**
+		 * Run an RTS2 script (an exposure mode's, variables already filled
+		 * in - see gui/modes.h) on the active camera. The camera reports
+		 * its end with ViewerCamera::scriptEnded().
+		 */
+		void requestScript (const std::string &script);
+
+		/** Stop the running script and the exposure in progress. */
 		void requestStop ();
 		void requestValueChange (const std::string &valueName, char op, std::variant<int, double, bool> value);
+
+		/**
+		 * rts2script::ScriptInterface: the script requestScript() gave, for
+		 * the camera it was started on; nothing for anyone else.
+		 */
+		virtual int findScript (std::string in_deviceName, std::string &buf) override;
 
 		/**
 		 * Whether the active camera's own DevClientCameraImage writes the
@@ -58,7 +75,7 @@ class ViewerClient : public QObject, public rts2core::Client
 		/**
 		 * Change the active camera's "WINDOW" ValueRectangle (the chip
 		 * subframe read out) - base/camd/include/camd.h's chipUsedReadout.
-		 * Queued ahead of the next requestExposure()'s commands (idle()
+		 * Queued ahead of the next requestScript()'s commands (idle()
 		 * checks this block first), same "set the Value, then trigger"
 		 * ordering as exposure time - see MainWindow, which sends this
 		 * immediately before every exposure request (the full chip rect
@@ -83,6 +100,13 @@ class ViewerClient : public QObject, public rts2core::Client
 		void cameraCreated (QString name, ViewerCamera *camera);
 
 		/**
+		 * The exposure-modes file to use (--modes, else rts2.ini's [viewer]
+		 * modes), empty for the built-in light/dark. Emitted once from
+		 * init(), after rts2.ini is loaded.
+		 */
+		void modesFileResolved (QString path);
+
+		/**
 		 * Fires whenever the server broadcasts a PROTO_PROGRESS message for
 		 * a connection (Block::progress(), overridden here) - this is the
 		 * same start/expected-end timestamp pair rts2-mon's own progress
@@ -101,6 +125,12 @@ class ViewerClient : public QObject, public rts2core::Client
 		virtual int progress (rts2core::Connection *conn, double start, double end) override;
 
 	private:
+		/**
+		 * Every device and value the script sets, checked against what is
+		 * connected - empty if all there, else what is missing.
+		 */
+		std::string checkScriptValues (ViewerCamera *camera, const std::string &script);
+
 		const char *configFile;
 		std::string initialDevice;
 
@@ -115,6 +145,21 @@ class ViewerClient : public QObject, public rts2core::Client
 		 * usually cannot write there and its frames rarely belong there.
 		 */
 		std::string imageExpandPath;
+
+		std::string modesFile;
+
+		// One target for every script the viewer runs; each run gets its
+		// own obs id, so a run that failed (DevScript then refuses the
+		// target id + obs id it failed with) does not block the next one.
+		rts2script::ScriptTarget *scriptTarget = nullptr;
+		int scriptRuns = 0;
+		// what findScript() hands out - worker thread only
+		std::string runningScriptDevice;
+		std::string runningScript;
+
+		std::mutex scriptMutex;
+		bool scriptPending = false;
+		std::string pendingScript;
 
 		std::mutex camerasMutex;
 		std::map<std::string, ViewerCamera *> cameras;
@@ -138,8 +183,6 @@ class ViewerClient : public QObject, public rts2core::Client
 		bool windowPending = false;
 		PendingWindow pendingWindow {};
 
-		std::atomic<bool> exposeRequested { false };
-		std::atomic<double> requestedExptime { 1.0 };
 		std::atomic<bool> stopRequested { false };
 		std::atomic<bool> saveToggleRequested { false };
 		std::atomic<bool> requestedSaveEnabled { false };
@@ -163,7 +206,7 @@ class ClientThread : public QThread
 		ClientThread (int argc, char **argv, QObject *parent = nullptr);
 
 		void setActiveCamera (const std::string &name);
-		void requestExposure (double exptime);
+		void requestScript (const std::string &script);
 		void requestStop ();
 		void requestValueChange (const std::string &valueName, char op, std::variant<int, double, bool> value);
 		void requestSaveToggle (bool enabled);
@@ -173,6 +216,7 @@ class ClientThread : public QThread
 
 	signals:
 		void cameraCreated (QString name, ViewerCamera *camera);
+		void modesFileResolved (QString path);
 		void progressUpdated (QString cameraName, double start, double end);
 
 	protected:

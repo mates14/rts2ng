@@ -26,6 +26,9 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	install -d debian/rts2-viewer/usr/bin
 	install -m 0755 $(BUILDDIR)/viewer/rts2-viewer debian/rts2-viewer/usr/bin/
+	# exposure modes per instrument, picked by rts2.ini's [viewer] modes
+	install -d debian/rts2-viewer/usr/share/rts2/viewer-modes
+	install -m 0644 viewer/modes/*.modes debian/rts2-viewer/usr/share/rts2/viewer-modes/
 	install -d debian/rts2-stacker/usr/bin
 	install -m 0755 $(BUILDDIR)/stacker/rts2-stacker debian/rts2-stacker/usr/bin/
 

@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "devcliimg.h"
+#include "execcli.h"
 
 namespace gui
 {
@@ -24,12 +24,14 @@ namespace gui
  * ClientThread in viewerclient.h, which drives this on its own worker
  * thread.
  *
- * Deliberately built directly on rts2image::DevClientCameraImage
- * (kernel/include/devcliimg.h), not the classic FocusCameraClient/
- * DevClientCameraFoc chain - that adds focus-stepping logic (center(),
- * EVENT_INTEGRATE_START/STOP) a plain viewer has no use for.
+ * Built on rts2script::DevClientCameraExec (base/script/include/
+ * execcli.h), the camera client rts2-scriptexec and the executor use, so
+ * every exposure is an RTS2 script - see runScript() and gui/modes.h. Not
+ * the classic FocusCameraClient/DevClientCameraFoc chain - that adds
+ * focus-stepping logic (center(), EVENT_INTEGRATE_START/STOP) a plain
+ * viewer has no use for.
  */
-class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
+class ViewerCamera : public QObject, public rts2script::DevClientCameraExec
 {
 	Q_OBJECT
 
@@ -96,6 +98,21 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		 */
 		void snapshotValues (QMap<QString, double> &values, QMap<QString, QStringList> &choices, QMap<QString, QRect> &rects) const;
 
+		/**
+		 * Start the script target->getScript() gives for this camera (see
+		 * ViewerClient::findScript()). Ends with scriptEnded(), also when
+		 * the script could not start at all. Worker thread only, like
+		 * everything that touches the script engine.
+		 */
+		void runScript (Rts2Target *target);
+
+		/**
+		 * Drop the running script, so it queues nothing more - what is
+		 * already sent to the devices still happens; the exposure itself is
+		 * stopped by ViewerClient's stopexpo. Worker thread only.
+		 */
+		void stopScript ();
+
 	signals:
 		void imageReady (QImage image);
 		void exposureStateChanged (bool exposing);
@@ -144,6 +161,13 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		 */
 		void stateTextChanged (QString stateText, bool hasError);
 
+		/**
+		 * The script started by runScript() has nothing more to do (its
+		 * last exposure may still be reading out), was stopped, or did not
+		 * start - then error says why. Empty error = it ran.
+		 */
+		void scriptEnded (QString error);
+
 	protected:
 		/**
 		 * Only routes into the shared archive path when this frame is
@@ -161,8 +185,14 @@ class ViewerCamera : public QObject, public rts2image::DevClientCameraImage
 		virtual void exposureEnd (bool expectImage) override;
 		virtual void valueChanged (rts2core::Value *value) override;
 		virtual void stateChanged (rts2core::ServerState *state) override;
+		virtual rts2image::imageProceRes processImage (rts2image::Image *image) override;
+		virtual void startTarget (bool callScriptEnds = true) override;
+		virtual void deleteScript () override;
 
 	private:
+		// runScript() is waiting for startTarget() to take its target
+		bool startRequested = false;
+
 		void runFitOnData (const void *data, int dataType, long width, long height);
 
 		std::atomic<int> measureX { 0 };
