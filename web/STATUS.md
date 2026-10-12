@@ -2701,3 +2701,20 @@ Tested: in headless Chrome against a local rts2-httpd (`stars` dev
 database, spare ports) and the live lcgen - a prefilled new target at TT Boo
 (4772 public points), an existing local target with no D50 data ("No public
 measurements here"), and the panel switching off with an empty setting.
+
+### D50 monitor: full centrald state on the Status line (2026-10-12) [JS]
+
+`d50-monitor.html`'s "Status:" line showed only on/standby/off. It now
+renders centrald's whole `state` field the way rts2-mon's bottom line does
+(`CentralState::getString`, `base/kernel/src/centralstate.cpp`): `ON night`,
+`bad weather | rain | ON night`, `stop | ON dusk, block exposure`, with the
+weather/stop/off parts in red. The raw state is in the tooltip as hex (rts2-mon
+prints it after the text). When the weather is bad, centrald's own
+`bad_weather_device: bad_weather_reason` is shown on a red line below it.
+Deviations from rts2-mon: STANDBY in capitals to match the buttons, and
+`unknown`, not `unknow`, for a day period outside 0-5. Note the weather bit
+is the sign bit of a JS bitwise result, hence the `>>> 0`.
+
+Tested in headless Firefox with the function lifted out of the page and fed
+the states above, plus an unreachable centrald (`N/A`). Not tried against the
+live daemon; `bart-monitor.html` is unchanged.
