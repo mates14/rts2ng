@@ -188,7 +188,7 @@
 
         .webcam-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 10px;
         }
 
@@ -508,6 +508,10 @@
                     <div>Webcam 4</div>
                     <img id="webcam-4" data-cam="4" alt="Webcam 4">
                 </div>
+                <div class="webcam-column">
+                    <div><a href="https://allsky-d65.asu.cas.cz/" target="_blank" title="the camera's own page, with its image archive">AllSky (D65)</a></div>
+                    <img id="webcam-allskyd65" data-cam="allskyd65" alt="AllSky (D65)">
+                </div>
             </div>
             <!--
                 Periodically-refreshed snapshot files under /webcam/
@@ -598,6 +602,18 @@
                 small: 'webcam4_small.jpg', smallEq: 'webcam4_eq_small.jpg',
                 full: 'webcam4.jpg', fullEq: 'webcam4_eq.jpg',
                 live: '/webcam4/?action=stream' },
+            // The all-sky camera by the 0.65 m telescope, as D50's page
+            // shows it. Loaded straight from the camera's own server,
+            // which has a valid HTTPS certificate and needs no login;
+            // D50's page goes through lascaux50's /observ/allsky-d65/
+            // proxy instead, but that sits behind lascaux50's login,
+            // which a browser on this host would not send. One 640x480
+            // image, no equalized version, no stream. `host` overrides
+            // the default /webcam/.
+            { id: 'allskyd65', label: 'AllSky (D65)',
+                small: 'AllSkyCurrentImage.JPG', smallEq: 'AllSkyCurrentImage.JPG',
+                full: 'AllSkyCurrentImage.JPG', fullEq: 'AllSkyCurrentImage.JPG',
+                host: 'https://allsky-d65.asu.cas.cz/' },
         ];
 
         let systemData = {
@@ -957,7 +973,7 @@
             for (const cam of WEBCAMS) {
                 const el = document.getElementById(`webcam-${cam.id}`);
                 // cam.live is absent for cameras with no working stream
-                // (currently just Sentinel) - falls through to the
+                // (Sentinel, AllSky (D65)) - falls through to the
                 // regular snapshot below rather than requesting a URL
                 // known not to work.
                 if (liveWebcams && cam.live) {
@@ -968,7 +984,7 @@
                     el.src = cam.live;
                 } else {
                     const src = equalizeWebcams ? cam.smallEq : cam.small;
-                    el.src = `/webcam/${src}?t=${t}`;
+                    el.src = `${cam.host || '/webcam/'}${src}?t=${t}`;
                 }
             }
         }
@@ -976,7 +992,7 @@
         function webcamFullSrc(cam) {
             if (liveWebcams && cam.live)
                 return cam.live;
-            return `/webcam/${equalizeWebcams ? cam.fullEq : cam.full}`;
+            return `${cam.host || '/webcam/'}${equalizeWebcams ? cam.fullEq : cam.full}`;
         }
 
         // Cloud sensor history, plotted client-side from rts2-httpd's

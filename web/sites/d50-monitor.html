@@ -246,7 +246,7 @@
 
         .webcam-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 10px;
         }
 
@@ -578,6 +578,10 @@
                     <div>CCTV (BART)</div>
                     <img id="webcam-cctv" data-cam="cctv" alt="CCTV">
                 </div>
+                <div class="webcam-column">
+                    <div><a href="/observ/allsky-d65/" target="_blank" title="the camera's own page, with its image archive">AllSky (D65)</a></div>
+                    <img id="webcam-allskyd65" data-cam="allskyd65" alt="AllSky (D65)">
+                </div>
             </div>
             <!--
                 AllSky and CCTV are BART's own cameras (shared site-wide,
@@ -591,17 +595,14 @@
                 small snapshots are .jpg but the *full-size* images are
                 .png, not .jpg (axis50's non-eq full is the one exception,
                 still .jpg) - each entry's full/fullEq below reflects
-                exactly what 200s, not a guessed extension. Neither has a
-                working live stream: D50's AllSky-D65 (a third, separate
-                camera the previous version of this page also showed)
-                requires HTTP auth this page has no business embedding
-                (401, confirmed) - dropped entirely, same call
-                bart-monitor.html already made for its own Sentinel
-                camera. Axis50/Sentinel50's own live-video endpoints
-                (/observ/axis50/video.cgi, /observ/sentinel50/video.mjpg)
-                are also 401-gated - confirmed, not assumed - so, same as
-                BART's Sentinel, they fall back to their regular
-                (auth-free) snapshot even with "live" toggled on.
+                exactly what 200s, not a guessed extension. AllSky (D65),
+                the camera by the 0.65 m telescope, is back (2026-10-12): it
+                had been dropped as "401, needs HTTP auth", but that 401 is
+                the login on lascaux50's whole /observ, which a visitor of
+                this page has already passed - the camera itself needs
+                none. The same mistake had kept Axis50/Sentinel50's live
+                streams (/observ/axis50/video.cgi, /observ/sentinel50/
+                video.mjpg) off "live"; they are on it now, see WEBCAMS.
             -->
         </div>
 
@@ -648,13 +649,15 @@
         // axis50/sentinel50 are D50-native - confirmed live via a real
         // directory listing on lascaux50's own Apache (not guessed):
         // small snapshots are .jpg, but full-size images are .png except
-        // axis50's plain (non-eq) full, which is .jpg. `live` is only set
-        // where a working stream was actually confirmed (cctv, via
-        // lascaux's existing webcam4 proxy) - axis50/sentinel50's own
-        // video endpoints 401 (HTTP auth this page won't embed), same
-        // situation bart-monitor.html already documented for its own
-        // Sentinel camera, so those two have no `live` entry and always
-        // fall back to their regular snapshot.
+        // axis50's plain (non-eq) full, which is .jpg. `live` is set
+        // where a working stream was confirmed: cctv via lascaux's
+        // webcam4 proxy, and axis50/sentinel50 via lascaux50's
+        // /observ/axis50/ and /observ/sentinel50/ proxies (the old PHP
+        // page's fr_webcam_live.php URLs). Those two need no credentials
+        // in this page: Apache asks for the visitor's /observ login and
+        // itself swaps in the camera's own (default-ssl.conf), which is
+        // why a request without that login sees 401. Both send 320x240;
+        // axis50 can do 640x480 (?resolution=), at ~3.5x the data.
         const WEBCAMS = [
             { id: 'allsky', label: 'AllSky',
                 small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
@@ -664,16 +667,27 @@
             { id: 'axis50', label: 'Axis50',
                 small: 'axis-sum1_av_small.jpg', smallEq: 'axis-sum1_av_eq_small.jpg',
                 full: 'axis-sum1_av.jpg', fullEq: 'axis-sum1_av_eq.png',
-                host: '/webcam/' },
+                host: '/webcam/',
+                live: '/observ/axis50/video.cgi?resolution=320x240' },
             { id: 'sentinel50', label: 'Sentinel50',
                 small: 'sentinel-sum1_av_small.jpg', smallEq: 'sentinel-sum1_av_eq_small.jpg',
                 full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png',
-                host: '/webcam/' },
+                host: '/webcam/',
+                live: '/observ/sentinel50/video.mjpg' },
             { id: 'cctv', label: 'CCTV',
                 small: 'webcam4_small.jpg', smallEq: 'webcam4_detail.jpg',
                 full: 'webcam4.jpg', fullEq: 'webcam4_detail.jpg',
                 host: 'https://lascaux.asu.cas.cz/webcam/',
                 live: 'https://lascaux.asu.cas.cz/webcam4/?action=stream' },
+            // The all-sky camera by the 0.65 m telescope, as the old PHP
+            // page (fr_allsky-d65.php) showed it: lascaux50's Apache
+            // proxies /observ/allsky-d65/ to allsky-d65.asu.cas.cz, which
+            // itself needs no login. One 640x480 image, no equalized
+            // version, no stream.
+            { id: 'allskyd65', label: 'AllSky (D65)',
+                small: 'AllSkyCurrentImage.JPG', smallEq: 'AllSkyCurrentImage.JPG',
+                full: 'AllSkyCurrentImage.JPG', fullEq: 'AllSkyCurrentImage.JPG',
+                host: '/observ/allsky-d65/' },
         ];
 
         // D50's real device list (confirmed via /api/devices against the

@@ -2839,3 +2839,33 @@ apart from comments). In both `renderSkyChart()`s:
 Tested in headless Firefox against D50's live httpd: both pages, small and
 enlarged, light and dark (dark only on D50's). Nothing seen against BART's
 own daemon or horizon.
+
+### Webcams: AllSky (D65), and D50's Axis50/Sentinel50 live (2026-10-12) [JS]
+
+- **AllSky (D65)**, the all-sky camera by the 0.65 m telescope that the old
+  PHP page showed (`fr_allsky-d65.php`), is a fifth webcam on both pages
+  (grid now 5 columns). `AllSkyCurrentImage.JPG`, 640x480, no equalized
+  version, no stream; the title links to the camera's own page (archive).
+  D50's page loads it through lascaux50's `/observ/allsky-d65/` proxy (as
+  the PHP page did). BART's page loads `https://allsky-d65.asu.cas.cz/`
+  directly: valid certificate, no login, and lascaux50's `/observ` login
+  would not reach a browser on lascaux. `bart-monitor.html`'s webcams can now
+  name their own `host` (default `/webcam/`), as D50's already could.
+- **Axis50/Sentinel50 live** on D50's page, the PHP page's URLs:
+  `/observ/axis50/video.cgi?resolution=320x240` and
+  `/observ/sentinel50/video.mjpg`. Both send 320x240 (~24 and ~67 kB/s);
+  axis50 can do 640x480 (~83 kB/s).
+- **Corrected**: the page said AllSky (D65) and both live streams were left
+  out because they "need HTTP auth (401)". That 401 is lascaux50's login on
+  all of `/observ`, which a visitor of the page has already passed. Apache
+  then swaps in each camera's own credentials (`default-ssl.conf`,
+  `RequestHeader set Authorization`), so the page embeds none.
+- **Not changed**: BART's own Sentinel stays without live. Its documented
+  reason is different (a malformed `SID : 0` header that lascaux's Apache
+  refuses, AH02429) and could not be rechecked from lascaux50, as the camera
+  needs a login. D50's Axis50/Sentinel50 are not on BART's page (user call).
+
+Tested in headless Firefox: D50's page through a local stand-in for Apache
+(proxying `/observ/allsky-d65/` and the two streams with the forwarded
+credentials), live on and off; BART's page with the image straight from the
+camera. Not tried through Apache itself (no `/observ` login here).
