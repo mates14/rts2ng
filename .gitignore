@@ -33,3 +33,9 @@ __pycache__/
 
 # Per-person Claude Code notes (see CLAUDE.md)
 CLAUDE.local.md
+
+# Built packages collected by buildme.sh -d, extra build trees, and the
+# fliusb-dkms staging directory (not caught by debian/rts2-*/ above)
+/dist/
+build-*/
+**/debian/fliusb-dkms/
