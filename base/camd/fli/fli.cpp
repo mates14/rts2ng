@@ -19,7 +19,7 @@
 
 // base note: FLI camera driver, source of truth ../src/camd/fli.cpp.
 // Same real SDK as the already-ported base/focusd/fli and
-// base/filterd/fli (see base/STATUS.md "FLI" section for the full
+// base/filterd/fli (see base/HISTORY.md "FLI" section for the full
 // story of the two libfli copies found on this system - the one
 // actually used, gated behind BASE_FLI_SDK_DIR, is
 // /home/mates/src/fliusb/libfli, using FLI's own fliusb kernel module

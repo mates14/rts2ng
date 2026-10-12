@@ -3,7 +3,7 @@
 # web note: same "no CMakeLists.txt in this tree has install() rules yet"
 # situation as rts2-base and rts2-db - dh_auto_install is overridden to
 # copy build output directly. See base/debian/rules for the full
-# explanation and base/STATUS.md's Debian-packaging section.
+# explanation and base/HISTORY.md's Debian-packaging section.
 #
 # No BASE_GXCCD_SDK_DIR/BASE_FLI_SDK_DIR here. web nests the db tree
 # (which nests base) purely to link rts2db/base_kernel into rts2-httpd -

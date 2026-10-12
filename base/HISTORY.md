@@ -1,7 +1,14 @@
-# base porting status
+# base: session history
 
-Working notes for the base effort so it can be picked up cold. Update this
-file at the end of each work session; don't rely on chat history surviving.
+The dated working log of the base effort, moved here from `STATUS.md` on
+2026-10-12 without changes. Entries before that date carry no author tag;
+they are MJ's sessions. New entries go at the end, headed with the date and
+`[MJ]` or `[JS]`.
+
+This file is not meant to be read in full at the start of a session. What
+must stay true is in `STATUS.md`. Look here for why something is the way it
+is, by grepping for the file, driver or class name. "Above"/"below" and
+"see the X section" in the text refer to sections of this file.
 
 ## What base is
 

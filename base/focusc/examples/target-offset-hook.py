@@ -63,7 +63,7 @@
 # This is a starting point / sketch, not a shipped/installed tool - not
 # built by CMakeLists.txt, not packaged, not covered by any test. See
 # ds9-hook.sh in this same directory for the simpler seed this grew from,
-# and base/STATUS.md's "hooking rts2-focusc up to ds9" section for the two
+# and base/HISTORY.md's "hooking rts2-focusc up to ds9" section for the two
 # constraints every -F hook has to respect regardless of what it does:
 # stay silent on stdout (ConnFocus parses it as protocol data), and hand
 # ds9 absolute paths (ds9/XPA resolves relative ones against its own cwd).

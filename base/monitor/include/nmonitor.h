@@ -21,7 +21,7 @@
 #pragma once
 
 // base note: two classic dependencies deliberately dropped here (see
-// base/STATUS.md "Monitor" section for the full writeup):
+// base/HISTORY.md "Monitor" section for the full writeup):
 //  - "rts2fits/devcliimg.h" (DevClientCameraImage) - grep-verified dead
 //    include in the classic tree; nothing in src/monitor/*.cpp ever
 //    instantiates it. Dropping it avoids pulling in the whole

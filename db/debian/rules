@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 
 # db note: same "no CMake install() rules yet" situation as rts2-base
-# (see base/debian/rules and base/STATUS.md's Debian-packaging section) -
+# (see base/debian/rules and base/HISTORY.md's Debian-packaging section) -
 # dh_auto_install is overridden to copy build output directly. db nests
 # the base source tree via DB_BASE_DIR (defaults to ../base, see
 # db/CMakeLists.txt) - the build host needs both source trees checked

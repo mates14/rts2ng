@@ -2096,7 +2096,7 @@ in `httpd`:
 
   The general half of this - times are not just large doubles, they have
   a display mode, and it belongs in the C++ formatting layer - is fixed
-  in `base`: see "Time display mode: `timeDisplay_t`" in `base/STATUS.md`.
+  in `base`: see "Time display mode: `timeDisplay_t`" in `base/HISTORY.md`.
   Every RTS2 tool gained `--jd`/`--ctime` from it.
 - **`/api/devices` reported an unnamed connection as `""`**, while
   `/api/getall` skipped those (`getName()[0] == '\0'`). The endpoint now

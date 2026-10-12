@@ -718,7 +718,7 @@ executor, the user's original ask at the start of this thread.
 
 Not in scope for this pass: CMake `install()` rules for a proper
 shared-library-level dependency (still the same deferred cleanup from
-`base/STATUS.md`); a configurable database name (hardcoded to `stars`,
+`base/HISTORY.md`); a configurable database name (hardcoded to `stars`,
 matching every classic default); dbconfig-common (explicitly declined -
 custom postinst chosen instead); converting `/etc/rts2/services`/
 `/etc/rts2/devices` into a proper drop-in directory in `rts2-base` itself
@@ -824,7 +824,7 @@ correction-forwarding, no `checkUnprocessedImages`) is dropped entirely
 here, same reasoning as `devicedb.h` itself: `db` has no no-DB mode, so
 there's nothing for that branch to guard against.
 
-This was blocked earlier in `base`'s scriptexec push (see `base/STATUS.md`
+This was blocked earlier in `base`'s scriptexec push (see `base/HISTORY.md`
 task 22-26 write-up) because `connimgprocess.h` genuinely needs
 `rts2db::Observation` - at that point `db` didn't exist yet, so it was
 correctly deferred rather than dragged into a DB-free project. Since then
@@ -853,7 +853,7 @@ was just a matter of wiring it up. New `db/imgproc/` subtree:
   - `#include`s use base's flattened header names (`connexe.h`, `script.h`,
     not classic's `rts2script/connexe.h`/`rts2script/script.h` - base's
     `rts2script` was flattened directly into `include/` when it was
-    ported, see task 25 in `base/STATUS.md`).
+    ported, see task 25 in `base/HISTORY.md`).
 - `src/imgproc.cpp` (`rts2plan::ImageProc:rts2db::DeviceDb`, flattened from
   classic `src/plan/imgproc.cpp`) - the daemon itself: a fixed-size pool
   of worker slots (`numProc`, config `[imgproc] num_proc`) each holding one

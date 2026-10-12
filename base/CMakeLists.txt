@@ -124,7 +124,7 @@ add_subdirectory(focusc)
 # Packaging assets: rts2-start/rts2-stop (the daemon-manifest-driven
 # start/stop scripts, read @BASE_CONFDIR@/rts2/{centrald,devices,services}),
 # systemd unit templates, and default /etc/rts2/ configuration - see
-# packaging/README (if any) or base/STATUS.md's Debian-packaging section
+# packaging/README (if any) or base/HISTORY.md's Debian-packaging section
 # for the rationale. Not gated behind any option - useful for any install
 # method, not just a .deb.
 # Kept identical to the RTS2_CENTRALD_PORT/RTS2_LOCK_PREFIX baked into

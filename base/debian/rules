@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 
 # base note: no CMakeLists.txt in this tree has install() rules yet (see
-# base/STATUS.md's Debian-packaging section) - adding them properly means
+# base/HISTORY.md's Debian-packaging section) - adding them properly means
 # touching ~30 individual driver CMakeLists.txt files, a separate future
 # cleanup. For now dh_auto_install is overridden to copy build output
 # directly, a standard technique for upstream trees without polished

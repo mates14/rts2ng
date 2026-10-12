@@ -23,7 +23,7 @@
 // --wheeldev still creates FILTA/FILTB (a ValueSelection with write_to_fits),
 // so without this class the header records a filter index that never moves
 // off zero - a FITS file that confidently names the wrong filter. See
-// base/STATUS.md.
+// base/HISTORY.md.
 //
 // The event codes and struct filterStart live in camd.h rather than here,
 // because Camera uses them unconditionally - see the note there.

@@ -8,7 +8,7 @@
 #   rts2-focusc -d C0 -e 5 -F /path/to/ds9-hook.sh
 #
 # Two non-obvious constraints this depends on (both confirmed live against
-# a real ds9, see base/STATUS.md/UPSTREAM_BUGS.md "hooking rts2-focusc up
+# a real ds9, see base/HISTORY.md/UPSTREAM_BUGS.md "hooking rts2-focusc up
 # to ds9" for the write-up):
 #
 #  - Must stay silent on stdout. ConnFocus (kernel/devclifoc.cpp) reads

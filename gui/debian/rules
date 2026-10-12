@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 
 # gui note: same "no CMake install() rules yet" situation as rts2-base/
-# rts2-db (see base/debian/rules and base/STATUS.md's Debian-packaging
+# rts2-db (see base/debian/rules and base/HISTORY.md's Debian-packaging
 # section) - dh_auto_install is overridden to copy the built binary
 # directly. gui nests the base source tree via GUI_BASE_DIR (defaults to
 # ../base, see gui/CMakeLists.txt), so building this package also builds
