@@ -2724,3 +2724,30 @@ call: its old comment said weather was left out deliberately because "Weather
 allows opening" under Dome covers it, but that row says only whether the roof
 may open, not why, nor anything about stop or blocks. Same headless-Firefox
 test against BART's copy.
+
+### D50 monitor: T0 values and OTA fan from the old PHP page (2026-10-12) [JS]
+
+First batch carried over from the old status page (`/var/www/observ/
+fr_status.php` on lascaux50, dead since the new httpd has no XML-RPC). The
+user will rearrange placement and looks later; for now they sit where the
+old page had them.
+
+- **Telescope block**: Coordinates (OBJ), Offsets (OFFS), Corrections
+  (CORR_), T0 RA/Dec (TEL), T0 Alt/Az (TEL_, "alt az" in that order), then
+  Airmass, Tracking + block move, and T0 info time in UT. All sexagesimal as
+  the PHP page printed them (`fmtRa`/`fmtDeg`, rounded on the total so
+  59.999" carries). Coordinates were decimal degrees until now.
+- **block_move**: `Yes` amber / `No` green. The old page had On green and Off
+  red, but set means teld refuses every software move (`teld.cpp`), so Yes is
+  the state to notice.
+- **OTA fan power** (SHUTTER1 `OTAfanPower`, 0-9) under the temperature
+  table, coloured as the PHP did: 0 green "(off)", 9 red "(max)", in between
+  `#<16n+111>2222`.
+- **Fixed**: "Rain? (D50)" read `RAIN_BART` instead of `RAIN_D50`, so it
+  always repeated the SBT sensor. Also removed the stale comment claiming
+  SHUTTER1 is deliberately not shown.
+
+Tested live: the page in headless Firefox on lascaux50, served through a
+local proxy to the running rts2-httpd (:8889), during an observation of
+Mrk 501. All values filled in and CORR_ matched the raw value. Not in
+`bart-monitor.html`.

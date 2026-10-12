@@ -683,9 +683,8 @@
         // weather station, not per-telescope. D50 also exposes its own
         // supplementary WEATHER_D50/RAIN_D50 (a simpler on-site sensor -
         // no wind speed, no outdoor temp/humidity) and SHUTTER1 (OTA/
-        // mirror temperature monitoring) - deliberately not surfaced
-        // here, same "don't invent a panel bart-monitor.html has no
-        // equivalent for" scope call as everywhere else in this port.
+        // mirror temperatures and the OTA fan), both shown in the
+        // weather block as the old PHP page (fr_status.php) showed them.
         let systemData = {
             centrald: {},
             EXEC: {}, T0: {}, DOME: {},
@@ -782,21 +781,68 @@
             }));
         }
 
+        // Sexagesimal, as the old PHP page (rts2phplib/miscfunc.inc
+        // dec_tostring/ra_tostring) printed them: +DD°MM'SS.ss" and
+        // HH:MM:SS.ss. Rounded once, on the total, so 59.999" carries
+        // into the minute instead of printing as 60.00".
+        function fmtSexa(val, digits = 2) {
+            if (typeof val !== 'number' || !Number.isFinite(val))
+                return null;
+            const scale = 3600 * 10 ** digits;
+            const total = Math.round(Math.abs(val) * scale);
+            const d = Math.floor(total / scale);
+            const m = Math.floor(total % scale / (scale / 60));
+            const sec = (total % (scale / 60)) / 10 ** digits;
+            return [val < 0 ? '-' : '+', d, String(m).padStart(2, '0'),
+                sec.toFixed(digits).padStart(digits ? digits + 3 : 2, '0')];
+        }
+
+        function fmtDeg(deg, digits = 2) {
+            const p = fmtSexa(deg, digits);
+            return p ? `${p[0]}${String(p[1]).padStart(2, '0')}&deg;${p[2]}'${p[3]}"` : 'N/A';
+        }
+
+        function fmtRa(deg, digits = 2) {
+            const p = fmtSexa(typeof deg === 'number' ? ((deg % 360) + 360) % 360 / 15 : deg, digits);
+            return p ? `${String(p[1]).padStart(2, '0')}:${p[2]}:${p[3]}` : 'N/A';
+        }
+
+        // T0's RA/Dec-pair values, as fr_status.php showed them. TEL_ is
+        // the mount's own Alt/Az ("alt az" in that order, the same value
+        // drawSkyChart() plots); OFFS is the offset requested by scripts
+        // or the user, CORR_ the correction from astrometry of the last
+        // image(s). block_move set means teld refuses every software
+        // move (teld.cpp), so "Yes" is the noteworthy state - the old
+        // page had it the other way round, On green and Off red.
         function updateTelescopeStatus() {
             const div = document.getElementById('telescope-status');
             const currentName = safeValue(systemData.EXEC, 'current_name', '');
             const current = safeValue(systemData.EXEC, 'current', -1);
             const nextName = safeValue(systemData.EXEC, 'next_name', '');
             const [objRa, objDec] = parseRaDec(safeValue(systemData.T0, 'OBJ', ''));
+            const [telRa, telDec] = parseRaDec(safeValue(systemData.T0, 'TEL', ''));
+            const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
+            const [offsRa, offsDec] = parseRaDec(safeValue(systemData.T0, 'OFFS', ''));
+            const [corrRa, corrDec] = parseRaDec(safeValue(systemData.T0, 'CORR_', ''));
             const airmass = safeValue(systemData.T0, 'AIRMASS', NaN);
             const tracking = safeValue(systemData.T0, 'TRACKING', 0) == 1;
+            const blockMove = safeValue(systemData.T0, 'block_move', null);
+            const infotime = safeValue(systemData.T0, 'infotime', null);
+            const blockStr = blockMove === null ? 'N/A'
+                : blockMove == 1 ? '<span class="standby">Yes</span>' : '<span class="good">No</span>';
 
             div.innerHTML = `
                 <div class="status-value"><strong>Object:</strong> ${currentName || '(none)'} (${current})</div>
                 <div class="status-value"><strong>Next:</strong> ${nextName || '(none)'}</div>
-                <div class="status-value"><strong>Coordinates:</strong> ${fmt(objRa, 4)}&deg; ${fmt(objDec, 4)}&deg;</div>
+                <div class="status-value"><strong>Coordinates:</strong> ${fmtRa(objRa)} ${fmtDeg(objDec)}</div>
+                <div class="status-value"><strong>Offsets:</strong> ${fmtDeg(offsRa)} ${fmtDeg(offsDec)}</div>
+                <div class="status-value"><strong>Corrections:</strong> ${fmtDeg(corrRa)} ${fmtDeg(corrDec)}</div>
+                <div class="status-value"><strong>T0 RA/Dec:</strong> ${fmtRa(telRa)} ${fmtDeg(telDec)}</div>
+                <div class="status-value"><strong>T0 Alt/Az:</strong> ${fmtDeg(telAlt)} ${fmtDeg(telAz)}</div>
                 <div class="status-value"><strong>Airmass:</strong> ${fmt(airmass, 2)}</div>
-                <div class="status-value"><strong>Tracking:</strong> <span class="${tracking ? 'good' : 'warn'}">${tracking ? 'On' : 'Off'}</span></div>
+                <div class="status-value"><strong>Tracking:</strong> <span class="${tracking ? 'good' : 'warn'}">${tracking ? 'On' : 'Off'}</span>,
+                    <strong>block move:</strong> ${blockStr}</div>
+                <div class="status-value"><strong>T0 info time:</strong> ${typeof infotime === 'number' ? new Date(infotime * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UT' : 'N/A'}</div>
             `;
         }
 
@@ -899,7 +945,7 @@
             const div = document.getElementById('weather-status');
             const rainSBT = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
             const rainStrSBT = rainSBT ? '<span class="error">YES (SBT)</span>' : '<span class="good">No (SBT)</span>';
-            const rainD50 = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
+            const rainD50 = safeValue(systemData.RAIN_D50, 'rain', 0) == 1;
             const rainStrD50 = rainD50 ? '<span class="error">YES (D50)</span>' : '<span class="good">No (D50)</span>';
 
             const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
@@ -920,6 +966,16 @@
 	    const dpTelIn = dewPoint(tempTelIn, humTelIn);
             const tempMirr = safeValue(systemData.SHUTTER1, 'OTAtempMIRROR', NaN);
             const tempMirrAir = safeValue(systemData.SHUTTER1, 'OTAtempAIR', NaN);
+            // SHUTTER1's OTAfanPower, 0 (off) to 9 (max), coloured from
+            // green through darker to full red as fr_status.php did it.
+            const fan = safeValue(systemData.SHUTTER1, 'OTAfanPower', null);
+            let fanStr = 'N/A';
+            if (typeof fan === 'number') {
+                const fanColor = fan <= 0 ? 'var(--good)' : fan >= 9 ? 'var(--error)'
+                    : `#${(fan * 16 + 111).toString(16)}2222`;
+                fanStr = `<span style="color: ${fanColor}; font-weight: ${fan > 0 ? 'bold' : 'normal'};">`
+                    + `${fan}${fan <= 0 ? ' (off)' : fan >= 9 ? ' (max)' : ''}</span>`;
+            }
 
             const cloudDiff = safeValue(systemData.CLOUD, 'TEMP_DIFF', NaN);
             const tempAmb = safeValue(systemData.CLOUD, 'TEMP_AMB', NaN);
@@ -948,6 +1004,7 @@
                     <tr><th>Hum [%]</th><td>${fmt(humOut)}</td><td>${fmt(humDomeD50)}</td><td>${fmt(humTelOut)}</td><td>${fmt(humTelIn)}</td><td>-</td><td>-</td><td>-</td></tr>
                     <tr><th>DewP [&deg;C]</th><td>${fmt(dpOut)}</td><td>${fmt(dpDomeD50)}</td><td>${fmt(dpTelOut)}</td><td>${fmt(dpTelIn)}</td><td>-</td><td>-</td><td>-</td></tr>
                 </table>
+                <div class="status-value"><strong>OTA fan power:</strong> ${fanStr}</div>
 
                 <div class="status-value"><strong>Disk free:</strong> ${diskFreeGB} GB</div>
                 <div class="status-value"><strong>UPS:</strong> <span class="${onBattery ? 'error' : 'good'}">${upsStatus}</span> - load ${fmt(upsLoad)}%, charge ${fmt(upsCharge, 0)}%</div>
