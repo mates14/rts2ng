@@ -2761,3 +2761,14 @@ the operator switches to on by hand each evening once it is safe, so "No"
 next to an open roof and "ON night" is normal (user's explanation; they
 may turn automatic opening on later). Comment added at the code; display
 unchanged.
+
+### SBT monitor: the same T0 block as D50 (2026-10-12) [JS]
+
+`bart-monitor.html` got the telescope block from the D50 page (`fmtSexa`/
+`fmtDeg`/`fmtRa` and `updateTelescopeStatus()` copied over): sexagesimal
+Coordinates, Offsets, Corrections, T0 RA/Dec, T0 Alt/Az, Airmass, Tracking,
+T0 info time. Left out on the user's call: block move (not used at SBT) and
+OTA fan power (SBT has no such fan). The value names are generic teld ones
+(`teld.cpp`), so BART's T0 has them all. Tested by rendering the page in
+headless Firefox against D50's live httpd, since BART's httpd is not
+reachable from lascaux50; not yet seen against BART's own daemon.

@@ -694,21 +694,63 @@
             }));
         }
 
+        // Sexagesimal, as the old PHP page (rts2phplib/miscfunc.inc
+        // dec_tostring/ra_tostring) printed them: +DD°MM'SS.ss" and
+        // HH:MM:SS.ss. Rounded once, on the total, so 59.999" carries
+        // into the minute instead of printing as 60.00".
+        function fmtSexa(val, digits = 2) {
+            if (typeof val !== 'number' || !Number.isFinite(val))
+                return null;
+            const scale = 3600 * 10 ** digits;
+            const total = Math.round(Math.abs(val) * scale);
+            const d = Math.floor(total / scale);
+            const m = Math.floor(total % scale / (scale / 60));
+            const sec = (total % (scale / 60)) / 10 ** digits;
+            return [val < 0 ? '-' : '+', d, String(m).padStart(2, '0'),
+                sec.toFixed(digits).padStart(digits ? digits + 3 : 2, '0')];
+        }
+
+        function fmtDeg(deg, digits = 2) {
+            const p = fmtSexa(deg, digits);
+            return p ? `${p[0]}${String(p[1]).padStart(2, '0')}&deg;${p[2]}'${p[3]}"` : 'N/A';
+        }
+
+        function fmtRa(deg, digits = 2) {
+            const p = fmtSexa(typeof deg === 'number' ? ((deg % 360) + 360) % 360 / 15 : deg, digits);
+            return p ? `${String(p[1]).padStart(2, '0')}:${p[2]}:${p[3]}` : 'N/A';
+        }
+
+        // T0's RA/Dec-pair values, as D50's old fr_status.php showed them
+        // (same layout as d50-monitor.html, minus D50's block_move). TEL_ is
+        // the mount's own Alt/Az ("alt az" in that order, the same value
+        // drawSkyChart() plots); OFFS is the offset requested by scripts
+        // or the user, CORR_ the correction from astrometry of the last
+        // image(s).
         function updateTelescopeStatus() {
             const div = document.getElementById('telescope-status');
             const currentName = safeValue(systemData.EXEC, 'current_name', '');
             const current = safeValue(systemData.EXEC, 'current', -1);
             const nextName = safeValue(systemData.EXEC, 'next_name', '');
             const [objRa, objDec] = parseRaDec(safeValue(systemData.T0, 'OBJ', ''));
+            const [telRa, telDec] = parseRaDec(safeValue(systemData.T0, 'TEL', ''));
+            const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
+            const [offsRa, offsDec] = parseRaDec(safeValue(systemData.T0, 'OFFS', ''));
+            const [corrRa, corrDec] = parseRaDec(safeValue(systemData.T0, 'CORR_', ''));
             const airmass = safeValue(systemData.T0, 'AIRMASS', NaN);
             const tracking = safeValue(systemData.T0, 'TRACKING', 0) == 1;
+            const infotime = safeValue(systemData.T0, 'infotime', null);
 
             div.innerHTML = `
                 <div class="status-value"><strong>Object:</strong> ${currentName || '(none)'} (${current})</div>
                 <div class="status-value"><strong>Next:</strong> ${nextName || '(none)'}</div>
-                <div class="status-value"><strong>Coordinates:</strong> ${fmt(objRa, 4)}&deg; ${fmt(objDec, 4)}&deg;</div>
+                <div class="status-value"><strong>Coordinates:</strong> ${fmtRa(objRa)} ${fmtDeg(objDec)}</div>
+                <div class="status-value"><strong>Offsets:</strong> ${fmtDeg(offsRa)} ${fmtDeg(offsDec)}</div>
+                <div class="status-value"><strong>Corrections:</strong> ${fmtDeg(corrRa)} ${fmtDeg(corrDec)}</div>
+                <div class="status-value"><strong>T0 RA/Dec:</strong> ${fmtRa(telRa)} ${fmtDeg(telDec)}</div>
+                <div class="status-value"><strong>T0 Alt/Az:</strong> ${fmtDeg(telAlt)} ${fmtDeg(telAz)}</div>
                 <div class="status-value"><strong>Airmass:</strong> ${fmt(airmass, 2)}</div>
                 <div class="status-value"><strong>Tracking:</strong> <span class="${tracking ? 'good' : 'warn'}">${tracking ? 'On' : 'Off'}</span></div>
+                <div class="status-value"><strong>T0 info time:</strong> ${typeof infotime === 'number' ? new Date(infotime * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UT' : 'N/A'}</div>
             `;
         }
 
