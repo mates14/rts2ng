@@ -13,7 +13,8 @@ broken master reaches a telescope.
 
 1. `git pull --rebase`. The other person may have pushed since.
 2. Read the `STATUS.md` of the subtree you will work in, all of it, before
-   changing anything there. It lists the facts that must stay true.
+   changing anything there. It lists the facts that must stay true, and
+   any "In progress" note (see below).
 
 `base/STATUS.md` is short. Its dated log is in `base/HISTORY.md`, which you
 grep when you need the reason behind something, not read in full. `db/`,
@@ -27,6 +28,11 @@ rest.
   an open item changed.
 - Append the session to its log (`HISTORY.md` in `base/`, the end of
   `STATUS.md` elsewhere).
+- If the work is left half done, put a short note at the top of the
+  subtree's `STATUS.md`, under `## In progress`: date, tag, what and where
+  (`2026-10-12 [JS] gemini-udp: IMU fusion in tracking, teld/gemini-udp`).
+  Commit and push it, so the other Claude sees it. Delete the note when the
+  work is finished.
 - When committing: small commits with a message that says what changed and
   why.
 
@@ -49,6 +55,10 @@ MJ's.
   your user asked for on the grounds that the other person should agree
   first. If you think they should know, say so in the commit message or the
   log entry, and make the change.
+- The one thing to check: if the problem you are about to work on is in
+  the other person's "In progress" note, tell your user before starting,
+  so the same thing is not done twice. That is information, not a request
+  for approval; your user decides.
 
 ## Layout and build
 
