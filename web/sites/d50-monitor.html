@@ -2012,6 +2012,30 @@
             renderSkyChart(document.getElementById('sky-canvas'), skyChartParams);
         }
 
+        // The horizon as RTS2 enforces it: ObjectCheck::getHorizonHeight
+        // (base/kernel/src/objectcheck.cpp) interpolates altitude
+        // linearly in azimuth between the nodes, which are sorted by
+        // azimuth on load, wrapping from the last node back to the first.
+        // In this polar projection such a segment is a curve, not a
+        // straight chord between the nodes, so each one is walked in
+        // steps of at most 1 deg of azimuth. A vertical step (two nodes
+        // at the same azimuth) stays a straight line, as it should.
+        function horizonOutline(nodes) {
+            const out = [];
+            for (let i = 0; i < nodes.length; i++) {
+                const [az1, alt1] = nodes[i];
+                const [az2, alt2] = nodes[(i + 1) % nodes.length];
+                let span = az2 - az1;
+                if (i === nodes.length - 1)
+                    span += 360;
+                out.push([az1, alt1]);
+                const steps = Math.ceil(span);
+                for (let k = 1; k < steps; k++)
+                    out.push([az1 + span * k / steps, alt1 + (alt2 - alt1) * k / steps]);
+            }
+            return out;
+        }
+
         // canvas: element to draw into - its own width/height attributes
         // set the render resolution (#sky-canvas is a fixed 300x300; the
         // enlarged lightbox view sizes itself to the available space).
@@ -2056,10 +2080,11 @@
             const lat = horizonInfo.lat;
 
             if (horizonInfo.horizon && horizonInfo.horizon.length > 2) {
+                const outline = horizonOutline(horizonInfo.horizon);
                 ctx.beginPath();
                 ctx.moveTo(cx + R, cy);
                 ctx.arc(cx, cy, R, 0, 2 * Math.PI);
-                horizonInfo.horizon.forEach(([az, alt], i) => {
+                outline.forEach(([az, alt], i) => {
                     const p = project(alt, az);
                     if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
                 });
@@ -2070,7 +2095,7 @@
                 ctx.strokeStyle = groundStroke;
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
-                horizonInfo.horizon.forEach(([az, alt], i) => {
+                outline.forEach(([az, alt], i) => {
                     const p = project(alt, az);
                     if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
                 });

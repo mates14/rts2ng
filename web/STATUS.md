@@ -2790,3 +2790,20 @@ missing (`N/A (D50)`).
 a sensor that has never answered shows `N/A (SBT)` / `N/A (D50)` instead of
 `No`. Tested in headless Firefox against D50's live httpd, normally (both
 `No`) and with RAIN_D50 blocked in the test proxy (`N/A (D50)`).
+
+### Sky chart: horizon drawn as RTS2 interpolates it (2026-10-12) [JS]
+
+Both monitor pages drew the horizon from `/api/horizon` as straight lines
+between the nodes. In the alt-az polar projection that is wrong:
+`ObjectCheck::getHorizonHeight` interpolates altitude linearly in azimuth
+(nodes sorted by azimuth on load, wrapping from the last to the first), and
+such a segment is a curve on the chart. A long segment like D50's 0-60 deg
+(29 -> 17 deg alt) was a visible chord cutting into the sky.
+
+`horizonOutline()` now walks each segment in steps of at most 1 deg of
+azimuth, in the browser; `/api/horizon` and the daemon are unchanged
+(deciding between that and asking the server for a denser table: the
+interpolation is a few lines, and the server answer would be the same
+numbers). Same code in `d50-monitor.html` and `bart-monitor.html`. Tested in
+headless Firefox against D50's live httpd, before/after screenshots
+compared; BART's page was not rendered with BART's horizon.
