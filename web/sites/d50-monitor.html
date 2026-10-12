@@ -691,7 +691,8 @@
             C0: {}, C1: {},
             F0: {}, F1: {},
             IMGP: {},
-            WEATHER_BART: {}, RAIN_BART: {}, CLOUD: {},
+            WEATHER_BART: {}, RAIN_BART: {}, WEATHER_D50: {}, SHUTTER1: {},
+	    RAIN_D50: {}, CLOUD: {},
             DISK_D50: {}, D50UPS: {}
         };
 
@@ -885,17 +886,39 @@
             }
         }
 
+        // Usual approximation of dewpoint temperature from temperature and relative humidity
+        function dewPoint(temp, hum) {
+	    if (temp === "Nan" || hum === "Nan")
+	        return "Nan";
+            const gama = Math.log(hum/100.0) + (17.625*temp/(243.04 + temp));
+            return 243.04 * gama / (17.625 - gama);
+        }
+
         function updateWeatherStatus() {
             const div = document.getElementById('weather-status');
-            const rain = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
-            const rainStr = rain ? '<span class="error">YES</span>' : '<span class="good">No</span>';
+            const rainSBT = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
+            const rainStrSBT = rainSBT ? '<span class="error">YES (SBT)</span>' : '<span class="good">No (SBT)</span>';
+            const rainD50 = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
+            const rainStrD50 = rainD50 ? '<span class="error">YES (D50)</span>' : '<span class="good">No (D50)</span>';
 
             const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
             const humOut = safeValue(systemData.WEATHER_BART, 'HUM_OUT', NaN);
-            const tempDome = safeValue(systemData.WEATHER_BART, 'TEMP_DOME', NaN);
-            const humDome = safeValue(systemData.WEATHER_BART, 'HUM_DOME', NaN);
+	    const dpOut = dewPoint(tempOut, humOut);
             const windSpeed = safeValue(systemData.WEATHER_BART, 'WIND_SPEED', NaN);
             const windPeak = safeValue(systemData.WEATHER_BART, 'WIND_SPEED_PEAK', NaN);
+
+            const tempDomeD50 = safeValue(systemData.WEATHER_D50, 'TEMP_DOME', NaN);
+            const humDomeD50 = safeValue(systemData.WEATHER_D50, 'HUM_DOME', NaN);
+	    const dpDomeD50 = dewPoint(tempDomeD50, humDomeD50);
+            const tempRack = safeValue(systemData.WEATHER_D50, 'TEMP_SIMPLE', NaN);
+            const tempTelOut = safeValue(systemData.SHUTTER1, 'OTAtempOUT', NaN);
+            const humTelOut = safeValue(systemData.SHUTTER1, 'OTAhumOUT', NaN);
+	    const dpTelOut = dewPoint(tempTelOut, humTelOut);
+            const tempTelIn = safeValue(systemData.SHUTTER1, 'OTAtempIN', NaN);
+            const humTelIn = safeValue(systemData.SHUTTER1, 'OTAhumIN', NaN);
+	    const dpTelIn = dewPoint(tempTelIn, humTelIn);
+            const tempMirr = safeValue(systemData.SHUTTER1, 'OTAtempMIRROR', NaN);
+            const tempMirrAir = safeValue(systemData.SHUTTER1, 'OTAtempAIR', NaN);
 
             const cloudDiff = safeValue(systemData.CLOUD, 'TEMP_DIFF', NaN);
             const tempAmb = safeValue(systemData.CLOUD, 'TEMP_AMB', NaN);
@@ -913,15 +936,16 @@
             const onBattery = upsStatus !== 'OL';
 
             div.innerHTML = `
-                <div class="status-value"><strong>Rain?:</strong> ${rainStr}</div>
+                <div class="status-value"><strong>Rain?:</strong> ${rainStrSBT} | ${rainStrD50}</div>
                 <div class="status-value"><strong>Cloud coverage:</strong> ${fmt(cloudDiff)} (${fmt(tempAmb)} - ${fmt(tempSky)})</div>
                 <div class="status-value"><strong>Cloud heater:</strong> ${heater ? 'on' : 'off'}</div>
                 <div class="status-value"><strong>Wind:</strong> ${fmt(windSpeed)} m/s, peak ${fmt(windPeak)} m/s</div>
 
                 <table class="temp-table">
-                    <tr><th></th><th>Out</th><th>Dome</th></tr>
-                    <tr><th>Temp [&deg;C]</th><td>${fmt(tempOut)}</td><td>${fmt(tempDome)}</td></tr>
-                    <tr><th>Hum [%]</th><td>${fmt(humOut)}</td><td>${fmt(humDome)}</td></tr>
+                    <tr><th></th><th>Out<br>(SBT)</th><th>Dome</th><th>OTA<br>out</th><th>OTA<br>in</th><th>Prim.<br>air</th><th>Prim.<br>mirror</th><th>Rack</th></tr>
+                    <tr><th>Temp [&deg;C]</th><td>${fmt(tempOut)}</td><td>${fmt(tempDomeD50)}</td><td>${fmt(tempTelOut)}</td><td>${fmt(tempTelIn)}</td><td>${fmt(tempMirrAir)}</td><td>${fmt(tempMirr)}</td><td>${fmt(tempRack)}</td></tr>
+                    <tr><th>Hum [%]</th><td>${fmt(humOut)}</td><td>${fmt(humDomeD50)}</td><td>${fmt(humTelOut)}</td><td>${fmt(humTelIn)}</td><td>-</td><td>-</td><td>-</td></tr>
+                    <tr><th>DewP [&deg;C]</th><td>${fmt(dpOut)}</td><td>${fmt(dpDomeD50)}</td><td>${fmt(dpTelOut)}</td><td>${fmt(dpTelIn)}</td><td>-</td><td>-</td><td>-</td></tr>
                 </table>
 
                 <div class="status-value"><strong>Disk free:</strong> ${diskFreeGB} GB</div>
