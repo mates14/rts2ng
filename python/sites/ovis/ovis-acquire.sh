@@ -5,11 +5,9 @@
 # flood image that is thrown away. Derived from the karpov-sequencer
 # kseq.sh that has been copied from site to site.
 #
-# Run it like this:
-#   rts2-scriptexec -c C0 -s 'exe /path/to/ovis-acquire.sh'
-# The full spectrum exposure is EXPTIME below (300 s). A first argument
-# overrides it, but the script's `exe` takes only the path, so that needs
-# a wrapper.
+# Run it with ovis-sp.sh, or by hand (the quotes make path and arguments
+# one exe parameter, split into argv when it runs; 600 s full spectrum):
+#   rts2-scriptexec -c C1 -s 'exe "/path/to/ovis-acquire.sh 600"'
 
 # How many random frames between
 FRAMES_PER_GROUP=2
