@@ -2807,3 +2807,35 @@ interpolation is a few lines, and the server answer would be the same
 numbers). Same code in `d50-monitor.html` and `bart-monitor.html`. Tested in
 headless Firefox against D50's live httpd, before/after screenshots
 compared; BART's page was not rendered with BART's horizon.
+
+### Sky chart: grid, labels, bigger small chart (2026-10-12) [JS]
+
+Worked out with the user over several iterations, then copied unchanged to
+`bart-monitor.html` (the drawing code of the two pages is now identical
+apart from comments). In both `renderSkyChart()`s:
+
+- **Grid**: altitude circles every 15 deg, azimuth lines every 30 deg.
+  The lines stop at the 75 deg circle so they don't crowd the zenith, except
+  N-S and E-W, which run through it. All in the same light style (a stronger
+  N-S/E-W was tried and rejected).
+- **Labels, enlarged (lightbox) view only** (`opts.enlarged`): altitude
+  15-75 deg just right of the north line, and azimuth in the astronomical
+  convention (0 at S, 90 at W, as libnova/RTS2 count it), each pulled in
+  from the rim by its own half-width/half-height so none touches it. Small
+  and faint on purpose; the small chart has none (user call).
+- **N/E/S/W letters** now sit just outside the rim. They used to ask
+  `project()` for alt -8, but it clamps to the rim, so they were drawn on it
+  and collided with the azimuth labels. In the lightbox they are white,
+  because its margin shows the dark overlay.
+- **Small chart**: no "Sky" title, 4 px panel padding (`.sky-panel`), 11 px
+  letter margin (14 in the lightbox). Rendered at its shown width instead of
+  a fixed 300x300 scaled by CSS, and redrawn on window resize.
+- **Stars**: the small chart draws to 4.0 mag (551 stars) at 0.7x size; the
+  lightbox keeps 5.5 mag (2877). The dot size is now measured from 5.5 mag
+  (`Math.max(starsMag, 5.5)`), not from the limit, so lowering the limit
+  only drops the faint stars instead of shrinking all of them. `?starsmag=`
+  and `?starssize=` still override both views.
+
+Tested in headless Firefox against D50's live httpd: both pages, small and
+enlarged, light and dark (dark only on D50's). Nothing seen against BART's
+own daemon or horizon.

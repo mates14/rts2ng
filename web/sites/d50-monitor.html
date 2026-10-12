@@ -268,6 +268,8 @@
 
         /* Space is dark regardless of page theme, so this doesn't
            follow --panel-bg/--text like everything else. */
+        /* No title and a thin padding: the chart is the panel. */
+        .sky-panel { padding: 4px; line-height: 0; }
         #sky-canvas { width: 100%; height: auto; aspect-ratio: 1; border-radius: 50%; cursor: pointer; }
 
         .control-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -456,8 +458,7 @@
                 </div>
             </div>
 
-            <div class="status-panel" style="text-align: center;">
-                <h3 style="margin: 0 0 6px 0;">Sky</h3>
+            <div class="status-panel sky-panel">
                 <canvas id="sky-canvas" width="300" height="300" title="Click to enlarge"></canvas>
             </div>
 
@@ -2009,7 +2010,19 @@
         })();
 
         function drawSkyChart() {
-            renderSkyChart(document.getElementById('sky-canvas'), skyChartParams);
+            // Rendered at the size it is shown at (the panel's width), so
+            // it is neither scaled up blurry nor its text scaled down.
+            const canvas = document.getElementById('sky-canvas');
+            const size = Math.round(canvas.clientWidth);
+            if (size > 0 && canvas.width !== size) {
+                canvas.width = size;
+                canvas.height = size;
+            }
+            // Fewer and smaller stars than the enlarged view (5.5 mag,
+            // 2877 in the catalogue): to 4.0 mag there are 551, which
+            // keeps the constellations recognisable at this size.
+            // ?starsmag= and ?starssize= still override both.
+            renderSkyChart(canvas, { starsMag: 4.0, starSize: 0.7, ...skyChartParams });
         }
 
         // The horizon as RTS2 enforces it: ObjectCheck::getHorizonHeight
@@ -2037,23 +2050,28 @@
         }
 
         // canvas: element to draw into - its own width/height attributes
-        // set the render resolution (#sky-canvas is a fixed 300x300; the
+        // set the render resolution (#sky-canvas is resized to its shown width; the
         // enlarged lightbox view sizes itself to the available space).
         // opts.starsMag: limiting magnitude. opts.starSize: dot radius
-        // multiplier.
+        // multiplier. opts.enlarged: the lightbox view - label the
+        // altitude circles and azimuth lines, and draw N/E/S/W light,
+        // since its margin shows the dark lightbox overlay.
         function renderSkyChart(canvas, opts) {
             if (!canvas || !horizonInfo)
                 return;
-            const { starsMag = 5.5, starSize = 1.0 } = opts || {};
+            const { starsMag = 5.5, starSize = 1.0, enlarged = false } = opts || {};
             const ctx = canvas.getContext('2d');
             const W = canvas.width, Hh = canvas.height;
-            const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 2 - 14;
+            // margin: room outside the rim for the N/E/S/W letters.
+            const margin = enlarged ? 14 : 11;
+            const cx = W / 2, cy = Hh / 2, R = Math.min(W, Hh) / 2 - margin;
 
             const dark = document.body.classList.contains('dark');
             const skyBg = dark ? '#05070d' : '#4a7fc9';
             const groundFill = dark ? 'rgba(80,50,20,0.55)' : 'rgba(45,110,55,0.85)';
             const groundStroke = dark ? '#c08030' : '#2d5a26';
             const gridColor = dark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.25)';
+            const altLabelColor = dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.5)';
             const labelColor = dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.7)';
             const starColor = dark ? '#fff' : '#182449';
             const haloColor = 'rgba(255,255,255,0.9)';
@@ -2107,19 +2125,62 @@
             ctx.fillStyle = labelColor;
             ctx.font = '10px sans-serif';
             ctx.lineWidth = 1;
-            for (const alt of [0, 30, 60]) {
+            // Altitude circles every 15 deg; azimuth lines every 30 deg,
+            // stopped at the 75 deg circle so they do not crowd together
+            // at the zenith, except N-S and E-W, which run through it.
+            for (let alt = 0; alt < 90; alt += 15) {
                 ctx.beginPath();
                 ctx.arc(cx, cy, R * (90 - alt) / 90, 0, 2 * Math.PI);
                 ctx.stroke();
             }
-            for (const [label, azLibnova] of [['N', 180], ['E', 270], ['S', 0], ['W', 90]]) {
-                const edge = project(0, azLibnova);
+            for (let az = 0; az < 360; az += 30) {
+                const cardinal = az % 90 === 0;
+                const inner = project(cardinal ? 90 : 75, az);
+                const edge = project(0, az);
                 ctx.beginPath();
-                ctx.moveTo(cx, cy);
+                ctx.moveTo(inner.x, inner.y);
                 ctx.lineTo(edge.x, edge.y);
                 ctx.stroke();
-                const lp = project(-8, azLibnova);
-                ctx.fillText(label, lp.x - 4, lp.y + 4);
+            }
+            // Just outside the rim, in the margin R leaves: project()
+            // clamps to the rim, so asking it for a negative altitude
+            // put the letters on the rim itself, over the grid labels.
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (enlarged)
+                ctx.fillStyle = 'rgba(255,255,255,0.85)';
+            for (const [label, azLibnova] of [['N', 180], ['E', 270], ['S', 0], ['W', 90]]) {
+                const edge = project(0, azLibnova);
+                ctx.fillText(label, cx + (edge.x - cx) * (R + margin / 2) / R, cy + (edge.y - cy) * (R + margin / 2) / R);
+            }
+            ctx.restore();
+            // Grid labels, enlarged chart only, small and faint: altitude
+            // just right of the north line, azimuth (astronomical, as
+            // libnova and RTS2 count it: 0 at south, 90 at west) just
+            // inside the horizon circle on each azimuth line.
+            if (enlarged) {
+                ctx.save();
+                ctx.font = `${Math.max(9, Math.round(R / 30))}px sans-serif`;
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = altLabelColor;
+                for (let alt = 15; alt < 90; alt += 15) {
+                    const p = project(alt, 180);
+                    ctx.fillText(`${alt}°`, p.x + 2, p.y);
+                }
+                // Each label is pulled in from the rim just far enough for
+                // its box to clear it: by half its width at E/W, half its
+                // height at N/S.
+                ctx.textAlign = 'center';
+                const fontPx = Math.max(9, Math.round(R / 30));
+                for (let az = 0; az < 360; az += 30) {
+                    const text = `${az}°`;
+                    const edge = project(0, az);
+                    const ux = (edge.x - cx) / R, uy = (edge.y - cy) / R;
+                    const inset = 4 + Math.abs(ux) * ctx.measureText(text).width / 2 + Math.abs(uy) * fontPx / 2;
+                    ctx.fillText(text, edge.x - ux * inset, edge.y - uy * inset);
+                }
+                ctx.restore();
             }
 
             if (starCatalog) {
@@ -2131,7 +2192,10 @@
                     if (hz.alt <= 0)
                         continue;
                     const p = project(hz.alt, hz.az);
-                    const size = Math.max(0.4, (starsMag - mag) * 0.5) * starSize;
+                    // Sized from 5.5 mag (or a fainter limit), not from
+                    // starsMag itself, so a star is the same size whatever
+                    // the limit and a lower one only drops the faint ones.
+                    const size = Math.max(0.4, (Math.max(starsMag, 5.5) - mag) * 0.5) * starSize;
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
                     ctx.fill();
@@ -2278,8 +2342,9 @@
             canvas.style.width = size + 'px';
             canvas.style.height = size + 'px';
 
-            renderSkyChart(canvas, skyChartParams);
-            lightboxInterval = setInterval(() => renderSkyChart(canvas, skyChartParams), 10000);
+            const params = { ...skyChartParams, enlarged: true };
+            renderSkyChart(canvas, params);
+            lightboxInterval = setInterval(() => renderSkyChart(canvas, params), 10000);
         }
 
         document.getElementById('lightbox').addEventListener('click', function (e) {
@@ -2301,6 +2366,7 @@
                 });
             }
             document.getElementById('sky-canvas').addEventListener('click', openSkyLightbox);
+            window.addEventListener('resize', drawSkyChart);
 
             await Promise.all([loadHorizonInfo(), loadStarCatalog()]);
             await updateStatus();
