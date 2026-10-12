@@ -949,10 +949,13 @@
 
         function updateWeatherStatus() {
             const div = document.getElementById('weather-status');
-            const rainSBT = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
-            const rainStrSBT = rainSBT ? '<span class="error">YES (SBT)</span>' : '<span class="good">No (SBT)</span>';
-            const rainD50 = safeValue(systemData.RAIN_D50, 'rain', 0) == 1;
-            const rainStrD50 = rainD50 ? '<span class="error">YES (D50)</span>' : '<span class="good">No (D50)</span>';
+            // N/A rather than "No" for a sensor that has never answered,
+            // same as bart-monitor.html.
+            const rainStr = (dev, label) => {
+                const rain = safeValue(systemData[dev], 'rain', null);
+                return rain === null ? `<span class="warn">N/A (${label})</span>`
+                    : rain == 1 ? `<span class="error">YES (${label})</span>` : `<span class="good">No (${label})</span>`;
+            };
 
             const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
             const humOut = safeValue(systemData.WEATHER_BART, 'HUM_OUT', NaN);
@@ -999,7 +1002,7 @@
             const onBattery = upsStatus !== 'OL';
 
             div.innerHTML = `
-                <div class="status-value"><strong>Rain?:</strong> ${rainStrSBT} | ${rainStrD50}</div>
+                <div class="status-value"><strong>Rain?:</strong> ${rainStr('RAIN_BART', 'SBT')} | ${rainStr('RAIN_D50', 'D50')}</div>
                 <div class="status-value"><strong>Cloud coverage:</strong> ${fmt(cloudDiff)} (${fmt(tempAmb)} - ${fmt(tempSky)})</div>
                 <div class="status-value"><strong>Cloud heater:</strong> ${heater ? 'on' : 'off'}</div>
                 <div class="status-value"><strong>Wind:</strong> ${fmt(windSpeed)} m/s, peak ${fmt(windPeak)} m/s</div>

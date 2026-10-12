@@ -2783,3 +2783,10 @@ not possible to check from lascaux50 whether BART's bus carries RAIN_D50. A
 sensor that has never answered shows `N/A`, not `No`. Tested in headless
 Firefox against D50's live httpd, with the proxy present (both `No`) and
 missing (`N/A (D50)`).
+
+### D50 monitor: rain sensor N/A (2026-10-12) [JS]
+
+`d50-monitor.html`'s "Rain?" uses the same `rainStr()` as `bart-monitor.html`:
+a sensor that has never answered shows `N/A (SBT)` / `N/A (D50)` instead of
+`No`. Tested in headless Firefox against D50's live httpd, normally (both
+`No`) and with RAIN_D50 blocked in the test proxy (`N/A (D50)`).
