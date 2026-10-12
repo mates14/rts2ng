@@ -2772,3 +2772,14 @@ OTA fan power (SBT has no such fan). The value names are generic teld ones
 (`teld.cpp`), so BART's T0 has them all. Tested by rendering the page in
 headless Firefox against D50's live httpd, since BART's httpd is not
 reachable from lascaux50; not yet seen against BART's own daemon.
+
+### SBT monitor: both rain sensors (2026-10-12) [JS]
+
+`bart-monitor.html`'s "Rain?" now shows `RAIN_BART` and `RAIN_D50`, labelled
+SBT and D50 as on D50's page. RAIN_D50 is read from D50's own rts2-httpd
+through the `/d50/api` Apache proxy the cloud history already uses
+(`REMOTE_DEVICES`; `fetchDeviceData()` takes the base URL), because it was
+not possible to check from lascaux50 whether BART's bus carries RAIN_D50. A
+sensor that has never answered shows `N/A`, not `No`. Tested in headless
+Firefox against D50's live httpd, with the proxy present (both `No`) and
+missing (`N/A (D50)`).

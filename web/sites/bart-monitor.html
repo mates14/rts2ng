@@ -605,9 +605,16 @@
             C1: {}, C2: {}, C3: {},
             F1: {}, F2: {}, F3: {},
             IMGP: {},
-            WEATHER_BART: {}, RAIN_BART: {}, CLOUD: {},
+            WEATHER_BART: {}, RAIN_BART: {}, RAIN_D50: {}, CLOUD: {},
             DISK_BART: {}, BARTUPS: {}
         };
+
+        // Devices read from another telescope's rts2-httpd rather than
+        // this host's. RAIN_D50 is D50's own rain sensor; it goes through
+        // the same /d50 Apache proxy as the cloud history (see
+        // CLOUD_API_BASE), which is certain to have it, whether or not
+        // this host's bus carries it too.
+        const REMOTE_DEVICES = { RAIN_D50: '/d50/api' };
 
         const DEVICES = Object.keys(systemData);
 
@@ -650,9 +657,9 @@
             return typeof timeVal === 'number' ? new Date(timeVal * 1000).toLocaleString() : 'N/A';
         }
 
-        async function fetchDeviceData(deviceName) {
+        async function fetchDeviceData(deviceName, base = API_BASE) {
             try {
-                const res = await fetch(`${API_BASE}/get?d=${deviceName}`);
+                const res = await fetch(`${base}/get?d=${deviceName}`);
                 if (!res.ok)
                     throw new Error(`${res.status}`);
                 const data = await res.json();
@@ -665,7 +672,7 @@
 
         async function updateAllDeviceData() {
             await Promise.all(DEVICES.map(async device => {
-                const data = await fetchDeviceData(device);
+                const data = await fetchDeviceData(device, REMOTE_DEVICES[device]);
                 if (data)
                     systemData[device] = data;
             }));
@@ -836,8 +843,13 @@
 
         function updateWeatherStatus() {
             const div = document.getElementById('weather-status');
-            const rain = safeValue(systemData.RAIN_BART, 'rain', 0) == 1;
-            const rainStr = rain ? '<span class="error">YES</span>' : '<span class="good">No</span>';
+            // Both rain sensors, as on D50's page. N/A rather than "No"
+            // for a sensor that has never answered.
+            const rainStr = (dev, label) => {
+                const rain = safeValue(systemData[dev], 'rain', null);
+                return rain === null ? `<span class="warn">N/A (${label})</span>`
+                    : rain == 1 ? `<span class="error">YES (${label})</span>` : `<span class="good">No (${label})</span>`;
+            };
 
             const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
             const humOut = safeValue(systemData.WEATHER_BART, 'HUM_OUT', NaN);
@@ -860,7 +872,7 @@
             const onBattery = upsStatus !== 'OL';
 
             div.innerHTML = `
-                <div class="status-value"><strong>Rain?:</strong> ${rainStr}</div>
+                <div class="status-value"><strong>Rain?:</strong> ${rainStr('RAIN_BART', 'SBT')} | ${rainStr('RAIN_D50', 'D50')}</div>
                 <div class="status-value"><strong>Cloud coverage:</strong> ${fmt(cloudDiff)} (${fmt(tempAmb)} - ${fmt(tempSky)})</div>
                 <div class="status-value"><strong>Cloud heater:</strong> ${heater ? 'on' : 'off'}</div>
                 <div class="status-value"><strong>Wind:</strong> ${fmt(windSpeed)} m/s, peak ${fmt(windPeak)} m/s</div>
