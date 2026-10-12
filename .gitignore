@@ -30,3 +30,6 @@ __pycache__/
 **/debian/debhelper-build-stamp
 **/debian/files
 **/debian/rts2-*/
+
+# Per-person Claude Code notes (see CLAUDE.md)
+CLAUDE.local.md
