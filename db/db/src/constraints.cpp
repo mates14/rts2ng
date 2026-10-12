@@ -138,8 +138,9 @@ void ConstraintInterval::parse (const char *arg)
 		upper = strtof (cp + 1, &endp);
 		if (*endp != 0)
 		{
+			std::string msg = std::string ("cannot find : in interval ") + (cp + 1);
 			delete[] sint;
-			throw rts2core::Error ((std::string ("cannot find : in interval ") + (cp + 1)).c_str ());
+			throw rts2core::Error (msg.c_str ());
 		}
 	}
 
@@ -843,7 +844,6 @@ void Constraints::load (const char *filename, bool overwrite)
 {
 	LIBXML_TEST_VERSION
 
-	xmlLineNumbersDefault (1);
 	xmlDoc *doc = xmlReadFile (filename, NULL, XML_PARSE_NOBLANKS | XML_PARSE_NOWARNING);
 	if (doc == NULL)
 		throw XmlError ("cannot parse constraint file " + std::string (filename));

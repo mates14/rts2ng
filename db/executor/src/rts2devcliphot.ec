@@ -103,10 +103,10 @@ void DevClientPhotExec::addCount (int count, float exp, bool is_ov)
 	d_count_ra = actRaDec.ra;
 	d_count_dec = actRaDec.dec;
 
-	strncpy (d_counter_name.arr, connection->getName (), 8);
 	d_counter_name.len = strlen (connection->getName ());
-	if (d_counter_name.len > 8)
-		d_counter_name.len = 8;
+	if (d_counter_name.len > (int) sizeof (d_counter_name.arr))
+		d_counter_name.len = sizeof (d_counter_name.arr);
+	memcpy (d_counter_name.arr, connection->getName (), d_counter_name.len);
 
 	EXEC SQL INSERT INTO
 		counts

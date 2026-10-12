@@ -254,7 +254,9 @@ void TargetGRB::getDBScript (const char *camera_name, std::string &script)
 	}
 
 	d_camera_name.len = strlen (camera_name);
-	strncpy (d_camera_name.arr, camera_name, d_camera_name.len);
+	if (d_camera_name.len > (int) sizeof (d_camera_name.arr))
+		d_camera_name.len = sizeof (d_camera_name.arr);
+	memcpy (d_camera_name.arr, camera_name, d_camera_name.len);
 
 	// grb_script_script is NOT NULL
 

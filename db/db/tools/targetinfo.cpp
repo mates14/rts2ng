@@ -164,7 +164,7 @@ int TargetInfo::doProcessing ()
 			tar_set.load (targets, (matchAll ? rts2db::resolveAll : rts2db::consoleResolver), true, resType);
 		}
 	}
-	catch (rts2core::Error er)
+	catch (rts2core::Error &er)
 	{
 		std::cerr << er << std::endl;
 		exit (1);

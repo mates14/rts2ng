@@ -606,7 +606,7 @@ int ImageProc::checkNotProcessed ()
 	globPos = 0;
 
 	// start files queue and fill all free worker slots
-	for (int i = 0; i < imageGlob.gl_pathc && getFreeSlot() >= 0; i++)
+	for (size_t i = 0; i < imageGlob.gl_pathc && getFreeSlot() >= 0; i++)
 		queNextFromGlob();
 
 	return 0;

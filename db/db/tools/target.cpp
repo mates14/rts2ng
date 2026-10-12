@@ -595,7 +595,7 @@ int TargetApp::doProcessing ()
 					std::cout << "Changed constraints for:" << std::endl << target_set << std::endl;
 				}
 			}
-			catch (rts2core::Error f)
+			catch (rts2core::Error &f)
 			{
 				std::cerr << "Cannot write target constraint file: " << f << std::endl;
 			}
@@ -637,11 +637,11 @@ int TargetApp::doProcessing ()
 
 		return target_set.save (true, true);
 	}
-	catch (rts2db::UnresolvedTarget ut)
+	catch (rts2db::UnresolvedTarget &ut)
 	{
 		std::cerr << "error: " << ut << std::endl;
 	}
-	catch (rts2db::SqlError e)
+	catch (rts2db::SqlError &e)
 	{
 		std::cerr << e << std::endl;
 	}

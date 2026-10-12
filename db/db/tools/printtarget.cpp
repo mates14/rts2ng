@@ -534,9 +534,9 @@ int PrintTarget::printTargets (rts2db::TargetSet & set)
 	// night begin and ends (hours)
 	double nbeg, nend;
 
-	char old_fill;
-	int old_p;
-	std::ios_base::fmtflags old_settings;
+	char old_fill = std::cout.fill ();
+	std::streamsize old_p = std::cout.precision ();
+	std::ios_base::fmtflags old_settings = std::cout.flags ();
 
 	// if there is more then one target, we will not print horizont - it's useless
 	if (set.size () > 1)
@@ -579,9 +579,8 @@ int PrintTarget::printTargets (rts2db::TargetSet & set)
 			gend = rise + 1.0;
 		}
 
-		old_fill = std::cout.fill ('0');
-		old_p = std::cout.precision (7);
-		old_settings = std::cout.flags ();
+		std::cout.fill ('0');
+		std::cout.precision (7);
 		std::cout.setf (std::ios_base::fixed, std::ios_base::floatfield);
 
 		std::cout
@@ -764,7 +763,7 @@ int PrintTarget::printTargets (rts2db::TargetSet & set)
 
 	if (printGNUplot)
 	{
-		std::cout.setf (old_settings);
+		std::cout.flags (old_settings);
 		std::cout.precision (old_p);
 		std::cout.fill (old_fill);
 	}

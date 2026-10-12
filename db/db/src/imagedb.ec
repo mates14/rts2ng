@@ -167,8 +167,8 @@ int ImageDb::renameImage (const char *new_filename)
 	if (getImageType () == IMGTYPE_FLAT || getImageType () == IMGTYPE_DARK)
 		return 0;
 
-	strncpy (d_img_path.arr, getAbsoluteFileName (), 100);
 	d_img_path.len = strlen (getAbsoluteFileName ()) > 100 ? 100: strlen (getAbsoluteFileName ());
+	memcpy (d_img_path.arr, getAbsoluteFileName (), d_img_path.len);
 
 	EXEC SQL UPDATE
 		images
@@ -227,8 +227,8 @@ int ImageSkyDb::updateDB ()
 	int d_filter_id;
 	EXEC SQL END DECLARE SECTION;
 
-	strncpy (d_img_path.arr, getAbsoluteFileName (), 100);
 	d_img_path.len = strlen (getAbsoluteFileName ()) > 100 ? 100: strlen (getAbsoluteFileName ());
+	memcpy (d_img_path.arr, getAbsoluteFileName (), d_img_path.len);
 
 	strncpy (d_mount_name.arr, getMountName (), 8);
 	d_mount_name.len = strlen (getMountName ());

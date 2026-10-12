@@ -77,7 +77,7 @@ int Rts2TargetApp::askForObject (const char *desc, std::string obj_text, bool em
 		getObject (obj_text);
 		return 0;
 	}
-	catch (rts2core::Error err)
+	catch (rts2core::Error &err)
 	{
 		std::cerr << err;
 		return -1;

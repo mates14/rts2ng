@@ -894,7 +894,9 @@ void Target::getDBScript (const char *camera_name, std::string &script)
 	EXEC SQL END DECLARE SECTION;
 
 	d_camera_name.len = strlen (camera_name);
-	strncpy (d_camera_name.arr, camera_name, d_camera_name.len);
+	if (d_camera_name.len > (int) sizeof (d_camera_name.arr))
+		d_camera_name.len = sizeof (d_camera_name.arr);
+	memcpy (d_camera_name.arr, camera_name, d_camera_name.len);
 
 	EXEC SQL DECLARE find_script CURSOR FOR
 		SELECT
@@ -964,12 +966,12 @@ void Target::setScript (const char *device_name, const char *buf)
 	d_camera_name.len = strlen (device_name);
 	if (d_camera_name.len > 8)
 		d_camera_name.len = 8;
-	strncpy (d_camera_name.arr, device_name, 8);
+	memcpy (d_camera_name.arr, device_name, d_camera_name.len);
 
 	d_script.len = strlen (buf);
 	if (d_script.len > 2000)
 		d_script.len = 2000;
-	strncpy (d_script.arr, buf, d_script.len);
+	memcpy (d_script.arr, buf, d_script.len);
 
 	EXEC SQL
 		INSERT INTO scripts
@@ -1019,7 +1021,7 @@ void Target::deleteScript (const char *device_name)
 	d_camera_name.len = strlen (device_name);
 	if (d_camera_name.len > 8)
 		d_camera_name.len = 8;
-	strncpy (d_camera_name.arr, device_name, d_camera_name.len);
+	memcpy (d_camera_name.arr, device_name, d_camera_name.len);
 
 	EXEC SQL DELETE FROM scripts WHERE tar_id = :d_tar_id AND camera_name = :d_camera_name;
 	// ECPG_NOT_FOUND (0 rows matched) just means there was no override to
@@ -1069,7 +1071,7 @@ void Target::setConstraints (Constraints &cons)
 		cons.printXML (ofs);
 		ofs.close ();
 	}
-	catch (std::ofstream::failure f)
+	catch (std::ofstream::failure &f)
 	{
 		throw rts2core::Error ((std::string ("cannot write constraint file ") + getConstraintFile () + " : " + strerror (errno)).c_str ());
 	}

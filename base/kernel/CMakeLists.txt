@@ -66,6 +66,9 @@ add_library(base_kernel STATIC
 	src/devclifoc.cpp
 )
 
+# image.cpp writes __DATE__/__TIME__ into the FITS history on purpose
+set_source_files_properties(src/image.cpp PROPERTIES COMPILE_OPTIONS -Wno-date-time)
+
 target_include_directories(base_kernel PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}/include
 	${LIBNOVA_INCLUDE_DIR}
