@@ -1,18 +1,48 @@
-# rts2-viewer exposure modes for FLORES, the fiber-fed spectrograph (see
-# viewer-scripting.md next to this file for how to write modes). Enable with
+# rts2-viewer exposure modes for FLORES, the fiber-fed prism spectrograph
+# on the Perek 2 m (see viewer-scripting.md next to this file for how to
+# write modes). Enable with
 #   [viewer]
 #   modes = /usr/share/rts2/viewer-modes/flores.modes
 # in rts2.ini, or rts2-viewer --modes <file>.
 #
-# The fiber slider selects what the spectrograph sees: the object fiber
-# (fiber2), the ThAr fiber for wavelength calibration, or the flat fiber.
+# The night procedure these follow is the FLORES howto (Part A/B). The
+# instrument box is the TOPTEC device (rtspy's toptec.py):
+#   CAM_POS   stage position in raw steps - what the chip sees:
+#             1050 object fibre 2 (the untilted one), 13290 ThAr comp on
+#             both fibres, 14930 flat on both fibres
+#   FIBCOMP   Quido relay 1, the ThAr comp lamp (1/0)
+#   FIBFLAT   Quido relay 2, the flat lamp (1/0)
+# SPEC.SPCOMP/SPFLAT are the other lamp pair, the spectrograph's own -
+# they do nothing for FLORES, do not use them.
 #
-# TODO FLORES: FIBER.POSITION and the position names fiber2/thar/flat
-# are placeholders - the slider's device, value and positions are not
-# known here yet (or not implemented). Until they are, the viewer refuses
-# the slider modes ("not started: device FIBER is not connected"); only
-# Plain exposure and Dark run. viewer-scripting.md has the steps to finish
-# this file, lamps included.
+# NEVER let the comp lamp shine on a single fibre (CAM_POS 12965 or
+# 13615, the comp presets of TOPTEC's table): it overexposes the CCD and
+# the residual takes half an hour or more to clear, cold longer. So every
+# mode switches both lamps off and waits until they are off before the
+# stage moves, waits until the stage has arrived and only then switches a
+# lamp on and exposes. A mode stopped half-way leaves its lamp on - the
+# next mode switches it off before moving anything.
+#
+# Every write is followed by "sleep 3" before its waitfor. TOPTEC (rtspy)
+# reports a written value back at once, as if it were already done - a
+# CAM_POS write returns when the move starts, a relay write before the
+# relay switches - and only its next poll (once a second) replaces that
+# with what the hardware says. A waitfor straight after the write sees
+# the echo and passes at once: tested against the real toptec.py with
+# simulated hardware, the comp lamp then came on and the frames were taken
+# while the stage was still moving. Nor does the camera wait for the
+# move by itself (TOPTEC's BOP_EXPOSURE did not hold the exposure back),
+# so the waitfor on CAM_POS is what keeps the frames in place. No lamp
+# warm-up time is known; the howto exposes right after switching on.
+#
+# Not here, on purpose: SPEC.SPECFILT (must be 4 for FLORES, set by hand -
+# every wheel move shifts the wavelength scale and starts a new comp
+# session) and focus. Plain exposure and Dark touch nothing, so they work
+# whatever the stage and lamps are set to by hand in the TOPTEC client.
+#
+# The usual times: Exposure 60 s, Calib time 1 s. Lambda calib is then the
+# howto's full pair (60 s + 1 s), Spectrum + lambda a science frame with
+# the 1 s check comp after it, and the flat 1 s.
 
 [Plain exposure]
 color = cyan
@@ -20,16 +50,32 @@ script = E $EXPTIME
 
 [Spectrum + lambda]
 color = green
-script = FIBER.POSITION=fiber2 E $EXPTIME
-  FIBER.POSITION=thar E $CALTIME
+script = TOPTEC.FIBCOMP=0 TOPTEC.FIBFLAT=0
+  sleep 3 TOPTEC.waitfor FIBCOMP 0 0.5 TOPTEC.waitfor FIBFLAT 0 0.5
+  TOPTEC.CAM_POS=1050 sleep 3 TOPTEC.waitfor CAM_POS 1050 3
+  E $EXPTIME
+  TOPTEC.CAM_POS=13290 sleep 3 TOPTEC.waitfor CAM_POS 13290 3
+  TOPTEC.FIBCOMP=1 sleep 3 TOPTEC.waitfor FIBCOMP 1 0.5
+  E $CALTIME
+  TOPTEC.FIBCOMP=0
 
 [Spectral flat]
 color = yellow
-script = FIBER.POSITION=flat E $EXPTIME
+script = TOPTEC.FIBCOMP=0 TOPTEC.FIBFLAT=0
+  sleep 3 TOPTEC.waitfor FIBCOMP 0 0.5 TOPTEC.waitfor FIBFLAT 0 0.5
+  TOPTEC.CAM_POS=14930 sleep 3 TOPTEC.waitfor CAM_POS 14930 3
+  TOPTEC.FIBFLAT=1 sleep 3 TOPTEC.waitfor FIBFLAT 1 0.5
+  E $CALTIME
+  TOPTEC.FIBFLAT=0
 
 [Lambda calib]
 color = purple
-script = FIBER.POSITION=thar E $CALTIME E $EXPTIME
+script = TOPTEC.FIBCOMP=0 TOPTEC.FIBFLAT=0
+  sleep 3 TOPTEC.waitfor FIBCOMP 0 0.5 TOPTEC.waitfor FIBFLAT 0 0.5
+  TOPTEC.CAM_POS=13290 sleep 3 TOPTEC.waitfor CAM_POS 13290 3
+  TOPTEC.FIBCOMP=1 sleep 3 TOPTEC.waitfor FIBCOMP 1 0.5
+  E $EXPTIME E $CALTIME
+  TOPTEC.FIBCOMP=0
 
 [Dark]
 color = red

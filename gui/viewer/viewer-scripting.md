@@ -64,10 +64,11 @@ Light and Dark.
 
 ```
 # a comment, on a line of its own
-[Spectrum + lambda]
-color = green
-script = FIBER.POSITION=object E $EXPTIME
-  FIBER.POSITION=thar E $CALTIME
+[Lambda calib]
+color = purple
+script = TOPTEC.CAM_POS=13290 sleep 3 TOPTEC.waitfor CAM_POS 13290 3
+  TOPTEC.FIBCOMP=1 sleep 3 TOPTEC.waitfor FIBCOMP 1 0.5
+  E $EXPTIME E $CALTIME TOPTEC.FIBCOMP=0
 ```
 
 - One `[label]` section per mode, in the order they appear in the
@@ -110,12 +111,31 @@ A value change waits for the device to answer it. Whether the answer
 comes when the mechanism has *arrived* depends on the driver:
 
 - a camera's filter wheels (`FILTA=...`) answer after the move;
-- for anything else (a fiber slider, a lamp) check the driver. If it
-  answers before the move is done, add a `DEV.waitfor` on a value that
-  shows the position, or a `sleep` long enough for the slowest move.
+- for anything else (a fiber slider, a lamp relay) check the driver. If
+  it answers before the move is done, wait for it with `DEV.waitfor` on a
+  value that shows the real position or state.
+
+**Do not trust the value straight after writing it.** Drivers that poll
+their hardware (rtspy's TOPTEC, for one) report a written value back at
+once, as if it were already done, and only their next poll replaces it
+with what the hardware says. A `waitfor` right after the write sees that
+echo and passes immediately. Put a `sleep` longer than the driver's poll
+interval between the write and the `waitfor`:
+
+```
+TOPTEC.CAM_POS=13290 sleep 3 TOPTEC.waitfor CAM_POS 13290 3
+```
+
+Do not count on the camera holding the exposure back while another
+device moves either. In the FLORES test it did not, so the `waitfor` is
+what keeps the frame from being taken mid-move.
+
+`waitfor` waits for as long as it takes. If the mechanism never gets there
+(a stalled stage), the script hangs at that step without taking a frame,
+and Stop ends it.
 
 A selection value (one with named choices, like a filter or a slider
-position) takes the name as `rts2-mon` shows it: `FIBER.POSITION=thar`.
+position) takes the name as `rts2-mon` shows it: `FILTA=grism`.
 
 Device and value names are what `rts2-mon` lists. Names are case-sensitive.
 
@@ -135,7 +155,7 @@ the arc exposure, the `LAMP=off` at the end never runs. So:
 ## Checking a new mode
 
 The viewer's check only catches devices and values that do not exist. It
-does **not** catch a wrong position name (`FIBER.POSITION=thr`) or a value
+does **not** catch a wrong position name (`FILTA=grsim`) or a value
 the device refuses: those are logged and the frames are taken anyway. So
 after writing or changing a mode, run it once with a short exposure and:
 
@@ -148,44 +168,49 @@ after writing or changing a mode, run it once with a short exposure and:
 
 ## Example: FLORES
 
-`flores.modes` has the structure, with the fiber slider still a
-placeholder (`FIBER.POSITION=fiber2|thar|flat`). Until the real names are
-in, the slider modes are refused and only Plain exposure and Dark run. To
-finish it:
+`flores.modes` follows the FLORES night procedure (the howto). The
+instrument box is the `TOPTEC` device:
 
-1. In `rts2-mon`, find the slider's device and value and the names of its
-   positions, and the device and values of the ThAr and flat lamps.
-2. Replace `FIBER.POSITION` and the position names in each mode.
-3. Add the lamps: on before the calibration exposure, off afterwards, and
-   off at the start of the science modes. If a lamp needs to warm up, add
-   a `sleep` after switching it on.
-4. If the slider's driver answers before it is in position, add a
-   `waitfor` or `sleep` after each move (see above).
-5. Check every mode as described above.
+| Value | What |
+| --- | --- |
+| `CAM_POS` | stage position in raw steps: 1050 object fibre 2, 13290 comp on both fibres, 14930 flat on both fibres |
+| `FIBCOMP` | ThAr comp lamp (Quido relay 1), 1/0 |
+| `FIBFLAT` | flat lamp (Quido relay 2), 1/0 |
 
-A finished mode could then look like this (device and value names
-illustrative):
+`SPEC.SPCOMP` and `SPEC.SPFLAT` are the spectrograph's own lamps. They do
+nothing for FLORES; do not use them.
 
-```
-[Spectrum + lambda]
-color = green
-script = LAMP.THAR=off LAMP.FLAT=off FIBER.POSITION=object E $EXPTIME
-  FIBER.POSITION=thar LAMP.THAR=on sleep 20 E $CALTIME LAMP.THAR=off
+| Mode | Does |
+| --- | --- |
+| Plain exposure | `E $EXPTIME`, touches nothing: for whatever is set by hand in the TOPTEC client |
+| Spectrum + lambda | object fibre for Exposure, then a comp for Calib time: the howto's science frame and 1 s check comp |
+| Spectral flat | flat on both fibres for Calib time (the howto says 1 s or less) |
+| Lambda calib | comp for Exposure, then for Calib time: the howto's full 60 s + 1 s pair |
+| Dark | `D $EXPTIME`, touches nothing |
 
-[Spectral flat]
-color = yellow
-script = LAMP.THAR=off FIBER.POSITION=flat LAMP.FLAT=on sleep 20
-  E $EXPTIME LAMP.FLAT=off
+With the usual Exposure 60 s and Calib time 1 s, every mode does what the
+howto asks.
 
-[Lambda calib]
-color = purple
-script = LAMP.FLAT=off FIBER.POSITION=thar LAMP.THAR=on sleep 20
-  E $CALTIME E $EXPTIME LAMP.THAR=off
+Every mode that uses the stage first switches both lamps off and waits
+until they are off, then moves and waits for the stage to arrive, and only
+then switches its lamp on and exposes. The comp lamp must never shine on
+a single fibre: TOPTEC's comp presets 12965 and 13615 overexpose the CCD,
+and the residual takes half an hour or more to clear. A mode stopped
+during the comp leaves the lamp on at 13290, which is harmless; the next
+mode switches it off before the stage moves.
 
-[Dark]
-color = red
-script = LAMP.THAR=off LAMP.FLAT=off D $EXPTIME
-```
+Not in the modes, on purpose:
 
-Lambda calib takes the short arc with Calib time and the long one with
-Exposure.
+- `SPEC.SPECFILT`: must be 4 for FLORES and is set by hand. Every wheel
+  move shifts the wavelength scale and needs a new full comp.
+- Focus.
+
+The comp and flat modes need TOPTEC's `FIBCOMP`/`FIBFLAT`. A TOPTEC
+started before rtspy 1e8143f does not have them, and the viewer refuses
+those modes until TOPTEC is restarted.
+
+Tested against the real `toptec.py` with simulated TOPTEC and Quido
+hardware (2026-10-13). Every frame was taken with the stage and lamps in
+the right state, unchanged during the exposure; a lamp was never on away
+from its position, also after Stop in the middle of a comp. Not yet run on
+the instrument.

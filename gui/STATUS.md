@@ -1316,3 +1316,35 @@ modes that are safe to stop (every mode sets its lamps/slider at its
 start), checking a new mode by its FITS headers, and the steps to finish
 `flores.modes`. Written for setting up FLORES; its lamp and slider names
 in the example are illustrative, the real ones are still to be put in.
+
+## flores.modes: the real TOPTEC names, tested against toptec.py (2026-10-13) [MJ]
+
+`flores.modes` now drives `TOPTEC` (rtspy toptec.py): `CAM_POS` 1050 /
+13290 / 14930 for object fibre 2 / comp on both fibres / flat on both
+fibres, lamps `FIBCOMP` and `FIBFLAT` (Quido relays 1 and 2; `SPEC.SPCOMP`
+and `SPFLAT` do nothing for FLORES). It follows the FLORES howto: Lambda
+calib is the 60 s + 1 s pair (Exposure + Calib time), Spectrum + lambda a
+science frame plus the 1 s check comp.
+
+Must stay true: **sleep before every waitfor**. rtspy reports a written
+value back at once and only its next 1 s poll replaces it with the
+hardware's, so a waitfor straight after the write passes on the echo.
+The first version, without the sleeps, was run against the real toptec.py
+with fake TOPTEC/Quido XML-RPC servers: the comp lamp came on at stage
+position 1530 while the stage was still moving, and the comp and flat
+frames were exposed mid-move. The camera (`--focdev TOPTEC`) did not hold
+the exposure back for TOPTEC's BOP_EXPOSURE either; why was not traced.
+With `sleep 3` before each waitfor: every frame at the right position
+with the right lamp, nothing changing during an exposure, no lamp on away
+from its position. The same holds after a Stop in the middle of a comp,
+followed by a spectrum: the lamp went off before the stage moved.
+
+The run also verified that other devices' values reach the frames' FITS
+headers (`CAM_POS`, `FIBCOMP`, `FIBFLAT`, `FIBSEL`), which was not
+verified in the round above.
+
+Found, not ours: TOPTEC's FIBSEL keeps the previous preset name after a
+raw move to a position not in its table (13290 frames say
+`CCD700_object_2fiber`), and comps and flats come out `IMAGETYP=object`.
+FIBSEL reported to the rtspy session. Not yet run on the instrument; the
+TOPTEC there needs a restart before it has FIBCOMP/FIBFLAT.
