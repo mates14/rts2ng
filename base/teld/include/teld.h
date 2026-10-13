@@ -1132,7 +1132,7 @@ class Telescope:public rts2core::Device
 		/**
 		 * @return true if horizon shall be ignored
 		 */
-		bool getIgnoreHorizon () { return ignoreHorizon->getValueBool (); }
+		bool getIgnoreHorizon () { return ignoreHorizon != nullptr && ignoreHorizon->getValueBool (); }
 
 	private:
 		rts2core::Connection * move_connection;

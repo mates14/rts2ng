@@ -204,6 +204,9 @@ Telescope::Telescope (int in_argc, char **in_argv, bool diffTrack, bool hasTrack
 		trackingFrequency = nullptr;
 		trackingWarning = nullptr;
 		skyVect = nullptr;
+		// base note: classic left these two uninitialized here
+		trackingFSize = nullptr;
+		ignoreHorizon = nullptr;
 	}
 
 	lastTrackingRun = NAN;
@@ -2914,6 +2917,14 @@ int Telescope::requestDUT1 ()
 
 void Telescope::setIgnoreHorizon (bool newIgnore)
 {
+	// base note: ignore_horizon exists only for hasTracking mounts; classic
+	// dereferenced it on every move, so a teld without tracking crashed on
+	// its first move (UPSTREAM_BUGS.md)
+	if (ignoreHorizon == nullptr)
+	{
+		hardHorizon.setIgnore (newIgnore);
+		return;
+	}
 	if (ignoreHorizon->getValueBool () != newIgnore)
 	{
 		hardHorizon.setIgnore (newIgnore);

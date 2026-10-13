@@ -1600,6 +1600,18 @@ on a simulated Ford board over a pty); the mount-side ones need the hardware.
   stop moved the mount without clearing `inside_dome_limit`; `--help` gave the
   roof-switch variable default as `roof_open` (it is `roof_opened`).
 
+## `Telescope` without tracking crashes on its first move (`lib/rts2tel/teld.cpp`) [MJ 2026-10-13]
+
+`ignore_horizon` (`ignoreHorizon`) and `tracking_num` (`trackingFSize`) are
+created only inside `if (hasTracking)` in the `Telescope` constructor, and the
+`else` branch does not set them to null. `startResyncMove ()` calls
+`setIgnoreHorizon ()` unconditionally, which dereferences `ignoreHorizon`, so
+every teld constructed with `hasTracking = false` segfaults on the first
+`move` (found with the new `rts2-teld-perek2m`). `getIgnoreHorizon ()` has the
+same problem. Fixed in base: both pointers are nulled in the `else` branch,
+and `setIgnoreHorizon ()`/`getIgnoreHorizon ()` cope with a null value (the
+hard horizon's ignore flag is still set).
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree
