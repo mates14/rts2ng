@@ -177,8 +177,13 @@ instrument box is the `TOPTEC` device:
 | `FIBCOMP` | ThAr comp lamp (Quido relay 1), 1/0 |
 | `FIBFLAT` | flat lamp (Quido relay 2), 1/0 |
 
-`SPEC.SPCOMP` and `SPEC.SPFLAT` are the spectrograph's own lamps. They do
-nothing for FLORES; do not use them.
+The spectrograph's own lamp pair (`SPEC.SPCOMP`, `SPEC.SPFLAT`) is gone
+for good and never lit FLORES.
+
+Each `waitfor` follows a `sleep 3`, because the TOPTEC deployed at the
+time of writing echoes writes (see above). A TOPTEC newer than 2026-10-13
+answers a stage or lamp write only once it is done, so there the sleeps are
+unnecessary; they are harmless and stay until every TOPTEC is the new one.
 
 | Mode | Does |
 | --- | --- |

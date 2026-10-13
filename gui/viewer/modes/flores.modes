@@ -12,8 +12,8 @@
 #             both fibres, 14930 flat on both fibres
 #   FIBCOMP   Quido relay 1, the ThAr comp lamp (1/0)
 #   FIBFLAT   Quido relay 2, the flat lamp (1/0)
-# SPEC.SPCOMP/SPFLAT are the other lamp pair, the spectrograph's own -
-# they do nothing for FLORES, do not use them.
+# (The spectrograph's own lamp pair, SPEC.SPCOMP/SPFLAT, is gone for
+# good and never lit FLORES.)
 #
 # NEVER let the comp lamp shine on a single fibre (CAM_POS 12965 or
 # 13615, the comp presets of TOPTEC's table): it overexposes the CCD and
@@ -32,8 +32,14 @@
 # simulated hardware, the comp lamp then came on and the frames were taken
 # while the stage was still moving. Nor does the camera wait for the
 # move by itself (TOPTEC's BOP_EXPOSURE did not hold the exposure back),
-# so the waitfor on CAM_POS is what keeps the frames in place. No lamp
-# warm-up time is known; the howto exposes right after switching on.
+# so the waitfor on CAM_POS is what keeps the frames in place.
+#
+# A TOPTEC newer than 2026-10-13 (rtspy, not deployed yet) answers a
+# CAM_POS or lamp write only once it is done and shows the real state, so
+# there the sleeps are no longer needed - they are kept, harmless, for as
+# long as an older TOPTEC may be running.
+#
+# The ThAr needs no warm-up: on just for the exposure, off right after.
 #
 # Not here, on purpose: SPEC.SPECFILT (must be 4 for FLORES, set by hand -
 # every wheel move shifts the wavelength scale and starts a new comp

@@ -1348,3 +1348,14 @@ raw move to a position not in its table (13290 frames say
 `CCD700_object_2fiber`), and comps and flats come out `IMAGETYP=object`.
 FIBSEL reported to the rtspy session. Not yet run on the instrument; the
 TOPTEC there needs a restart before it has FIBCOMP/FIBFLAT.
+
+Follow-up the same day [MJ]: the rtspy session fixed all three in
+toptec.py (not deployed yet): stage and lamp writes are answered only when
+done, CAM_POS shows the real position (target in CAM_TAR), FIBSEL shows
+the name, "moving" or "unnamed", and 13290 is in the table as
+`CCD700_comp_both_fibers`. flores.modes keeps raw `CAM_POS` writes (they
+work with the old and the new TOPTEC; the table indexes shifted) and the
+sleeps (needed with the old one, harmless with the new). The BOP question
+stays open: the script engine sends a plain `expose` with a BOP_EXPOSURE
+mask (script/src/element.cpp), which should have been held. The SPEC lamp
+pair is gone for good.
