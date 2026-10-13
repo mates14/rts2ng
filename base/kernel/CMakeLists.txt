@@ -55,6 +55,7 @@ add_library(base_kernel STATIC
 	src/connfork.cpp
 	src/connnotify.cpp
 	src/connmodbus.cpp
+	src/xmlrpcclient.cpp
 	src/expander.cpp
 	src/fitsfile.cpp
 	src/channel.cpp
