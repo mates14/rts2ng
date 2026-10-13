@@ -231,7 +231,7 @@
         .state-buttons .state-standby { border-color: #b8860b; color: #b8860b; }
         .state-buttons .state-off { border-color: var(--warn); color: var(--warn); }
 
-        #equalize-btn, #live-btn {
+        #equalize-btn, #live-btn, #led-btn {
             cursor: pointer;
             background: var(--panel-bg);
             color: var(--text);
@@ -239,6 +239,7 @@
             border-radius: 3px;
         }
         #equalize-btn.active, #live-btn.active { background: var(--good); color: white; border-color: var(--good); }
+        #led-btn.on { background: #d97706; color: white; border-color: #d97706; }
 
         .status-value { margin: 3px 0; }
 
@@ -490,6 +491,7 @@
                 Webcams
                 <button id="equalize-btn" onclick="toggleEqualize()" style="font-size: 11px; padding: 3px 8px; margin-left: 10px;">equalize</button>
                 <button id="live-btn" onclick="toggleLive()" style="font-size: 11px; padding: 3px 8px; margin-left: 6px;">live</button>
+                <button id="led-btn" onclick="toggleSentinelLed()" style="font-size: 11px; padding: 3px 8px; margin-left: 6px;">LED light</button>
             </h3>
             <div class="webcam-grid">
                 <div class="webcam-column">
@@ -581,11 +583,14 @@
         // sends a malformed response header (a literal space before the
         // colon, e.g. "SID : 0") that Apache 2.4.68's stricter RFC 7230
         // header-name validation refuses to relay at all (AH02429) -
-        // confirmed live on lascaux, not guessed. The only server-side
-        // fix is `HttpProtocolOptions Unsafe`, which relaxes that
-        // validation for the whole vhost (not just this path) - not
-        // worth it for one camera's live view when the site's own call
-        // was to just leave Sentinel on its regular snapshot instead.
+        // confirmed live on lascaux, not guessed. Fixed 2026-10-13
+        // without relaxing the whole vhost (`HttpProtocolOptions
+        // Unsafe`): lascaux's /observ/sentinel/ proxy unsets those
+        // headers (`Header unset "SID "` etc.) in its own <Location>,
+        // and sends the camera's credentials itself, behind lascaux's
+        // /observ login, as on lascaux50 (web/STATUS.md). The camera's
+        // firmware has a known security hole, so this proxy is its only
+        // way in.
         const WEBCAMS = [
             { id: 'allsky', label: 'AllSky',
                 small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
@@ -593,7 +598,8 @@
                 live: '/webcam2/?action=stream' },
             { id: 'sentinel', label: 'Sentinel',
                 small: 'sentinel-sum1_av_small.jpg', smallEq: 'sentinel-sum1_av_eq_small.jpg',
-                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png' },
+                full: 'sentinel-sum1_av.png', fullEq: 'sentinel-sum1_av_eq.png',
+                live: '/observ/sentinel/video.mjpg' },
             { id: '3', label: 'Webcam 3',
                 small: 'webcam3_small.jpg', smallEq: 'webcam3_eq_small.jpg',
                 full: 'webcam3.jpg', fullEq: 'webcam3_eq.jpg',
@@ -1309,6 +1315,54 @@
             reloadWebcams();
         }
 
+        // Sentinel's LED light hangs on the camera's digital output 1
+        // (Vivotek dido CGIs), switched through lascaux's
+        // /observ/sentinel/ proxy, same-origin, so the visitor's /observ
+        // login is what guards it. Apache swaps in a camera account
+        // allowed to set the output (the stream's viewer account gets
+        // 401 here). Same as d50-monitor.html's Sentinel50.
+        const SENTINEL_DIDO = '/observ/sentinel/cgi-bin/dido/';
+
+        async function sentinelDido(cgi) {
+            const resp = await fetch(SENTINEL_DIDO + cgi, { cache: 'no-store' });
+            if (!resp.ok)
+                throw new Error(`HTTP ${resp.status}`);
+            return resp.text();
+        }
+
+        // The camera answers "do1=0" or "do1=1". null: not known.
+        let sentinelLedOn = null;
+
+        function showSentinelLed(text, err) {
+            const m = text ? text.match(/do1\s*=\s*([01])/) : null;
+            sentinelLedOn = m ? m[1] === '1' : null;
+            const btn = document.getElementById('led-btn');
+            btn.classList.toggle('on', sentinelLedOn === true);
+            btn.textContent = sentinelLedOn === null ? 'LED light ?' : 'LED light';
+            btn.title = "Sentinel's LED light, for the cameras inside";
+            if (sentinelLedOn === null)
+                btn.title += ` - state not known: ${err ? err.message : `unexpected reply: ${text}`}`;
+        }
+
+        async function updateSentinelLed() {
+            try {
+                showSentinelLed(await sentinelDido('getdo.cgi?do1'));
+            } catch (e) {
+                showSentinelLed(null, e);
+            }
+        }
+
+        // Unknown state switches it on.
+        async function toggleSentinelLed() {
+            try {
+                await sentinelDido(`setdo.cgi?do1=${sentinelLedOn ? 0 : 1}`);
+            } catch (e) {
+                showSentinelLed(null, e);
+                return;
+            }
+            updateSentinelLed();
+        }
+
         function toggleDarkMode() {
             const on = document.body.classList.toggle('dark');
             setCookie('darkMode', on ? '1' : '0');
@@ -1877,6 +1931,7 @@
             await Promise.all([loadHorizonInfo(), loadStarCatalog()]);
             await updateStatus();
             reloadWebcams();
+            updateSentinelLed();
             reloadCameraImages();
             updateImageInfo();
             reloadCloudGraph();
@@ -1884,6 +1939,7 @@
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
         setInterval(reloadWebcams, 15000);
+        setInterval(updateSentinelLed, 60000);
         setInterval(reloadCameraImages, 15000);
         setInterval(updateImageInfo, 15000);
         setInterval(reloadCloudGraph, 60000);

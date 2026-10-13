@@ -2869,3 +2869,62 @@ Tested in headless Firefox: D50's page through a local stand-in for Apache
 (proxying `/observ/allsky-d65/` and the two streams with the forwarded
 credentials), live on and off; BART's page with the image straight from the
 camera. Not tried through Apache itself (no `/observ` login here).
+
+### Sentinel50: live stream fix (Apache) and LED switch (2026-10-13) [JS]
+
+- **Correction to the entry above**: Sentinel50's live stream does *not*
+  work through lascaux50's Apache. It is the same camera model as BART's
+  Sentinel (an old Vivotek, probably FD7131) and sends the same malformed
+  headers (`SID : 0`, `Audio Mode : None`, `Privilege : 127`); Apache
+  2.4.66 answers AH02429 and a 500. Yesterday's test used a Python
+  stand-in that relayed them, so it missed this; Apache's error log
+  shows the page's retries failing every 15 s.
+- **Fix, Apache only, needs root**. Tested with a private Apache 2.4.66 on
+  a high port against the real camera: 500 without, a 200
+  `multipart/x-mixed-replace` stream of JPEGs with. mod_headers' output
+  filter removes the headers before Apache checks them, and only for
+  this path; `HttpProtocolOptions Unsafe` would relax the whole vhost.
+  In `000-default-ssl.conf`, inside `<Location /observ/sentinel50>`:
+
+      Header unset "SID "
+      Header unset "Audio Mode "
+      Header unset "Privilege "
+
+  The same three lines would make BART's Sentinel work through lascaux's
+  Apache, behind a login (the camera's firmware has a known security
+  hole, so it is reachable only through these proxies). Not set up there,
+  so `bart-monitor.html` still has no Sentinel `live`.
+- **LED light** (Sentinel50's digital output 1, "Led přísvit" on the old
+  PHP page): `d50-monitor.html` has an "LED light" toggle in the
+  Webcams header next to "equalize" and "live", not under Sentinel50: the
+  light is for all the cameras inside (user call). Amber when on, "LED light ?"
+  when the state could not be read (a click then switches it on). It reads
+  the state on load and every 60 s, and calls the Vivotek CGIs `cgi-bin/dido/getdo.cgi?do1` and `setdo.cgi?do1=N`
+  through the same-origin proxy, so the visitor's `/observ` login guards
+  them. The old button put the camera login in the URL (`user:pass@host`),
+  which browsers no longer follow. The viewer account the stream proxy
+  sends gets 401 on these CGIs, so this needs a second `<Location>` with
+  the camera account allowed to set outputs (the old pages used `juzr`).
+  It has to come after the `/observ/sentinel50` one so it overrides it.
+  `WWW-Authenticate` is dropped so a refusal shows `?` instead of a login
+  prompt for the camera:
+
+      <Location /observ/sentinel50/cgi-bin/dido>
+          RequestHeader set Authorization "Basic <base64 of juzr:password>"
+          Header unset WWW-Authenticate
+      </Location>
+
+  Tested in headless Firefox against a fake camera endpoint (state on,
+  and 401); the button's clicks and the real camera's reply format
+  (`do1=0`, from the Vivotek API) are untested, since I had no access to
+  the operator account.
+- **Applied by the user** on lascaux50 the same day: the stream works, and
+  after the placeholder got the real account, `getdo.cgi` answers 200.
+- **BART's Sentinel**, same camera model, same LED: lascaux's Apache now has
+  the same two `<Location>`s at `/observ/sentinel` (same camera accounts,
+  behind lascaux's `/observ` login, 401 without it). `bart-monitor.html`
+  has Sentinel `live: '/observ/sentinel/video.mjpg'` and the same LED
+  toggle on `/observ/sentinel/cgi-bin/dido/`. Tested only against the
+  fake endpoint (state off); I can't log in to lascaux's `/observ` from here.
+- **Confirmed by the user** on both pages: Sentinel's live stream on BART's
+  page and the LED toggle on both work against the real cameras.

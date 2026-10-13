@@ -289,7 +289,7 @@
         .state-buttons .state-standby { border-color: #b8860b; color: #b8860b; }
         .state-buttons .state-off { border-color: var(--warn); color: var(--warn); }
 
-        #equalize-btn, #live-btn {
+        #equalize-btn, #live-btn, #led-btn {
             cursor: pointer;
             background: var(--panel-bg);
             color: var(--text);
@@ -297,6 +297,7 @@
             border-radius: 3px;
         }
         #equalize-btn.active, #live-btn.active { background: var(--good); color: white; border-color: var(--good); }
+        #led-btn.on { background: #d97706; color: white; border-color: #d97706; }
 
         .status-value { margin: 3px 0; }
 
@@ -560,6 +561,7 @@
                 Webcams
                 <button id="equalize-btn" onclick="toggleEqualize()" style="font-size: 11px; padding: 3px 8px; margin-left: 10px;">equalize</button>
                 <button id="live-btn" onclick="toggleLive()" style="font-size: 11px; padding: 3px 8px; margin-left: 6px;">live</button>
+                <button id="led-btn" onclick="toggleSentinelLed()" style="font-size: 11px; padding: 3px 8px; margin-left: 6px;">LED light</button>
             </h3>
             <div class="webcam-grid">
                 <div class="webcam-column">
@@ -602,7 +604,8 @@
                 this page has already passed - the camera itself needs
                 none. The same mistake had kept Axis50/Sentinel50's live
                 streams (/observ/axis50/video.cgi, /observ/sentinel50/
-                video.mjpg) off "live"; they are on it now, see WEBCAMS.
+                video.mjpg) off "live"; they are on it now, see WEBCAMS
+                (Sentinel50's needs an Apache fix, noted there).
             -->
         </div>
 
@@ -658,6 +661,10 @@
         // itself swaps in the camera's own (default-ssl.conf), which is
         // why a request without that login sees 401. Both send 320x240;
         // axis50 can do 640x480 (?resolution=), at ~3.5x the data.
+        // Sentinel50 (an old Vivotek) sends header names with a space
+        // before the colon ("SID : 0"), which Apache refuses to relay
+        // (AH02429, a 500 for the browser) unless its <Location> unsets
+        // those headers - web/STATUS.md has the snippet.
         const WEBCAMS = [
             { id: 'allsky', label: 'AllSky',
                 small: 'allsky_small.jpg', smallEq: 'allsky_eq_small.jpg',
@@ -1874,6 +1881,56 @@
             reloadWebcams();
         }
 
+        // Sentinel50's LED light hangs on the camera's digital output 1
+        // (Vivotek dido CGIs). The old PHP page switched it with a link
+        // carrying the camera's login in the URL (user:pass@host), which
+        // browsers no longer follow. Now it goes through lascaux50's
+        // /observ/sentinel50/ proxy, same-origin, so the visitor's
+        // /observ login is what guards it. Apache swaps in a camera
+        // account allowed to set the output; the stream's viewer account
+        // gets 401 here. web/STATUS.md has the Apache snippet.
+        const SENTINEL_DIDO = '/observ/sentinel50/cgi-bin/dido/';
+
+        async function sentinelDido(cgi) {
+            const resp = await fetch(SENTINEL_DIDO + cgi, { cache: 'no-store' });
+            if (!resp.ok)
+                throw new Error(`HTTP ${resp.status}`);
+            return resp.text();
+        }
+
+        // The camera answers "do1=0" or "do1=1". null: not known.
+        let sentinelLedOn = null;
+
+        function showSentinelLed(text, err) {
+            const m = text ? text.match(/do1\s*=\s*([01])/) : null;
+            sentinelLedOn = m ? m[1] === '1' : null;
+            const btn = document.getElementById('led-btn');
+            btn.classList.toggle('on', sentinelLedOn === true);
+            btn.textContent = sentinelLedOn === null ? 'LED light ?' : 'LED light';
+            btn.title = "Sentinel50's LED light, for the cameras inside";
+            if (sentinelLedOn === null)
+                btn.title += ` - state not known: ${err ? err.message : `unexpected reply: ${text}`}`;
+        }
+
+        async function updateSentinelLed() {
+            try {
+                showSentinelLed(await sentinelDido('getdo.cgi?do1'));
+            } catch (e) {
+                showSentinelLed(null, e);
+            }
+        }
+
+        // Unknown state switches it on.
+        async function toggleSentinelLed() {
+            try {
+                await sentinelDido(`setdo.cgi?do1=${sentinelLedOn ? 0 : 1}`);
+            } catch (e) {
+                showSentinelLed(null, e);
+                return;
+            }
+            updateSentinelLed();
+        }
+
         function toggleDarkMode() {
             const on = document.body.classList.toggle('dark');
             setCookie('darkMode', on ? '1' : '0');
@@ -2385,6 +2442,7 @@
             await Promise.all([loadHorizonInfo(), loadStarCatalog()]);
             await updateStatus();
             reloadWebcams();
+            updateSentinelLed();
             reloadCameraImages();
             updateImageInfo();
             reloadCloudGraph();
@@ -2394,6 +2452,7 @@
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
         setInterval(reloadWebcams, 15000);
+        setInterval(updateSentinelLed, 60000);
         setInterval(reloadCameraImages, 15000);
         setInterval(updateImageInfo, 15000);
         setInterval(reloadCloudGraph, 60000);
