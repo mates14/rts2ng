@@ -1359,3 +1359,12 @@ sleeps (needed with the old one, harmless with the new). The BOP question
 stays open: the script engine sends a plain `expose` with a BOP_EXPOSURE
 mask (script/src/element.cpp), which should have been held. The SPEC lamp
 pair is gone for good.
+BOP traced by the rtspy session: rtspy sent its own BOP_EXPOSURE only
+in the second field of "B <state> <bop>", where centrald does not read a
+device's own block, so no rtspy device ever blocked an exposure (fixed in
+rtspy core/device.py, not deployed yet). A camera without `blocked_by` is
+blocked by every device; flores' `[FLI]` has it commented out, so TOPTEC
+will block FLI once the rtspy fix is deployed, with no config change.
+flores still runs the 2026-10-12 rts2-viewer without modes: it needs the
+new package and `modes = /usr/share/rts2/viewer-modes/flores.modes` (or a
+copy in /etc/rts2) under `[viewer]`.
