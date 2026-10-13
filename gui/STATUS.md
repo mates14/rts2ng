@@ -1304,3 +1304,15 @@ dummies flags a value for FITS - scriptexec writes none from them
 either), the look on a real screen (colours, night mode), and anything
 at OVIS or FLORES.
 
+
+## viewer-scripting.md: user guide to exposure modes (2026-10-13) [MJ]
+
+`gui/viewer/viewer-scripting.md`, installed next to the mode files in
+`/usr/share/rts2/viewer-modes/`: using the modes, enabling a file
+(copy to `/etc/rts2/` before editing - the package overwrites
+`/usr/share`), the file format, the script-language subset that matters
+(`E`, `D`, `[DEV.]NAME=`, `sleep`, `DEV.waitfor`, `for`, `exe`), writing
+modes that are safe to stop (every mode sets its lamps/slider at its
+start), checking a new mode by its FITS headers, and the steps to finish
+`flores.modes`. Written for setting up FLORES; its lamp and slider names
+in the example are illustrative, the real ones are still to be put in.

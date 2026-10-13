@@ -1,5 +1,5 @@
 # rts2-viewer exposure modes for FLORES, the fiber-fed spectrograph (see
-# gui/viewer/include/gui/modes.h for the format). Enable with
+# viewer-scripting.md next to this file for how to write modes). Enable with
 #   [viewer]
 #   modes = /usr/share/rts2/viewer-modes/flores.modes
 # in rts2.ini, or rts2-viewer --modes <file>.
@@ -9,9 +9,10 @@
 #
 # TODO FLORES: FIBER.POSITION and the position names fiber2/thar/flat
 # are placeholders - the slider's device, value and positions are not
-# known here yet (or not implemented). Until they are, a move only logs
-# "cannot find device FIBER" and the exposure is taken wherever the
-# slider is - fix these names before relying on the calibrations.
+# known here yet (or not implemented). Until they are, the viewer refuses
+# the slider modes ("not started: device FIBER is not connected"); only
+# Plain exposure and Dark run. viewer-scripting.md has the steps to finish
+# this file, lamps included.
 
 [Plain exposure]
 color = cyan

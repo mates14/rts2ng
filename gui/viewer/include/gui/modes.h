@@ -17,6 +17,7 @@ namespace gui
  *
  * Modes come from a site file (see loadModes()), so an instrument's
  * observing sequences are configuration, not a viewer of its own.
+ * The user documentation is gui/viewer/viewer-scripting.md.
  */
 struct ExposureMode
 {

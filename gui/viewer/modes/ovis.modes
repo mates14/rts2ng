@@ -1,5 +1,5 @@
 # rts2-viewer exposure modes for OVIS, the long-slit imaging spectrograph
-# (see gui/viewer/include/gui/modes.h for the format). Enable with
+# (see viewer-scripting.md next to this file for how to write modes). Enable with
 #   [viewer]
 #   modes = /usr/share/rts2/viewer-modes/ovis.modes
 # in rts2.ini, or rts2-viewer --modes <file>.
