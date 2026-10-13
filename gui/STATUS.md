@@ -1363,8 +1363,15 @@ BOP traced by the rtspy session: rtspy sent its own BOP_EXPOSURE only
 in the second field of "B <state> <bop>", where centrald does not read a
 device's own block, so no rtspy device ever blocked an exposure (fixed in
 rtspy core/device.py, not deployed yet). A camera without `blocked_by` is
-blocked by every device; flores' `[FLI]` has it commented out, so TOPTEC
-will block FLI once the rtspy fix is deployed, with no config change.
+blocked by every device (IniParser::blockDevice); flores' `[FLI]` has it
+commented out. Tested with the fixed rtspy toptec.py (working tree) and
+fake hardware, a raw CAM_POS move and an `E 2` asked for 1.5 s into it:
+with an `[FLI]` section and no `blocked_by`, the exposure started 0.8 s
+after the stage arrived (header CAM_POS 13290); with `blocked_by = "T0 F0
+W0"` as control, it started mid-move (CAM_POS 2520). So flores needs no
+`blocked_by` for TOPTEC to block FLI once the rtspy fix is deployed; a
+`blocked_by` list, if one is ever set, must include TOPTEC. Not yet seen
+on flores itself.
 flores still runs the 2026-10-12 rts2-viewer without modes: it needs the
 new package and `modes = /usr/share/rts2/viewer-modes/flores.modes` (or a
 copy in /etc/rts2) under `[viewer]`.
