@@ -12,6 +12,7 @@ add_library(base_teld STATIC
 	src/mpu9250.cpp
 	src/tpointmodel.cpp
 	src/tpointmodelterm.cpp
+	src/perek2m.cpp
 )
 
 target_include_directories(base_teld PUBLIC
@@ -30,6 +31,7 @@ base_driver(d50 "D50 telescope")
 base_driver(gemini "Losmandy Gemini")
 base_driver(gemini-udp "Losmandy Gemini over UDP")
 base_driver(lx200 "Meade LX200 protocol")
+base_driver(perek2m "Perek 2m (Ondrejov) through telescoped")
 
 if(BASE_HAVE_PARACL)
 	add_subdirectory(paramount)

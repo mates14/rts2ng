@@ -64,6 +64,7 @@ RTS2_BASE_BINARIES = \
 	teld/gemini-udp/rts2-teld-gemini-udp \
 	teld/gemini-udp/rts2-teld-gemini-udp-imu \
 	teld/lx200/rts2-teld-lx200 \
+	teld/perek2m/rts2-teld-perek2m \
 	focusd/dummy/rts2-focusd-dummy \
 	focusd/tefo/rts2-focusd-tefo \
 	focusd/aaf/rts2-focusd-aaf \
@@ -83,7 +84,8 @@ RTS2_BASE_BINARIES = \
 	sensord/external/rts2-sensor-external \
 	dome/d50/rts2-dome-d50 \
 	dome/bart/rts2-dome-bart \
-	dome/zelio/rts2-dome-zelio
+	dome/zelio/rts2-dome-zelio \
+	dome/perek2m/rts2-dome-perek2m
 
 # rts2-drivers-fli's binaries - always built (bundled libfli, see above).
 RTS2_FLI_BINARIES = \

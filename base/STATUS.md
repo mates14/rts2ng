@@ -54,8 +54,8 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
 | `kernel/` | `base_kernel`: values, connections (serial/udp/tcp/ethernet/modbus/fork), `Block`/`Daemon`/`Device`, `Client`, FITS (`Image`, `DevClientCameraImage`) |
 | `centrald/` | `rts2-centrald`, `rts2-state` |
 | `camd/` | `Camera` base + `dummy`, `andor`, `gxccd`, `fli`, `v4l` |
-| `teld/` | `Telescope`, `Fork`, `GEM`, `TelLX200` + `dummy`, `d50`, `gemini`, `gemini-udp`, `lx200`, `paramount` |
-| `dome/` | `Dome`, `Ford` + `d50`, `bart`, `zelio` |
+| `teld/` | `Telescope`, `Fork`, `GEM`, `TelLX200`, `perek2m::Tcs` + `dummy`, `d50`, `gemini`, `gemini-udp`, `lx200`, `paramount`, `perek2m` |
+| `dome/` | `Dome`, `Ford` + `d50`, `bart`, `zelio`, `perek2m` (links `base_teld` for `perek2m::Tcs`) |
 | `focusd/` | `dummy`, `tefo`, `fli`, `aaf`, `optec`, `nstep` |
 | `filterd/` | `dummy`, `fli` |
 | `sensord/` | `system`, `nut`, `cloud4`, `bart-rain`, `aws-mlab`, `d50-wfunit`, `makak-shutter`, `external`, `fram-weather`, `windrs`, `avelab` |
@@ -72,7 +72,7 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
 | SBT/BART | `dome-bart`, `teld-gemini` / `teld-gemini-udp`, `focusd-aaf`, `sensor-bart-rain`, `sensor-aws-mlab` |
 | FRAM Los Leones | `focusd-aaf`, `sensor-fram-weather`, `dome-zelio`, `teld-lx200`, `sensor-nut`, `camd-gxccd` |
 | FRAM Paranal (brown, white) | `teld-paramount`, `dome-zelio`, `camd-gxccd`, `focusd-nstep`, `sensor-windrs`, `sensor-external` |
-| FLORES | `camd-fli` (with a filter wheel), `rts2-toptec` (focuser, Perek-specific, not in this repo) |
+| FLORES / Perek 2m | `camd-fli` (with a filter wheel), `teld-perek2m`, `dome-perek2m` (both run `--readonly` until RTS2 takes over the 2m); TOPTEC focuser, spectrograph and calibration lamps are rtspy drivers, not in this repo |
 | makak | `camd-gxccd`, `sensor-makak-shutter` |
 | AVE lab | `sensor-avelab` |
 
@@ -151,6 +151,20 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - `carryPersistentFields()` keeps fields that do not come from the ENQ reply
   (`parking`, `trackingSecToWestLimit`). `pollStatus()` used to reset them.
 
+**Perek 2m** (`teld/perek2m`, `dome/perek2m`; `teld/perek2m/OPERATION.md`)
+- The 2m is shared with observers using Fuky's clients. Neither daemon
+  commands anything on its own, and both have a read-only mode
+  (`tcs_readonly`, writable at run time; `--readonly` sets it at start).
+- The dome is built with `inhibit_auto_close`: `auto_close` starts false,
+  so centrald states and bad weather do nothing until it is set.
+- The teld's `abortMoveTracking ()` stops only RTS2's own slew; it never
+  stops the TCS for a position RTS2 did not command.
+- Park is the park position only. The full power-down (park, flaps and slit
+  closed, telescope off, then oil off) is the dome's close. Neither ever
+  switches the instruments' power.
+- The default `--tcs-host` is the real alhena: a test must point at
+  `teld/perek2m/telescoped_sim.py` on 127.0.0.1.
+
 **Other drivers**
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,
   `htSwitch`, `heating`, `temp`, `humidity`) and re-sends the heating mode
@@ -191,7 +205,8 @@ it, and say which classes you added.
   on what "mode" means for those types.
 - `exec_device` in `rts2-scriptexec` casts a `Client` to a `Device`
   (`known-bugs.md`). makak's script works around it.
-- Not verified on hardware: FLI idle flush; Gemini UDP recovery (does the
+- Not verified on hardware: Perek 2m teld/dome (only against the
+  simulator; list in `teld/perek2m/OPERATION.md`); FLI idle flush; Gemini UDP recovery (does the
   UDP listener come back after 65533, is the boot menu reachable over UDP);
   D50 mount-side interlock fixes.
 - `LTM1_1`/`LTM2_2` ignore binning.
@@ -224,4 +239,5 @@ it, and say which classes you added.
   reported upstream.
 - `known-bugs.md` - open bugs in rts2ng itself.
 - `D50_READINESS.md` - D50 switch-over review and checklist (2026-10-09).
-- `teld/gemini-udp/OPERATION.md`, `external/*/README.md`.
+- `teld/gemini-udp/OPERATION.md`, `teld/perek2m/OPERATION.md` and
+  `PROTOCOL.md`, `external/*/README.md`.

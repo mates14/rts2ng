@@ -13,5 +13,6 @@ target_link_libraries(base_dome PUBLIC base_kernel)
 base_driver(d50 "D50 dome")
 base_driver(bart "BART dome")
 base_driver(zelio "Zelio PLC dome")
+base_driver(perek2m "Perek 2m (Ondrejov) through telescoped")
 
 add_subdirectory(tests)

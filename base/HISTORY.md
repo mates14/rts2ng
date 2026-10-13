@@ -3019,6 +3019,59 @@ is already plugged in works without a replug, and it reports a failed
 build instead of hiding it behind `|| true`. At FLORES, installing the
 headers made DKMS build and load the module by itself; the camera works.
 
+## Perek 2m: teld and dome through telescoped (2026-10-13) [MJ]
+
+New `rts2-teld-perek2m` and `rts2-dome-perek2m` for the 2m at Ondřejov,
+driving Jan Fuchs' telescoped (ASCOL over XML-RPC, alhena:9999). The
+protocol was reverse engineered from his Java "Observe" client and
+observe_batch (`teld/perek2m/PROTOCOL.md`); operator notes are in
+`teld/perek2m/OPERATION.md`.
+
+- **XML-RPC client.** `kernel/xmlrpcclient.{h,cpp}` is a small,
+  dependency-free XML-RPC client: plain HTTP/1.0, one connection per call,
+  every step bounded by a timeout. Classic used xmlrpc++, which base doesn't
+  have. Calls from different threads share no socket.
+- **TCS link.** `perek2m::Tcs` (`teld/include/perek2m.h`, in `base_teld`)
+  polls `telescope_info ()` on a thread. Commands are synchronous calls from
+  the main loop. The dome links `base_teld` for it.
+- **teld.**
+  - The TCS points by itself, from J2000. A move sends origin + offsets +
+    astrometric corrections, waits for `tsra` to echo the preset, then sends
+    `TGRA 1`.
+  - The move ends in TRACK on target, and also waits for the dome when it
+    follows the telescope.
+  - `hasTracking = false`: the TCS tracks by itself.
+  - Park only goes to HA/DA 90/45. The user's decision: the 2m has no
+    mandatory idle position, and RTS2 parks on many state changes.
+  - `abortMoveTracking ()` stops only RTS2's own slew, never a position
+    someone else commanded.
+- **dome.**
+  - Open: oil, telescope power, flaps, slit, dome auto.
+  - Close (the user's sequence): finish movements (park) while slit, flaps
+    and dome close/stop, then telescope off, then oil off. The
+    instruments' power is never touched.
+  - Built with `inhibit_auto_close`, so `auto_close` starts false: on a
+    telescope run by hand, the base class would otherwise close the slit on
+    the observers at startup, at dawn or on bad weather.
+- **Both.** Read-only mode (`tcs_readonly`, writable at run time;
+  `--readonly` sets it at start) refuses every command; this is how to run
+  them first, next to the observers.
+- **Classic bug found.** A `Telescope` with `hasTracking = false` crashed
+  on its first move: `ignoreHorizon` and `trackingFSize` were left
+  uninitialized. Fixed in `teld.cpp`, recorded in `UPSTREAM_BUGS.md`.
+- **Testing.** Tested only against `teld/perek2m/telescoped_sim.py` (on
+  127.0.0.1), never against the telescope:
+  - a refused move while powered off;
+  - a slew with and without the dome following;
+  - park;
+  - the value writes and `ascol`;
+  - an outage mid-slew and its recovery;
+  - read-only;
+  - the full open and close sequences.
+
+  Hardened (`dpkg-buildflags`) build clean; ctest 10/10. What remains to
+  check on the telescope is listed in `OPERATION.md`.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
