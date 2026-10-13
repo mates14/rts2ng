@@ -2928,3 +2928,19 @@ camera. Not tried through Apache itself (no `/observ` login here).
   fake endpoint (state off); I can't log in to lascaux's `/observ` from here.
 - **Confirmed by the user** on both pages: Sentinel's live stream on BART's
   page and the LED toggle on both work against the real cameras.
+
+### BART's page: AllSky (D65) through lascaux's proxy (2026-10-13) [JS]
+
+- **Bug**: BART's page loaded `https://allsky-d65.asu.cas.cz/` directly.
+  That server needs no login from inside the institute (where it was
+  tested), but asks for one from outside, so the image stayed blank
+  until the visitor clicked through and logged in there (user report).
+  D50's page was not affected: lascaux50's `/observ/allsky-d65/` proxy
+  served it to the user with no refusals.
+- **Fix**: BART's page now uses `/observ/allsky-d65/` (image and title
+  link), behind lascaux's `/observ` login. This needs, in lascaux's SSL
+  vhost, the same lines as lascaux50's:
+
+      ProxyPass /observ/allsky-d65/ http://allsky-d65.asu.cas.cz:80/
+      ProxyPassReverse /observ/allsky-d65/ http://allsky-d65.asu.cas.cz:80/
+- **Applied by the user** on lascaux; the image loads on BART's page.
