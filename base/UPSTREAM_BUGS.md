@@ -1640,6 +1640,22 @@ the normal loop. The replies (`1`, `0`, `ERR`) and their order of checks are
 unchanged. `rts2-focusc` and `Client::run ()`, the other `oneRunLoop ()`
 callers, are top-level loops and not affected.
 
+## A failed correction move adds the correction again on every retry (`lib/rts2tel/teld.cpp`) [JS 2026-10-15]
+
+`Telescope::startResyncMove ()` adds the pending correction `wcorr` into
+`corr` before any check, and resets `wcorr` only when `startResync ()`
+succeeds. Any failure on the way (`block_move`, parking, `stopMove ()`,
+hard horizon, Dec limit, `startResync ()`) leaves `wcorr` pending with `corr`
+already incremented. The failure's own `maskState ()` changes the BOP state,
+`setFullBopState ()` sees `wcorr` still changed and calls
+`startResyncMove ()` again, which adds `wcorr` once more. Seen at SBT on
+2026-10-14 with the mount driver refusing every goto for 100 s: `corr` grew
+12' per retry to 5.6 deg, and the first accepted goto went there.
+
+Fixed in base: if the move fails after `wcorr` was folded in, `corr` (and
+`corr_img`/`corr_obs`) are restored and `wcorr` is dropped, with a warning.
+The next astrometry brings a new correction.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

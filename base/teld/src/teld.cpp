@@ -2129,9 +2129,45 @@ int Telescope::startResyncMove (rts2core::Connection * conn, int correction, boo
 		incMoveNum ();
 	}
 
+	// base note: classic added wcorr into corr here and, when the move
+	// failed further down, left wcorr pending. The failure's own BOP change
+	// runs setFullBopState (), which retried the move and added wcorr again,
+	// every time. At SBT (2026-10-14) with the mount's goto timing out every
+	// 3 s, corr grew by 12' per retry, to 5.6 deg, and the next accepted
+	// goto went there. A correction whose move fails is now dropped and corr
+	// restored; the next image brings a fresh one.
+	struct CorrectionRollback
+	{
+		Telescope *tel;
+		bool armed = false;
+		double ra, dec;
+		int imgId, obsId;
+		~CorrectionRollback ()
+		{
+			if (!armed)
+				return;
+			tel->logStream (MESSAGE_WARNING) << "move failed, correction " << LibnovaDegDist (tel->wcorrRaDec->getRa ()) << " " << LibnovaDegDist (tel->wcorrRaDec->getDec ()) << " dropped" << sendLog;
+			tel->corrRaDec->setValueRaDec (ra, dec);
+			tel->corrImgId->setValueInteger (imgId);
+			tel->corrObsId->setValueInteger (obsId);
+			tel->wcorrRaDec->setValueRaDec (0, 0);
+			tel->wcorrRaDec->resetValueChanged ();
+			tel->total_offsets->setValueRaDec (tel->offsRaDec->getRa () - ra, tel->offsRaDec->getDec () - dec);
+			tel->sendValueAll (tel->corrRaDec);
+			tel->sendValueAll (tel->wcorrRaDec);
+			tel->sendValueAll (tel->total_offsets);
+		}
+	} corrRollback;
+	corrRollback.tel = this;
+
 	// if some value is waiting to be applied..
 	if (wcorrRaDec->wasChanged ())
 	{
+		corrRollback.armed = true;
+		corrRollback.ra = corrRaDec->getRa ();
+		corrRollback.dec = corrRaDec->getDec ();
+		corrRollback.imgId = corrImgId->getValueInteger ();
+		corrRollback.obsId = corrObsId->getValueInteger ();
 		corrRaDec->incValueRaDec (wcorrRaDec->getRa (), wcorrRaDec->getDec ());
 		corrImgId->setValueInteger (wCorrImgId->getValueInteger ());
 		corrObsId->setValueInteger (wCorrObsId->getValueInteger ());
@@ -2331,6 +2367,7 @@ int Telescope::startResyncMove (rts2core::Connection * conn, int correction, boo
 		wcorrRaDec->setValueRaDec (0, 0);
 		wcorrRaDec->resetValueChanged ();
 	}
+	corrRollback.armed = false;
 
 	move_connection = conn;
 
