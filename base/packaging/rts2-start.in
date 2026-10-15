@@ -55,6 +55,12 @@ case ":$PATH:" in
 esac
 export PATH
 
+# A crashing daemon should leave a core dump (systemd-coredump keeps it,
+# and rts2-*-dbgsym turns it into a backtrace) however it was started -
+# from a login shell, su, cron or systemd, each with its own core limit,
+# often 0. Raise the soft limit as far as the hard limit allows.
+ulimit -c unlimited 2>/dev/null || ulimit -c "$(ulimit -H -c)" 2>/dev/null
+
 # see RTS2_EXIT_* in kernel/include/daemon.h
 EXIT_ALREADY_RUNNING=255
 EXIT_LOCK_ERROR=254

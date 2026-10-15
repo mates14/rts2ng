@@ -3180,6 +3180,13 @@ made the executor read "no data yet" as a dead socket.
 - `Connection::idle ()` printed `strerror (errno)` for a failed connect;
   the error is in `err` from `getsockopt ()`.
 
+- `rts2-start` raises the core limit (`ulimit -c`, up to the hard limit)
+  before starting daemons: at SBT they ran with 0, so the executor's crash
+  that night left no core. systemd-coredump is installed there.
+- Follow-up: the drop message names the connection type as is
+  (`DEVICE_SERVER` ...). It said "device-centrald", but on a device
+  `DEVICE_SERVER` is any incoming connection - HTTPD's showed up so.
+
 SBT side, outside the repo: a cron job in torman's account,
 `~torman/rts2diag/snapshot.sh` every 5 min, writes the RTS2 daemons (pid,
 start, RSS, command line - all daemons log as `rts2[pid]`) and their
@@ -3188,7 +3195,7 @@ established TCP sockets (queues, ms since last send/receive) to
 30 days; the journal only about one.
 
 Verified: base builds without warnings; ctest 10/10. centrald + dummies:
-a killed device logged on centrald as "connection FOC (device-centrald,
+a killed device logged on centrald as "connection FOC (DEVICE_SERVER,
 peer 127.0.0.1:53284, centrald id 1) dropped: closed by the peer; last data
 3 s ago", a killed centrald on the device as "connection centrald
 (localhost) ... dropped: closed by the peer". A wheel stopped with SIGSTOP

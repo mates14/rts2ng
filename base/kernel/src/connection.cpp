@@ -1881,12 +1881,14 @@ void Connection::dropConnection (int last_data_size, const std::string &reason)
 
 	std::ostringstream os;
 	os << "connection " << dropLabel ();
+	// the type name as is: DEVICE_SERVER is a device on centrald, but any
+	// incoming connection (centrald, client or device) on a device
 	switch (getType ())
 	{
-		case CLIENT_SERVER: os << " (client"; break;
-		case DEVICE_SERVER: os << " (device-centrald"; break;
-		case DEVICE_DEVICE: os << " (device"; break;
-		default: os << " (untyped"; break;
+		case CLIENT_SERVER: os << " (CLIENT_SERVER"; break;
+		case DEVICE_SERVER: os << " (DEVICE_SERVER"; break;
+		case DEVICE_DEVICE: os << " (DEVICE_DEVICE"; break;
+		default: os << " (NOT_DEFINED_SERVER"; break;
 	}
 	struct sockaddr_storage peer;
 	socklen_t peerLen = sizeof (peer);
