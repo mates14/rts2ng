@@ -92,6 +92,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - `Client::Client()` takes the user name from `getpwuid(geteuid())`, so
   clients started without a login session (cron, systemd) can log in.
 
+**Event loop**
+- Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
+  script line) may call `oneRunLoop ()`. A nested loop leaves the outer one
+  with stale poll results and an invalidated `connections` iterator. Script
+  `waitmask`/`waitidle` used to do this, and it dropped the SBT executor's
+  centrald connection and once crashed it (`UPSTREAM_BUGS.md`). They are
+  answered from `ConnExe::idle ()` now.
+
 **Logging**
 - Every daemon logs to syslog under the ident `rts2`, always, whether or
   not centrald is up. `Daemon::doDaemonize()` must not call `openlog()`
@@ -210,6 +218,19 @@ it, and say which classes you added.
   UDP listener come back after 65533, is the boot menu reachable over UDP);
   D50 mount-side interlock fixes.
 - `LTM1_1`/`LTM2_2` ignore binning.
+- Gemini UDP (IMU build, SBT): the caring loop thread stopped polling for
+  99 s (2026-10-14 18:30) and again from 04:17 to at least 04:24 the next
+  morning. Every goto timed out ("timed out waiting for the caring loop"),
+  and `applyStatus ()` kept logging "caring loop poll OK" with frozen data.
+  Cause not found. The one unbounded loop in it is the `attempt = -1` reset
+  in `GeminiCaringLoop::sendAndReceive ()`; a thread backtrace of a hung
+  teld would tell. The poll log line also fires on every `applyStatus ()`,
+  not once per poll (~236k lines a day).
+- `Telescope::startResyncMove ()` adds `wcorr` into `corr` before
+  `startResync ()`, and a failed `startResync ()` leaves `wcorr` pending, so
+  every retry adds it again. With the hung caring loop above it reached
+  5.6 deg, and the next accepted goto went there. A failed move also calls
+  `stopTracking ()`. Same in classic.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
   the FITS file).

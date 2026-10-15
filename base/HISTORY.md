@@ -3072,6 +3072,41 @@ observe_batch (`teld/perek2m/PROTOCOL.md`); operator notes are in
   Hardened (`dpkg-buildflags`) build clean; ctest 10/10. What remains to
   check on the telescope is listed in `OPERATION.md`.
 
+## SBT executor: nested script waits, a hung mount loop (2026-10-15) [JS]
+
+From the SBT journal of the night 2026-10-14/15 (`journalctl -t rts2`).
+
+- **Executor.** At 21:05:02 the executor died right after three scripts'
+  `waitmask T0 32 300` returned; `--autorestart` brought it back at 21:05:12.
+  The queuer then sent `now` every 5 s until 03:27 and every one got
+  `unknow command now`. The executor saw its connection as never
+  authenticated (`conn_state` CONNECTED, no `auth`). The queuer logged
+  `authorization_ok for non-pending id:92 - this should never happen` at
+  21:05:13 and from then on took the connection for authenticated. That is
+  in the queuer (rtspy), not here. A manual executor restart at 03:27 fixed
+  it. About 6 h of night were lost.
+- **Cause of the death.** `waitmask`/`waitidle` in `ConnExe` spun a nested
+  `oneRunLoop ()` inside `pollSuccess ()` (classic code, see
+  `UPSTREAM_BUGS.md`). Both times a wait returned (21:05:02, 03:37:25) the
+  executor logged `connection to centrald lost` in the same second. Fixed:
+  the wait is recorded and answered from `ConnExe::idle ()`.
+- **Watchdog.** `Daemon::setupAutoRestart ()` now logs the signal or exit
+  status of a child it restarts. The crash had shown up only as
+  "restarted (due to autostart)". Whether it was SIGSEGV is not known: the
+  kernel log or `coredumpctl` on lascaux would say.
+- **Mount.** The gemini-udp caring loop hung twice (STATUS open items), and
+  each refused correction added to `corr` again (12 arcmin per retry,
+  5.6 deg after 100 s). Not fixed, cause not found.
+- **Testing.** The machine has no build dependencies, so libnova, cfitsio,
+  ncurses and pkgconf `-dev` debs were unpacked into a scratch prefix. Base
+  builds without new warnings; ctest 10/10. centrald + `teld-dummy` +
+  2 x `camd-dummy`, `rts2-scriptexec` with two `exe` scripts: one in
+  `waitmask` (never true, 6 s) while the other ran `waitmask T0 0 3`,
+  `waitidle T0 5`, `waitmask NOSUCH 1 3` and `waitmask T0 0 0` and got
+  `1 1 ERR 0`. The first got `0` 11 s later; the timeout is noticed on the
+  next loop pass (10 s idle poll), as in classic. Not tested with the
+  executor (needs the DB) or at SBT.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
