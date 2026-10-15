@@ -36,6 +36,7 @@
 #include <sys/wait.h>
 #include <sys/un.h>
 #include <cstddef>
+#include <cstring>
 
 #include "daemon.h"
 #include "base-config.h"
@@ -713,6 +714,13 @@ int Daemon::setupAutoRestart ()
 			// kill signal/endRunLoop call can set autorestart to -1..
 			if (autorestart > 0)
 			{
+				// base note: classic restarted without saying why the child
+				// went away. At SBT an executor crash showed up only as
+				// "restarted (due to autostart)"
+				if (WIFSIGNALED (status))
+					logStream (MESSAGE_ERROR) << "daemon (pid " << watched_child << ") killed by signal " << WTERMSIG (status) << " (" << strsignal (WTERMSIG (status)) << ")" << (WCOREDUMP (status) ? ", core dumped" : "") << ", restarting in " << autorestart << " s" << sendLog;
+				else if (WIFEXITED (status))
+					logStream (MESSAGE_ERROR) << "daemon (pid " << watched_child << ") exited with status " << WEXITSTATUS (status) << ", restarting in " << autorestart << " s" << sendLog;
 				sleep (autorestart);
 				logStream (MESSAGE_ERROR) << "restarted (due to autostart)" << sendLog;
 			}
