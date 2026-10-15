@@ -3092,11 +3092,19 @@ From the SBT journal of the night 2026-10-14/15 (`journalctl -t rts2`).
   the wait is recorded and answered from `ConnExe::idle ()`.
 - **Watchdog.** `Daemon::setupAutoRestart ()` now logs the signal or exit
   status of a child it restarts. The crash had shown up only as
-  "restarted (due to autostart)". Whether it was SIGSEGV is not known: the
-  kernel log or `coredumpctl` on lascaux would say.
-- **Mount.** The gemini-udp caring loop hung twice (STATUS open items), and
-  each refused correction added to `corr` again (12 arcmin per retry,
-  5.6 deg after 100 s). Not fixed, cause not found.
+  "restarted (due to autostart)". The kernel log confirms the crash:
+  `rts2-executor[38515] general protection fault` at 21:05:02.
+- **Mount.** The gemini-udp caring loop hung twice (STATUS open items);
+  cause not found. The incident log has nothing for that night: the
+  safety watchdog runs off the same hung loop. A gdb backtrace without the
+  executable gave no symbols.
+- **Correction accumulation.** Each refused correction added `wcorr` to
+  `corr` again (12' per retry, 5.6 deg after 100 s). Fixed in
+  `Telescope::startResyncMove ()`: a correction whose move fails is dropped
+  and `corr` restored (`UPSTREAM_BUGS.md`). Tested on `teld-dummy`: with
+  `block_move` set, two `correct` commands each logged one refused move
+  and "correction 6' 3' dropped", with no retries. After unblocking, the
+  next correction moved by 6' 3', not 18' 9'.
 - **Testing.** The machine has no build dependencies, so libnova, cfitsio,
   ncurses and pkgconf `-dev` debs were unpacked into a scratch prefix. Base
   builds without new warnings; ctest 10/10. centrald + `teld-dummy` +

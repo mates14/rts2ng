@@ -128,6 +128,12 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - Optional per-camera config (`instrume`, `telescop`, `origin`, `template`,
   `environment`) is read with the quiet lookups. Missing keys must not warn.
 
+**Telescope**
+- A correction whose move fails is dropped and `corr` restored
+  (`CorrectionRollback` in `startResyncMove ()`). Classic left `wcorr`
+  pending and `setFullBopState ()` re-added it on every retry; at SBT it
+  reached 5.6 deg. A failed move still calls `stopTracking ()`, as classic.
+
 **D50 mount and roof** (`teld/d50`, `dome/d50`, `dome/src`; full list in
 `UPSTREAM_BUGS.md` "D50 mount/roof interlock" and `D50_READINESS.md`)
 - Motor-vs-absolute-encoder checks use `fabs` and wrapped RA
@@ -226,11 +232,6 @@ it, and say which classes you added.
   in `GeminiCaringLoop::sendAndReceive ()`; a thread backtrace of a hung
   teld would tell. The poll log line also fires on every `applyStatus ()`,
   not once per poll (~236k lines a day).
-- `Telescope::startResyncMove ()` adds `wcorr` into `corr` before
-  `startResync ()`, and a failed `startResync ()` leaves `wcorr` pending, so
-  every retry adds it again. With the hung caring loop above it reached
-  5.6 deg, and the next accepted goto went there. A failed move also calls
-  `stopTracking ()`. Same in classic.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
   the FITS file).
