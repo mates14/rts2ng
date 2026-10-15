@@ -1612,6 +1612,34 @@ same problem. Fixed in base: both pointers are nulled in the `else` branch,
 and `setIgnoreHorizon ()`/`getIgnoreHorizon ()` cope with a null value (the
 hard horizon's ignore flag is still set).
 
+## Script `waitmask`/`waitidle` run a nested event loop (`lib/rts2script/connexe.cpp`) [JS 2026-10-15]
+
+`ConnExe::processCommand ()` answers `waitidle` and `waitmask` by spinning
+`getMaster ()->oneRunLoop ()` until the state matches or the timeout passes.
+It is called from `ConnExe::receive ()`, which runs inside the outer loop's
+`Block::pollSuccess ()`. The nested loop:
+
+- rebuilds and re-polls the shared `fds[]` array, so when it returns, the
+  outer `pollSuccess ()` tests the remaining connections against the inner
+  poll's `revents`. A socket the inner loop has already drained still reads
+  as `POLLIN`, `read ()` returns -1/`EAGAIN`, and `Connection::receive ()`
+  treats any `data_size <= 0` as a dead socket (`connectionError ()`). The
+  centrald connection comes last in `pollSuccess ()` and is hit most often;
+- can erase from `connections` (a `std::vector`) while the outer loop holds
+  an iterator into it, which is undefined behaviour.
+
+Several scripts each waiting in `waitmask` nest the loops (one script's wait
+runs inside another's). Seen at SBT on 2026-10-14/15 with three cameras
+running `filtros.py`, each doing `waitmask T0 32 300` after a `now` target
+change: the executor logged `connection to centrald lost` at the moment the
+waits returned, twice. The first time it then died, and `--autorestart`
+brought it back.
+
+Fixed in base: the wait is recorded and `ConnExe::idle ()` answers it from
+the normal loop. The replies (`1`, `0`, `ERR`) and their order of checks are
+unchanged. `rts2-focusc` and `Client::run ()`, the other `oneRunLoop ()`
+callers, are top-level loops and not affected.
+
 ## How this list is maintained
 
 Add an entry here (not just to `STATUS.md`) whenever a genuine classic-tree

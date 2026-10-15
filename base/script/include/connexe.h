@@ -39,6 +39,8 @@ class ConnExe:public rts2core::ConnFork
 
 		virtual void processLine ();
 
+		virtual int idle ();
+
 	protected:
 		virtual void processCommand (char *cmd);
 
@@ -54,6 +56,17 @@ class ConnExe:public rts2core::ConnFork
 
 		void testWritableVariable (const char *cmd, int32_t vflags, rts2core::Value *v);
 		bool active;
+
+		// base note: a pending waitidle/waitmask, answered from idle () -
+		// see processCommand () for why it no longer blocks
+		typedef enum { WAIT_NONE, WAIT_IDLE, WAIT_MASK } waitType_t;
+		waitType_t waitType;
+		std::string waitDevice;
+		int waitMask;
+		time_t waitEnd;
+
+		void startWait (waitType_t _type, const char *device, int mask, int timeout);
+		void checkWait ();
 };
 
 }

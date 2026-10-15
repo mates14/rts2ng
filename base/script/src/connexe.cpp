@@ -31,6 +31,9 @@ using namespace rts2script;
 ConnExe::ConnExe (rts2core::Block *_master, const char *_exec, bool fillConnEnv, int timeout):rts2core::ConnFork (_master, _exec, fillConnEnv, true, timeout)
 {
 	active = true;
+	waitType = WAIT_NONE;
+	waitMask = 0;
+	waitEnd = 0;
 }
 
 ConnExe::~ConnExe ()
@@ -199,57 +202,29 @@ void ConnExe::processCommand (char *cmd)
 		else
 			writeToProcess ("ERR");
 	}
+	// base note: classic answered waitidle/waitmask by spinning
+	// getMaster ()->oneRunLoop () right here, inside the outer run loop's
+	// Block::pollSuccess (). The nested loop re-polled into the shared fds[]
+	// and could erase from the connections vector the outer loop was still
+	// iterating. Back in the outer loop, connections later in the list were
+	// tested against the inner poll's revents, read() returned EAGAIN and
+	// receive() took that for a dead socket. At SBT (2026-10-14) that dropped
+	// the executor's centrald connection whenever a script's waitmask
+	// returned, and once crashed the executor. Now the wait is only recorded,
+	// and idle () answers it from the normal loop.
 	else if (!strcmp (cmd, "waitidle"))
 	{
 		int tom;
 		if (paramNextString (&device) || paramNextInteger (&tom))
 			return;
-		rts2core::Connection *conn = getConnectionForScript (device);
-		if (conn)
-		{
-			tom += time (NULL);
-			while (time (NULL) < tom)
-			{
-				if ((conn->getOtherType () == DEVICE_TYPE_MOUNT && (conn->getState () & TEL_MASK_MOVING) != TEL_MOVING) || conn->isIdle ())
-				{
-					writeToProcess ("1");
-					break;
-				}
-				getMaster ()->oneRunLoop ();
-			}
-			if (time (NULL) >= tom)
-				writeToProcess ("0");
-		}
-		else
-		{
-			writeToProcess ("ERR");
-		}
+		startWait (WAIT_IDLE, device, 0, tom);
 	}
 	else if (!strcmp (cmd, "waitmask"))
 	{
 		int tom, mask;
 		if (paramNextString (&device) || paramNextInteger (&mask) || paramNextInteger (&tom))
 			return;
-		rts2core::Connection *conn = getConnectionForScript (device);
-		if (conn)
-		{
-			tom += time (NULL);
-			while (time (NULL) < tom)
-			{
-				if ((int) (conn->getState () & mask) == mask)
-				{
-					writeToProcess ("1");
-					break;
-				}
-				getMaster ()->oneRunLoop ();
-			}
-			if (time (NULL) >= tom)
-				writeToProcess ("0");
-		}
-		else
-		{
-			writeToProcess ("ERR");
-		}
+		startWait (WAIT_MASK, device, mask, tom);
 	}
 	else if (!strcmp (cmd, "log"))
 	{
@@ -559,6 +534,52 @@ void ConnExe::processLine ()
 void ConnExe::processErrorLine (char *errbuf)
 {
 	logStream (MESSAGE_ERROR) << "from script " << getExePath () << " received " << errbuf << sendLog;
+}
+
+int ConnExe::idle ()
+{
+	if (waitType != WAIT_NONE)
+		checkWait ();
+	return rts2core::ConnFork::idle ();
+}
+
+void ConnExe::startWait (waitType_t _type, const char *device, int mask, int timeout)
+{
+	if (getConnectionForScript (device) == nullptr)
+	{
+		writeToProcess ("ERR");
+		return;
+	}
+	waitType = _type;
+	waitDevice = device;
+	waitMask = mask;
+	waitEnd = time (nullptr) + timeout;
+	checkWait ();
+}
+
+void ConnExe::checkWait ()
+{
+	rts2core::Connection *conn = getConnectionForScript (waitDevice.c_str ());
+	const char *reply = nullptr;
+	if (conn == nullptr)
+		// the device went away during the wait
+		reply = "ERR";
+	// same order as the classic loop: the timeout first, so a zero
+	// timeout answers 0 without looking at the state
+	else if (time (nullptr) >= waitEnd)
+		reply = "0";
+	else if (waitType == WAIT_IDLE)
+	{
+		if ((conn->getOtherType () == DEVICE_TYPE_MOUNT && (conn->getState () & TEL_MASK_MOVING) != TEL_MOVING) || conn->isIdle ())
+			reply = "1";
+	}
+	else if ((int) (conn->getState () & waitMask) == waitMask)
+		reply = "1";
+
+	if (reply == nullptr)
+		return;
+	waitType = WAIT_NONE;
+	writeToProcess (reply);
 }
 
 rts2core::Connection *ConnExe::getConnectionForScript (const char *_name)
