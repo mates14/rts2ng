@@ -224,14 +224,13 @@ it, and say which classes you added.
   UDP listener come back after 65533, is the boot menu reachable over UDP);
   D50 mount-side interlock fixes.
 - `LTM1_1`/`LTM2_2` ignore binning.
-- Gemini UDP (IMU build, SBT): the caring loop thread stopped polling for
-  99 s (2026-10-14 18:30) and again from 04:17 to at least 04:24 the next
-  morning. Every goto timed out ("timed out waiting for the caring loop"),
-  and `applyStatus ()` kept logging "caring loop poll OK" with frozen data.
-  Cause not found. The one unbounded loop in it is the `attempt = -1` reset
-  in `GeminiCaringLoop::sendAndReceive ()`; a thread backtrace of a hung
-  teld would tell. The poll log line also fires on every `applyStatus ()`,
-  not once per poll (~236k lines a day).
+- Gemini UDP while the mount does not answer (SBT, 2026-10-14/15: the
+  10.0.0.x network dropped for 99 s, 48 s, then for hours; the mount
+  still answered on serial). The driver sets `DEVICE_ERROR_HW` but logs
+  nothing, keeps publishing the last position as current and logging
+  "caring loop poll OK" (also on every `applyStatus ()`, ~236k lines a
+  day), and gotos fail as "timed out waiting for the caring loop" instead
+  of "mount not responding". Same in the plain build.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
   the FITS file).

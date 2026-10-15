@@ -3094,10 +3094,11 @@ From the SBT journal of the night 2026-10-14/15 (`journalctl -t rts2`).
   status of a child it restarts. The crash had shown up only as
   "restarted (due to autostart)". The kernel log confirms the crash:
   `rts2-executor[38515] general protection fault` at 21:05:02.
-- **Mount.** The gemini-udp caring loop hung twice (STATUS open items);
-  cause not found. The incident log has nothing for that night: the
-  safety watchdog runs off the same hung loop. A gdb backtrace without the
-  executable gave no symbols.
+- **Mount.** The "hung caring loop" was the network: strace showed the
+  caring loop sending NAKs to 10.0.0.50 with no reply, gdb showed it
+  waiting in `select`, and the auxiliary server on 10.0.0.x was
+  unreachable too, while the Gemini answered on serial. How the driver
+  behaves meanwhile is in STATUS open items.
 - **Correction accumulation.** Each refused correction added `wcorr` to
   `corr` again (12' per retry, 5.6 deg after 100 s). Fixed in
   `Telescope::startResyncMove ()`: a correction whose move fails is dropped
