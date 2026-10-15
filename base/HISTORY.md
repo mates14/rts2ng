@@ -3097,8 +3097,24 @@ From the SBT journal of the night 2026-10-14/15 (`journalctl -t rts2`).
 - **Mount.** The "hung caring loop" was the network: strace showed the
   caring loop sending NAKs to 10.0.0.50 with no reply, gdb showed it
   waiting in `select`, and the auxiliary server on 10.0.0.x was
-  unreachable too, while the Gemini answered on serial. How the driver
-  behaves meanwhile is in STATUS open items.
+  unreachable too, while the Gemini answered on serial. lascaux's enp8s0
+  had link at 10 Mb/s, TX counting up, RX flat, ARP failing for every
+  host: the switch.
+- **Gemini UDP, mount silent.** Both builds now log the outage
+  (`no response from the mount over UDP`, error) and its end with the
+  duration counted from the last good poll. While silent, `applyStatus ()`
+  stops before acting on the held-over status: no positions, no
+  tracking-limit logic, no "poll OK". That line is now also logged once
+  per poll instead of on every call. `GeminiCaringLoop::gotoRaDec ()`
+  refuses at once with `the mount does not answer over UDP`, and
+  `startPark ()` refuses too.
+  The `--experimental-auto-recovery` 60 s threshold now also counts from
+  the last good poll, about 10 s earlier than before.
+  Tested against a small UDP simulator that can be silenced (scratch, not
+  committed): a 25 s outage logged one error, no poll lines, a refused
+  goto and a refused park with those messages, and "answers again after
+  27 s". Same with the
+  IMU build. ctest 10/10. Not tested on the mount.
 - **Correction accumulation.** Each refused correction added `wcorr` to
   `corr` again (12' per retry, 5.6 deg after 100 s). Fixed in
   `Telescope::startResyncMove ()`: a correction whose move fails is dropped

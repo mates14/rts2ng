@@ -162,6 +162,9 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   mount stays blocked with `safety_locked` for a human. An unwritable
   incident log must never stop a recovery.
 - `abortMoveTracking()` returns 1 until there is a valid position.
+- While the mount does not answer (`st.connected` false), `applyStatus ()`
+  logs the outage once and stops after `checkStartup ()`: the held-over
+  status must not drive anything. `gotoRaDec ()` and `startPark ()` refuse at once.
 - `carryPersistentFields()` keeps fields that do not come from the ENQ reply
   (`parking`, `trackingSecToWestLimit`). `pollStatus()` used to reset them.
 
@@ -224,13 +227,6 @@ it, and say which classes you added.
   UDP listener come back after 65533, is the boot menu reachable over UDP);
   D50 mount-side interlock fixes.
 - `LTM1_1`/`LTM2_2` ignore binning.
-- Gemini UDP while the mount does not answer (SBT, 2026-10-14/15: the
-  10.0.0.x network dropped for 99 s, 48 s, then for hours; the mount
-  still answered on serial). The driver sets `DEVICE_ERROR_HW` but logs
-  nothing, keeps publishing the last position as current and logging
-  "caring loop poll OK" (also on every `applyStatus ()`, ~236k lines a
-  day), and gotos fail as "timed out waiting for the caring loop" instead
-  of "mount not responding". Same in the plain build.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
   the FITS file).
