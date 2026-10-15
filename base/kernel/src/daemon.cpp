@@ -853,6 +853,13 @@ void Daemon::sendMessage (messageType_t in_messageType, const char *in_messageSt
 		prio = LOG_INFO;
 	else
 		prio = LOG_DEBUG;
+	// base note: debug messages went to syslog whether or not the daemon
+	// ran with --debug (only the stderr path in App::sendMessage checked),
+	// so every daemon's debug chatter filled the logs - the BART dome's
+	// "closeDomeWeather: domeCloseStart", twice a second in bad weather,
+	// alone made 36k lines in 12 h. Only --debug logs them now.
+	if (prio == LOG_DEBUG && getDebug () == 0)
+		return;
 	syslog (prio, "%s", in_messageString);
 
 	// under systemd (NOTIFY_SOCKET) stderr goes to the journal too - echoing

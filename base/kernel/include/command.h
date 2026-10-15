@@ -234,12 +234,15 @@ class CommandAuthorize:public Command
 		CommandAuthorize (Block * _master, int centralId, int key);
 		virtual int commandReturnFailed (int status, Connection * conn)
 		{
-			logStream (MESSAGE_ERROR) << "authentification failed for connection " << conn->getName ()
-				<< " centrald num " << conn->getCentraldNum ()
-				<< " centrald id " << conn->getCentraldId ()
+			// base note: classic named conn here - the link to centrald
+			// the request went over, not the client it was about
+			logStream (MESSAGE_ERROR) << "centrald refused to authorize client with centrald id " << clientId
+				<< " (asked over centrald num " << conn->getCentraldNum () << ", status " << status << ")"
 				<< sendLog;
 			return -1;
 		}
+	private:
+		int clientId;
 };
 
 /**

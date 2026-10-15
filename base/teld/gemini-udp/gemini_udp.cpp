@@ -69,6 +69,10 @@
 #define GEMINI_CMD_RATE_GUIDE    150
 #define GEMINI_CMD_RATE_CENTER   170
 
+// while the mount is parked or tracking steadily, the poll line is logged
+// only this often - see applyStatus()
+#define POLL_LOG_QUIET_SEC       60.0
+
 // tracking rate, native id 130 reads it back - 131 sidereal, 135
 // "terrestrial", which is how both base/teld/gemini/gemini.cpp and the live
 // production driver (~/gemini2ser.cpp's startWorm()/stopWorm()) start and
@@ -470,6 +474,9 @@ class GeminiUDP:public Telescope
 		bool autoRecoveryAttempted;	// one attempt per outage - cleared the moment we see connected=true again
 		bool mountEverAnswered;	// a poll has come back at least once - only then is silence an outage worth logging
 		double lastLoggedPollTs;	// GeminiStatus::timestamp of the last poll written to the log
+		double lastSeenPollTs;		// GeminiStatus::timestamp of the last poll looked at
+		char lastLoggedRate;		// moveRate and pierSide of the last poll written to the log
+		char lastLoggedPier;
 		void checkAutoRecovery (const GeminiStatus &st);
 
 		void applyStatus (const GeminiStatus &st);
@@ -522,6 +529,9 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	disconnectedSince = NAN;
 	mountEverAnswered = false;
 	lastLoggedPollTs = NAN;
+	lastSeenPollTs = NAN;
+	lastLoggedRate = '?';
+	lastLoggedPier = '?';
 	autoRecoveryAttempted = false;
 
 	createValue (pierSideValue, "pier_side", "side of pier (W/E, see :Gm#)", false);
@@ -1206,10 +1216,20 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 
 	checkSafety (st);
 
-	// once per poll, not once per applyStatus () call
-	if (st.timestamp == lastLoggedPollTs)
+	// once per poll, not once per applyStatus () call - and while nothing
+	// happens (parked, or tracking steadily) once a minute: every poll is
+	// logged only while the mount slews, parks or changes rate or pier side
+	// (about 86k lines a day otherwise, even with the mount parked)
+	if (st.timestamp == lastSeenPollTs)
+		return;
+	lastSeenPollTs = st.timestamp;
+	bool eventful = st.moveInProgress || st.parking || (st.moveRate != 'T' && st.moveRate != 'N')
+		|| st.moveRate != lastLoggedRate || st.pierSide != lastLoggedPier;
+	if (!eventful && !std::isnan (lastLoggedPollTs) && st.timestamp - lastLoggedPollTs < POLL_LOG_QUIET_SEC)
 		return;
 	lastLoggedPollTs = st.timestamp;
+	lastLoggedRate = st.moveRate;
+	lastLoggedPier = st.pierSide;
 	logStream (MESSAGE_DEBUG) << "GeminiUDP: caring loop poll OK, RA=" << st.ra << " Dec=" << st.dec
 		<< " HA=" << st.ha << " AZ=" << st.az << " ALT=" << st.alt << " LST=" << st.lst
 		<< " pier=" << st.pierSide << " rate=" << st.moveRate

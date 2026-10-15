@@ -1063,6 +1063,10 @@ void Device::centraldConnRunning (Connection *conn)
 void Device::sendMessage (messageType_t in_messageType, const char *in_messageString)
 {
 	Daemon::sendMessage (in_messageType, in_messageString);
+	// base note: debug messages without --debug are not relayed either -
+	// they only loaded the centrald link (see Daemon::sendMessage)
+	if (in_messageType == MESSAGE_DEBUG && getDebug () == 0)
+		return;
 	for (connections_t::iterator iter = getCentraldConns ()->begin (); iter != getCentraldConns ()->end (); iter++)
 	{
 		Message msg = Message (getDeviceName (), in_messageType, in_messageString);

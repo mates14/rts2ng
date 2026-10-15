@@ -156,6 +156,7 @@ int CommandSendKey::send ()
 
 CommandAuthorize::CommandAuthorize (Block * _master, int centralId, int key):Command (_master)
 {
+	clientId = centralId;
 	std::ostringstream _os;
 	_os << "authorize " << centralId << " " << key;
 	setCommand (_os);

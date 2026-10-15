@@ -781,6 +781,29 @@ class Connection:public Object
 		 */
 		virtual void connectionError (int last_data_size);
 
+		/**
+		 * Drop the connection and log why: the peer, the reason and how
+		 * long since data last arrived. Connection's own error paths all
+		 * go through here.
+		 *
+		 * base note: classic connectionError() closed the socket without
+		 * a word, so a lost link between daemons left nothing in the log
+		 * but, at most, "connection to centrald lost" on one side.
+		 */
+		void dropConnection (int last_data_size, const std::string &reason);
+
+		/**
+		 * Whether dropConnection() logs. ConnFork says no - a child
+		 * process ending is routine, not a lost link.
+		 */
+		virtual bool logsDrops () { return true; }
+
+		/**
+		 * What dropConnection() calls this connection. The device's own
+		 * link to centrald has no name of its own, and says so here.
+		 */
+		virtual std::string dropLabel () { return strlen (getName ()) ? getName () : "(unnamed)"; }
+
 		virtual int command ();
 		int sendNextCommand ();
 
@@ -850,6 +873,11 @@ class Connection:public Object
 		 * @invariant True if command is pending (e.g. the connection does not send end of command), otherwise false.
 		 */
 		bool commandInProgress;
+
+		// when the connection entered CONN_AUTH_PENDING, and whether idle()
+		// has already warned that it is still waiting - see idle()
+		time_t authPendingSince;
+		bool authPendingWarned;
 
 		/**
 		 * Called to process buffer.

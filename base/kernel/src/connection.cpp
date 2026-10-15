@@ -61,6 +61,9 @@
 
 using namespace rts2core;
 
+// see Connection::idle()
+#define AUTH_PENDING_WARN_SEC   60
+
 ConnError::ConnError (Connection *conn, const char *_msg): Error (_msg)
 {
 	conn->connectionError (-1);
@@ -102,6 +105,8 @@ Connection::Connection (Block * in_master):Object ()
 	connectionTimeout = 300;	 // 5 minutes timeout
 
 	commandInProgress = false;
+	authPendingSince = 0;
+	authPendingWarned = false;
 	info_time = nullptr;
 	last_info_time = 0;
 
@@ -145,6 +150,8 @@ Connection::Connection (int in_sock, Block * in_master):Object ()
 	statusExpectedEnd = NAN;
 
 	commandInProgress = false;
+	authPendingSince = 0;
+	authPendingWarned = false;
 	info_time = nullptr;
 
 	time (&lastGoodSend);
@@ -681,6 +688,18 @@ void Connection::postMaster (Event * event)
 
 int Connection::idle ()
 {
+	// base note: nothing retries or times out a lost authorization
+	// handshake - the connection just waits, unusable, for ever (a device
+	// then stays invisible to its client until something reconnects it).
+	// Say so once, so the log shows it at the time it happens.
+	if (isConnState (CONN_AUTH_PENDING) && !authPendingWarned && authPendingSince > 0
+		&& time (nullptr) - authPendingSince > AUTH_PENDING_WARN_SEC)
+	{
+		authPendingWarned = true;
+		logStream (MESSAGE_WARNING) << "connection " << dropLabel () << " (centrald id " << getCentraldId ()
+			<< ") still waiting for authorization after " << (time (nullptr) - authPendingSince)
+			<< " s - the handshake was lost, and is not retried" << sendLog;
+	}
 	if (connectionTimeout > 0)
 	{
 		time_t now;
@@ -699,10 +718,9 @@ int Connection::idle ()
 		}
 		if (now > (lastData + getConnTimeout () * 2))
 		{
-			logStream (MESSAGE_DEBUG) << "Connection timeout: " << lastGoodSend
-				<< " " << lastData << " " << now << " " << getName () << " " <<
-				type << sendLog;
-			connectionError (-1);
+			dropConnection (-1, "timeout, nothing received for " + std::to_string (now - lastData)
+				+ " s (limit " + std::to_string (getConnTimeout () * 2) + " s), last good send "
+				+ std::to_string (now - lastGoodSend) + " s ago");
 		}
 	}
 	if (otherDevice != nullptr)
@@ -957,7 +975,7 @@ void Connection::processLine ()
 		{
 			// end connection - we cannot process this command
 			activeReadData = -1;
-			connectionError (-2);
+			dropConnection (-2, std::string ("malformed '") + getCommand () + "' command");
 			ret = -2;
 		}
 		else
@@ -977,7 +995,7 @@ void Connection::processLine ()
 		{
 			// end connection - bad binary data header
 			activeReadData = -1;
-			connectionError (-2);
+			dropConnection (-2, std::string ("malformed '") + getCommand () + "' command");
 			ret = -2;
 		}
 		else
@@ -990,7 +1008,7 @@ void Connection::processLine ()
 		int dC;
 		if (paramNextInteger (&dC))
 		{
-			connectionError (-2);
+			dropConnection (-2, std::string ("malformed '") + getCommand () + "' command");
 			ret = -2;
 		}
 		else
@@ -1014,7 +1032,7 @@ void Connection::processLine ()
 		int sharedMem;
 		if (paramNextInteger (&dC) || paramNextInteger (&sharedMem))
 		{
-			connectionError (-2);
+			dropConnection (-2, std::string ("malformed '") + getCommand () + "' command");
 			ret = -2;
 		}
 		else
@@ -1032,7 +1050,7 @@ void Connection::processLine ()
 				sharedReadMemory = new DataSharedRead ();
 				if (sharedReadMemory->attach (sharedMem))
 				{
-					connectionError (-2);
+					dropConnection (-2, "cannot attach shared memory " + std::to_string (sharedMem) + ": " + strerror (errno));
 					ret = -2;
 				}
 			}
@@ -1050,7 +1068,7 @@ void Connection::processLine ()
 		int dC;
 		if (paramNextInteger (&dC) || !paramEnd ())
 		{
-			connectionError (-2);
+			dropConnection (-2, std::string ("malformed '") + getCommand () + "' command");
 			ret = -2;
 		}
 		else
@@ -1078,7 +1096,7 @@ void Connection::processLine ()
 		int filter_num;
 		if (paramNextString (&fn) || paramNextInteger (&filter_num) || !paramEnd ())
 		{
-			connectionError (-2);
+			dropConnection (-2, std::string ("malformed '") + getCommand () + "' command");
 			ret = -2;
 		}
 		else
@@ -1203,7 +1221,7 @@ int Connection::receive (Block *block)
 			data_size = readChannels[activeReadData]->getData (activeReadChannel, sock);
 			if (data_size == -1)
 			{
-				connectionError (data_size);
+				dropConnection (data_size, std::string ("binary data read failed: ") + strerror (errno));
 			}
 			if (data_size == 0)
 				return 0;
@@ -1217,7 +1235,7 @@ int Connection::receive (Block *block)
 			return 0;
 		if (data_size <= 0)
 		{
-			connectionError (data_size);
+			dropConnection (data_size, data_size == 0 ? std::string ("closed by the peer") : std::string ("read failed: ") + strerror (errno));
 			return -1;
 		}
 		buf_top[data_size] = '\0';
@@ -1251,15 +1269,13 @@ int Connection::writable (Block *block)
 		ret = getsockopt (sock, SOL_SOCKET, SO_ERROR, &err, &len);
 		if (ret)
 		{
-			logStream (MESSAGE_ERROR) << "Connection::idle getsockopt " <<
-				strerror (errno) << sendLog;
-			connectionError (-1);
+			dropConnection (-1, std::string ("connect failed, getsockopt: ") + strerror (errno));
 		}
 		else if (err)
 		{
-			logStream (MESSAGE_ERROR) << "Connection::idle getsockopt " <<
-				strerror (errno) << sendLog;
-			connectionError (-1);
+			// base note: classic printed strerror (errno) here, which is
+			// stale - the connect error is in err
+			dropConnection (-1, std::string ("connect failed: ") + strerror (err));
 		}
 		else
 		{
@@ -1679,15 +1695,15 @@ int Connection::sendMsg (const char *msg)
 
 	if (ret != len)
 	{
-		syslog (LOG_ERR, "Cannot send msg: %s to sock %i with len %i, ret %i errno %i message %m",
-			msg, sock, len, ret, errno);
-		#ifdef DEBUG_EXTRA
-		logStream (MESSAGE_ERROR)
-			<< "Connection::sendMsg [" << getCentraldId () << ":" << conn_state << "] error "
-			<< sock << " state: " << ret << " sending " << msg << ":" << strerror (errno)
-			<< sendLog;
-		#endif
-		connectionError (ret);
+		// base note: the socket is non-blocking, so a peer that does not
+		// read fast enough (a full send buffer) gets EAGAIN or a short
+		// write here - and the connection is dropped. Say which it was.
+		int err = errno;
+		std::string why = ret < 0 ? std::string ("send failed: ") + strerror (err)
+			: "send cut short, " + std::to_string (ret) + " of " + std::to_string (len) + " bytes written";
+		why += std::string (", message '") + std::string (msg).substr (0, 80) + "'";
+		errno = err;
+		dropConnection (ret, why);
 		delete[] mbuf;
 		return -1;
 	}
@@ -1753,7 +1769,7 @@ int Connection::sendBinaryData (int data_conn, int chan, char *data, size_t data
 		{
 			if (errno != EINTR)
 			{
-				connectionError (ret);
+				dropConnection (ret, std::string ("binary send failed: ") + strerror (errno));
 				return -1;
 			}
 		}
@@ -1852,6 +1868,55 @@ void Connection::successfullRead ()
 
 void Connection::connConnected ()
 {
+}
+
+void Connection::dropConnection (int last_data_size, const std::string &reason)
+{
+	// already dropped - nothing new to say
+	if (sock < 0 || !logsDrops ())
+	{
+		connectionError (last_data_size);
+		return;
+	}
+
+	std::ostringstream os;
+	os << "connection " << dropLabel ();
+	switch (getType ())
+	{
+		case CLIENT_SERVER: os << " (client"; break;
+		case DEVICE_SERVER: os << " (device-centrald"; break;
+		case DEVICE_DEVICE: os << " (device"; break;
+		default: os << " (untyped"; break;
+	}
+	struct sockaddr_storage peer;
+	socklen_t peerLen = sizeof (peer);
+	char host[INET6_ADDRSTRLEN] = "?";
+	int peerPort = 0;
+	int err = errno;
+	if (getpeername (sock, (struct sockaddr *) &peer, &peerLen) == 0)
+	{
+		if (peer.ss_family == AF_INET)
+		{
+			inet_ntop (AF_INET, &((struct sockaddr_in *) &peer)->sin_addr, host, sizeof (host));
+			peerPort = ntohs (((struct sockaddr_in *) &peer)->sin_port);
+		}
+		else if (peer.ss_family == AF_INET6)
+		{
+			inet_ntop (AF_INET6, &((struct sockaddr_in6 *) &peer)->sin6_addr, host, sizeof (host));
+			peerPort = ntohs (((struct sockaddr_in6 *) &peer)->sin6_port);
+		}
+	}
+	os << ", peer " << host << ":" << peerPort << ", centrald id " << getCentraldId ()
+		<< ") dropped: " << reason << "; last data " << (time (nullptr) - lastData) << " s ago";
+	// a client closing its own connection is routine; anything else is a lost link
+	messageType_t level = (last_data_size == 0 && getType () == CLIENT_SERVER) ? MESSAGE_INFO : MESSAGE_WARNING;
+
+	// errno as the caller saw it - ConnFork::connectionError() reads it
+	errno = err;
+	connectionError (last_data_size);
+	// logged after the socket is closed, so the message cannot be sent
+	// down the connection being dropped
+	logStream (level) << os.str () << sendLog;
 }
 
 void Connection::connectionError (int last_data_size)
@@ -1977,6 +2042,11 @@ int Connection::sendCommandEnd (int num, const char *in_msg)
 
 void Connection::setConnState (conn_state_t new_conn_state)
 {
+	if (new_conn_state == CONN_AUTH_PENDING && conn_state != CONN_AUTH_PENDING)
+	{
+		authPendingSince = time (nullptr);
+		authPendingWarned = false;
+	}
 	if (new_conn_state == CONN_AUTH_OK || new_conn_state == CONN_CONNECTED)
 	{
 		if (!runningCommand)
@@ -1987,7 +2057,7 @@ void Connection::setConnState (conn_state_t new_conn_state)
 	conn_state = new_conn_state;
 	if (new_conn_state == CONN_AUTH_FAILED)
 	{
-		connectionError (-1);
+		dropConnection (-1, "authorization failed");
 	}
 }
 

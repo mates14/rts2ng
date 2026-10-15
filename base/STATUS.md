@@ -92,6 +92,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - `Client::Client()` takes the user name from `getpwuid(geteuid())`, so
   clients started without a login session (cron, systemd) can log in.
 
+- Every drop of a `Connection` goes through `dropConnection (size, reason)`,
+  which logs who and why; do not call `connectionError ()` directly from
+  Connection's error paths. `ConnFork` opts out via `logsDrops ()`.
+  [JS 2026-10-15]
+- DEBUG messages reach neither syslog nor centrald unless the daemon runs
+  with `--debug` (`Daemon::sendMessage`, `Device::sendMessage`).
+  [JS 2026-10-15]
+
 **Event loop**
 - Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
   script line) may call `oneRunLoop ()`. A nested loop leaves the outer one
@@ -226,6 +234,13 @@ it, and say which classes you added.
   simulator; list in `teld/perek2m/OPERATION.md`); FLI idle flush; Gemini UDP recovery (does the
   UDP listener come back after 65533, is the boot menu reachable over UDP);
   D50 mount-side interlock fixes.
+- Lost inter-daemon connections at SBT after days of running (the daily
+  restart cron is gone since 2026-10-15). Now logged, not fixed. Two
+  suspects: `sendMsg ()` drops the connection on EAGAIN or a short write
+  to a slow peer; a lost authorization handshake leaves the connection in
+  `CONN_AUTH_PENDING` for ever (warned after 60 s, never retried). Data:
+  `/var/log/rts2.log`, `~torman/rts2diag/` on lascaux. HISTORY,
+  "Lost inter-daemon connections". [JS 2026-10-15]
 - `LTM1_1`/`LTM2_2` ignore binning.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on

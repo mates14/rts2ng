@@ -112,6 +112,8 @@ class ConnFork:public ConnNoSend
 	protected:
 		char *exePath;
 		virtual void connectionError (int last_data_size);
+		// a child process ending is routine, not a lost link
+		virtual bool logsDrops () { return false; }
 
 		/**
 		 * Called before fork command, This is the spot to possibly check

@@ -3132,6 +3132,71 @@ From the SBT journal of the night 2026-10-14/15 (`journalctl -t rts2`).
   next loop pass (10 s idle poll), as in classic. Not tested with the
   executor (needs the DB) or at SBT.
 
+## Lost inter-daemon connections: make them visible (2026-10-15) [JS]
+
+SBT restarted EXEC, HTTPD and QUEUE from root's crontab every day at 14:00,
+because long-running daemons lost their connections to each other (one
+side, or centrald, dropped the other, as on the night of 2026-10-14/15).
+JS removed that cron line on 2026-10-15 to catch the problem instead. Part
+of it may already be gone: the nested `waitmask` loop fixed this morning
+made the executor read "no data yet" as a dead socket.
+
+- **Every dropped connection is logged now.** `Connection::connectionError ()`
+  closed the socket without a word; the timeout message was DEBUG only.
+  All of Connection's own error paths now go through
+  `dropConnection (size, reason)`, which logs a WARNING: name, type, peer
+  address, centrald id, the reason (closed by the peer, read/send errno,
+  timeout with the seconds, malformed command, short write with the byte
+  counts) and how long since data last arrived. A client closing its own
+  connection is INFO. `ConnFork` opts out (`logsDrops ()`), a child ending
+  is routine. The device's own link to centrald calls itself
+  `centrald (<host>)` (`dropLabel ()`). Logged after the socket is closed,
+  so the message cannot go down the connection being dropped; errno is
+  restored for `ConnFork::connectionError ()`, which reads it.
+- **Sends to a slow peer drop the connection.** The sockets are
+  non-blocking and `sendMsg ()` drops on any short write or EAGAIN. Not
+  changed (diagnose first), but logged as "send cut short" / "send failed:
+  Resource temporarily unavailable" so it can be recognised.
+- **A lost authorization handshake waits for ever.** Nothing times out or
+  retries `CONN_AUTH_PENDING`. centrald's "client vanished during auth
+  sequence" answers with only `-`, never `A authorization_failed`, so the
+  waiting side is never released. A connection still pending after 60 s is
+  now logged once ("still waiting for authorization ... not retried").
+  `CommandAuthorize`'s failure message named the centrald link; it names the
+  refused client now. Checked and ruled out: a key race between two
+  `key` requests from one client - `Connection::setKey ()` only sets a key
+  once, so a client's key never changes (21 runs with a camera opening a
+  wheel and a focuser at once, both registration orders, no failure).
+- **Debug messages without `--debug`.** `Daemon::sendMessage ()` (the
+  2026-07-16 rewrite) sent every message to syslog, DEBUG included, and
+  `Device::sendMessage ()` relayed them all to centrald; only the stderr
+  path checked the flag. The BART dome's `closeDomeWeather: domeCloseStart`
+  (on every `idle ()` in bad weather) made 36k lines in 12 h. Both now drop
+  DEBUG unless the daemon runs with `--debug`.
+- **T0 poll line.** With `--debug`, gemini-udp logged its status once per
+  poll, about 86k lines a day even parked. Now every poll only while the
+  mount slews, parks or changes rate or pier side, otherwise once a minute
+  (`POLL_LOG_QUIET_SEC`).
+- `Connection::idle ()` printed `strerror (errno)` for a failed connect;
+  the error is in `err` from `getsockopt ()`.
+
+SBT side, outside the repo: a cron job in torman's account,
+`~torman/rts2diag/snapshot.sh` every 5 min, writes the RTS2 daemons (pid,
+start, RSS, command line - all daemons log as `rts2[pid]`) and their
+established TCP sockets (queues, ms since last send/receive) to
+`~torman/rts2diag/<date>.log`, kept 30 days. `/var/log/rts2.log` keeps
+30 days; the journal only about one.
+
+Verified: base builds without warnings; ctest 10/10. centrald + dummies:
+a killed device logged on centrald as "connection FOC (device-centrald,
+peer 127.0.0.1:53284, centrald id 1) dropped: closed by the peer; last data
+3 s ago", a killed centrald on the device as "connection centrald
+(localhost) ... dropped: closed by the peer". A wheel stopped with SIGSTOP
+before the camera connected gave "connection W0 (centrald id -1) still
+waiting for authorization after 61 s". gemini-udp against the simulator,
+tracking: one poll line every 60 s. The slewing path of the throttle, the
+timeout and short-write messages were not exercised.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

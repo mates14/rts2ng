@@ -102,6 +102,7 @@ class DevConnectionMaster:public Connection
 		virtual void setBopState (rts2_status_t in_value);
 		virtual void connConnected ();
 		virtual void connectionError (int last_data_size);
+		virtual std::string dropLabel () { return std::string ("centrald (") + master_host + ")"; }
 	private:
 		char *device_host;
 		char master_host[HOST_NAME_MAX];

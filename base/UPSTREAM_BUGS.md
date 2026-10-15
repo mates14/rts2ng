@@ -1665,3 +1665,35 @@ existing, not a porting mistake or a stylistic modernization. `STATUS.md`'s
 with the rest of the port's working notes; this file is the subset meant to
 actually go back to upstream, with enough reproduction detail to act on
 without needing the base context.
+
+## A dropped connection leaves no trace (`lib/rts2/connection.cpp`) [JS 2026-10-15]
+
+`Connection::connectionError ()` closes the socket and says nothing; the
+one message on that path, the connection timeout, is `MESSAGE_DEBUG`. A
+link between two daemons that dies leaves, at most, "connection to centrald
+lost" on one side. In the same file, `Connection::idle ()` logs a failed
+connect with `strerror (errno)`, but the error is in `err` from
+`getsockopt (SO_ERROR)`. rts2ng logs every drop with peer and reason
+(`dropConnection ()`).
+
+## Sends to a slow peer drop the connection (`lib/rts2/connection.cpp`) [JS 2026-10-15]
+
+The sockets are `O_NONBLOCK`, and `Connection::sendMsg ()` treats any write
+that does not take the whole message - EAGAIN on a full send buffer, or a
+short write - as a fatal error and drops the connection; `sendBinaryData ()`
+(binary data) does the same on EAGAIN. A peer that is busy for a moment
+while a burst of values goes out loses its link. Not fixed in rts2ng yet;
+logged distinctly, to see whether it is what happens at SBT.
+
+## A lost authorization handshake is never retried (`lib/rts2/connection.cpp`, `rts2-centrald`) [JS 2026-10-15]
+
+Nothing times out `CONN_AUTH_PENDING`: if one step of the key/authorize
+exchange is lost, the connection stays pending and unusable, and commands
+queued on it are never sent. centrald's "client vanished during auth
+sequence" answers the device with only `-`, without the
+`A authorization_failed` that would release it, and
+`CommandAuthorize::commandReturnFailed ()` logs the name of the centrald
+link instead of the refused client. Something that makes the devices
+reconnect clears it (at SBT, starting an `rts2-mon` did, per JS). rts2ng warns after
+60 s pending; no retry yet.
+
