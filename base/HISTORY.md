@@ -3227,11 +3227,23 @@ and `findCentralId ()` matches on number and ID. `this_device` resets the
 number to -1 after a device-to-device authorization, as before, so nothing
 else that reads it changes.
 
-Verified with two centralds, a dummy focuser registered with both, and a
-raw protocol client on each with the same ID: before the fix the second
-client never got an answer; after it, both are authorized. A client alone,
-and a camera connecting to the focuser (`--focdev`) over two centralds,
-still authorize, with no stuck warning in 120 s. Not yet deployed.
+Not only two centralds: a device keeps its client connections when its
+centrald goes away (`centraldConnBroken ()` only logs), and a restarted
+centrald numbers its clients from 1 again. So after a centrald restart a
+new client can get the ID of an old client still connected to a device,
+with one centrald, on any device. Second part of the fix:
+`findCentralId ()` considers only connections in `CONN_AUTH_PENDING`, the
+only ones a reply can be for.
+
+Verified with a raw protocol client, `rts2-focusd-dummy` and
+`rts2-camd-dummy`:
+- two centralds, a client on each with ID 2: before, the second never got
+  an answer; after, both are authorized;
+- one centrald, a client authorized with ID 2, centrald killed and
+  restarted, a new client with ID 2: before (with the first part of the
+  fix only), no answer; after, authorized;
+- a client alone, and a camera connecting to the focuser (`--focdev`)
+  over two centralds: still authorized, no stuck warning in 90-120 s.
 
 ## Conventions being used
 

@@ -213,18 +213,22 @@ Connection * Block::findName (const char *in_name)
 	return nullptr;
 }
 
-// base note: centrald IDs are per centrald. A device registered with two
-// centralds (--server given twice, as the BART weather sensors are with the
-// D50 centrald) holds clients of both, and two of them can have the same
-// ID. Classic matched on the ID alone, so the authorization reply for one
-// went to the other, and the new client waited for it forever.
+// base note: centrald IDs are not unique on a device. They are per centrald,
+// and a device registered with two centralds (--server given twice, as the
+// BART weather sensors are with the D50 centrald) holds clients of both; and
+// a restarted centrald numbers its clients from 1 again, while the device
+// keeps the clients it already had. Classic matched on the ID alone, so the
+// authorization reply for a new client could go to an old one with the same
+// ID, and the new client waited for it forever. Only a connection waiting
+// for authorization can be the one the reply is for.
 Connection * Block::findCentralId (int in_num, int in_id)
 {
 	connections_t::iterator iter;
 	for (iter = connections.begin (); iter != connections.end (); iter++)
 	{
 		Connection *conn = *iter;
-		if (conn->getCentraldNum () == in_num && conn->getCentraldId () == in_id)
+		if (conn->getCentraldNum () == in_num && conn->getCentraldId () == in_id
+			&& conn->isConnState (CONN_AUTH_PENDING))
 			return conn;
 	}
 	return nullptr;

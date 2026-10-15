@@ -212,13 +212,13 @@ class Block: public App
 		Connection *findName (const char *in_name);
 
 		/**
-		 * Find connection with a given centrald ID, given by the centrald
-		 * with the given number.
+		 * Find the connection waiting for authorization with a given
+		 * centrald ID, given by the centrald with the given number.
 		 *
 		 * @param in_num    centrald number (index of the centrald connection)
 		 * @param in_id     centrald ID
 		 *
-		 * @return    connection with the given ID, or nullptr if such connection does not exists
+		 * @return    the pending connection with the given ID, or nullptr if there is none
 		 */
 		Connection *findCentralId (int in_num, int in_id);
 

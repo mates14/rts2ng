@@ -1697,7 +1697,7 @@ link instead of the refused client. Something that makes the devices
 reconnect clears it (at SBT, starting an `rts2-mon` did, per JS). rts2ng warns after
 60 s pending; no retry yet.
 
-## Authorization reply goes to the wrong client when a device has two centralds (`lib/rts2/device.cpp`, `block.cpp`) [JS 2026-10-15]
+## Authorization reply goes to the wrong client with the same centrald ID (`lib/rts2/device.cpp`, `block.cpp`) [JS 2026-10-15]
 
 `DevConnectionMaster::command ()` hands `A authorization_ok <id>` to
 `Block::findCentralId (id)`, the first connection with that centrald ID.
@@ -1705,6 +1705,9 @@ IDs are per centrald, so a device registered with two (`--server` given
 twice) can hold two clients with the same ID, one from each. The reply for
 the new one goes to the old one, which gets an unasked "OK authorized";
 the new one stays `CONN_AUTH_PENDING` for ever. Seen at BART with the
-weather sensors that also report to the D50 centrald. rts2ng stores the
-centrald number from `auth` and matches on number and ID.
+weather sensors that also report to the D50 centrald. The same happens
+with one centrald after it restarts: it numbers clients from 1 again, and
+the devices keep the clients they had. rts2ng stores the centrald number
+from `auth` and matches on number and ID, and only on connections waiting
+for authorization.
 
