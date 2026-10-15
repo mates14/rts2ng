@@ -238,7 +238,9 @@ it, and say which classes you added.
   restart cron is gone since 2026-10-15). Now logged, not fixed. Two
   suspects: `sendMsg ()` drops the connection on EAGAIN or a short write
   to a slow peer; a lost authorization handshake leaves the connection in
-  `CONN_AUTH_PENDING` for ever (warned after 60 s, never retried). Data:
+  `CONN_AUTH_PENDING` for ever (warned after 60 s, never retried). One
+  stuck authorization at BART was an ID collision between two centralds,
+  fixed (HISTORY, "Authorization replies matched on the ID alone"). Data:
   `/var/log/rts2.log`, `~torman/rts2diag/` on lascaux. HISTORY,
   "Lost inter-daemon connections". [JS 2026-10-15]
 - `LTM1_1`/`LTM2_2` ignore binning.

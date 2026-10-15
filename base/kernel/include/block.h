@@ -212,13 +212,15 @@ class Block: public App
 		Connection *findName (const char *in_name);
 
 		/**
-		 * Find connection with a given centrald ID.
+		 * Find connection with a given centrald ID, given by the centrald
+		 * with the given number.
 		 *
+		 * @param in_num    centrald number (index of the centrald connection)
 		 * @param in_id     centrald ID
 		 *
-		 * @return    connection with the given ID, or NULL if such connection does not exists
+		 * @return    connection with the given ID, or nullptr if such connection does not exists
 		 */
-		Connection *findCentralId (int in_id);
+		Connection *findCentralId (int in_num, int in_id);
 
 		/**
 		 * Send BOP state to all connections.

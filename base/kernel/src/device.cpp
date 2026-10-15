@@ -58,6 +58,9 @@ int DevConnection::command ()
 			|| !paramEnd ())
 			return -2;
 		setCentraldId (auth_id);
+		// base note: remember which centrald the ID belongs to, so the reply
+		// finds this connection (Block::findCentralId)
+		setCentraldNum (centraldNum);
 		setKey (auth_key);
 		ret = master->authorize (centraldNum, this);
 		if (ret)
@@ -384,7 +387,7 @@ int DevConnectionMaster::command ()
 			if (paramNextInteger (&auth_id) || !paramEnd ())
 				return -1;
 			// find connection with given ID
-			auth_conn = master->findCentralId (auth_id);
+			auth_conn = master->findCentralId (getCentraldNum (), auth_id);
 			if (auth_conn)
 				auth_conn->authorizationOK ();
 			setCommandInProgress (false);
@@ -395,7 +398,7 @@ int DevConnectionMaster::command ()
 			if (paramNextInteger (&auth_id) || !paramEnd ())
 				return -1;
 			// find connection with given ID
-			auth_conn = master->findCentralId (auth_id);
+			auth_conn = master->findCentralId (getCentraldNum (), auth_id);
 			if (auth_conn)
 				auth_conn->authorizationFailed ();
 			setCommandInProgress (false);

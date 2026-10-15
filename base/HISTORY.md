@@ -3204,6 +3204,35 @@ waiting for authorization after 61 s". gemini-udp against the simulator,
 tracking: one poll line every 60 s. The slewing path of the throttle, the
 timeout and short-write messages were not exercised.
 
+## Authorization replies matched on the ID alone (2026-10-15) [JS]
+
+At BART, 20:33 UTC, `RAIN_BART` and `WEATHER_BART` logged "connection
+(unnamed) (centrald id 28) still waiting for authorization after 61 s".
+Client 28 was an `rts2-mon` started on lascaux at 20:32:20; every other
+device authorized it. Those two are the only daemons registered with two
+centralds (`--server 147.231.107.225 --server localhost`, the second being
+the D50 centrald on lascaux50), so they hold clients of both.
+
+Centrald IDs are per centrald. The device asks the right centrald (by the
+centrald number in the client's `auth`), but `DevConnectionMaster::command
+()` looked the `authorization_ok` reply up with `findCentralId (auth_id)`,
+the first connection with that ID among all of them. So a D50 client
+with ID 28 on the D50 centrald (not checked which one; the D50 daemons are
+still classic and log no IDs) got the reply, with an unasked second "OK
+authorized" and the full value dump, and the new `rts2-mon` waited for
+ever. Classic does the same (`lib/rts2/device.cpp`, `block.cpp`).
+
+Fix: the `auth` command now stores the centrald number on the connection,
+and `findCentralId ()` matches on number and ID. `this_device` resets the
+number to -1 after a device-to-device authorization, as before, so nothing
+else that reads it changes.
+
+Verified with two centralds, a dummy focuser registered with both, and a
+raw protocol client on each with the same ID: before the fix the second
+client never got an answer; after it, both are authorized. A client alone,
+and a camera connecting to the focuser (`--focdev`) over two centralds,
+still authorize, with no stuck warning in 120 s. Not yet deployed.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
