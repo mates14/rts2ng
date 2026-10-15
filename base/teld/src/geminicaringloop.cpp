@@ -607,6 +607,13 @@ void GeminiCaringLoop::queuePulseGuide (char direction, unsigned int magnitude)
 bool GeminiCaringLoop::gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec, GotoSideMode sideMode, GeminiSidePrediction *prediction)
 {
 	std::unique_lock<std::mutex> lock (mutex_);
+	// while the mount is silent every poll cycle outlasts the wait below, so
+	// the goto would only time out - say what is really wrong instead
+	if (!status.connected)
+	{
+		errorMessage = "the mount does not answer over UDP";
+		return false;
+	}
 	gotoTargetRa = raDeg;
 	gotoTargetDec = decDeg;
 	gotoSideMode = sideMode;

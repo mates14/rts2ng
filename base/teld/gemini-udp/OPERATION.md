@@ -84,6 +84,24 @@ Nothing is sent that changes the mount:
 After any silence the driver checks the startup handshake first, so a power cycle is noticed within a
 poll or two of the mount answering again. A poll into silence itself takes about 10 s to give up.
 
+### The mount stops answering (network outage)
+
+The UDP link can go while the mount itself is fine. At SBT on 2026-10-14/15 a failing switch cut it off
+for 99 s, then 48 s, then for hours, and the Gemini still answered on serial. While it is silent:
+
+- the log says `no response from the mount over UDP` once, as an error, and `the mount answers over UDP
+  again, after N s without a reply` when it is back. N counts from the last poll that came back;
+- the device is in `DEVICE_ERROR_HW`. The position shown is the last one read, and nothing in the driver
+  acts on it (no tracking-limit flip or park, no "poll OK" lines);
+- every goto is refused with `the mount does not answer over UDP`, and a park with `park refused, the
+  mount does not answer over UDP`. The mount keeps doing what it was doing, normally tracking, and its own
+  firmware limits still apply. Nobody can park it from RTS2 until the link is back, so check the
+  telescope.
+
+To tell the network from the mount: `ping` the Gemini from the RTS2 host. "Destination Host Unreachable"
+means no ARP reply, i.e. nothing on that segment is answering; try another device on the same switch.
+`rts2-teld-gemini` (serial) can run the mount in the meantime.
+
 ### A cold start behind the driver's back
 
 A cold or warm start sets the Dec counter to *exactly* half a circle. If that happens while nothing of the

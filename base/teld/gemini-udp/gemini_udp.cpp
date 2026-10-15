@@ -52,6 +52,7 @@
 #include "configuration.h"
 
 #include <libnova/libnova.h>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -467,6 +468,8 @@ class GeminiUDP:public Telescope
 		bool autoRecoveryEnabled;
 		double disconnectedSince;	// NAN while connected; caring loop poll timestamp of the first poll that came back disconnected, otherwise
 		bool autoRecoveryAttempted;	// one attempt per outage - cleared the moment we see connected=true again
+		bool mountEverAnswered;	// a poll has come back at least once - only then is silence an outage worth logging
+		double lastLoggedPollTs;	// GeminiStatus::timestamp of the last poll written to the log
 		void checkAutoRecovery (const GeminiStatus &st);
 
 		void applyStatus (const GeminiStatus &st);
@@ -517,6 +520,8 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 
 	autoRecoveryEnabled = false;
 	disconnectedSince = NAN;
+	mountEverAnswered = false;
+	lastLoggedPollTs = NAN;
 	autoRecoveryAttempted = false;
 
 	createValue (pierSideValue, "pier_side", "side of pier (W/E, see :Gm#)", false);
@@ -1061,15 +1066,31 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 {
 	maskState (DEVICE_ERROR_HW, st.connected ? 0 : DEVICE_ERROR_HW, st.connected ? "mount communication OK" : "no response from mount over UDP");
 
+	// base note: the outage and its end are logged. At SBT (2026-10-14/15)
+	// a dead switch cut the mount off for hours and the only sign was the
+	// DEVICE_ERROR_HW state text, which no log shows
 	if (st.connected)
 	{
+		if (!std::isnan (disconnectedSince))
+			logStream (MESSAGE_WARNING) << "GeminiUDP: the mount answers over UDP again, after " << (getNow () - disconnectedSince) << " s without a reply" << sendLog;
+		mountEverAnswered = true;
 		disconnectedSince = NAN;
 		autoRecoveryAttempted = false;
 	}
 	else
 	{
 		if (std::isnan (disconnectedSince))
-			disconnectedSince = getNow ();
+		{
+			// a poll gives up only after its retries (~10 s): date the
+			// outage from the last poll that did come back, as the "answers
+			// again" message reports it (st.timestamp is steady_clock)
+			double lastAnswerAge = 0;
+			if (st.valid)
+				lastAnswerAge = std::chrono::duration<double> (std::chrono::steady_clock::now ().time_since_epoch ()).count () - st.timestamp;
+			disconnectedSince = getNow () - lastAnswerAge;
+			if (mountEverAnswered)
+				logStream (MESSAGE_ERROR) << "GeminiUDP: no response from the mount over UDP - the position is the last one read, gotos are refused until it answers" << sendLog;
+		}
 		checkAutoRecovery (st);
 	}
 
@@ -1078,7 +1099,10 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 	// precisely when knowing where it is in its startup matters most
 	checkStartup (st);
 
-	if (!st.valid)
+	// base note: while the mount is silent, st is the last good poll, held
+	// over. Nothing below may act on it as if it were current (it used to
+	// be re-applied and logged as "poll OK" on every idle tick)
+	if (!st.valid || !st.connected)
 		return;
 
 	setTelRaDec (st.ra, st.dec);
@@ -1182,6 +1206,10 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 
 	checkSafety (st);
 
+	// once per poll, not once per applyStatus () call
+	if (st.timestamp == lastLoggedPollTs)
+		return;
+	lastLoggedPollTs = st.timestamp;
 	logStream (MESSAGE_DEBUG) << "GeminiUDP: caring loop poll OK, RA=" << st.ra << " Dec=" << st.dec
 		<< " HA=" << st.ha << " AZ=" << st.az << " ALT=" << st.alt << " LST=" << st.lst
 		<< " pier=" << st.pierSide << " rate=" << st.moveRate
@@ -3112,6 +3140,13 @@ int GeminiUDP::startPark ()
 {
 	if (caring == nullptr)
 		return -1;
+	// a :hP# into silence goes nowhere, and the park state would be left to
+	// whatever the mount says once it answers again - refuse it like a goto
+	if (!caring->getStatus ().connected)
+	{
+		logStream (MESSAGE_ERROR) << "GeminiUDP: park refused, the mount does not answer over UDP" << sendLog;
+		return -1;
+	}
 	// a park is a goto to a position measured in axis counters that are
 	// not believed - see setPositionTrust()
 	if (positionLost ())
