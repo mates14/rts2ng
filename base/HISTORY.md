@@ -3245,6 +3245,57 @@ Verified with a raw protocol client, `rts2-focusd-dummy` and
 - a client alone, and a camera connecting to the focuser (`--focdev`)
   over two centralds: still authorized, no stuck warning in 90-120 s.
 
+## Scheduler trigger: rts2-sensor-scheduler (2026-10-16) [MJ]
+
+The SBT + D50 scheduler (`~/sch/rts2-scheduler.py`, github mates14/sch)
+ran from cron on lascaux every 20 min, and only planned for a telescope
+in ON. On 2026-10-15 D50 went ON at 18:37 after bad weather with an
+empty queue, the next run uploaded at 18:45 a plan whose first entry had
+started at 18:42, too late for the queuer's `next` window, and D50 idled
+on its idle target for that entry's whole 22-min slot. (The scheduler
+now commits to what starts within 5 min, and the queuer starts a late
+entry while idling; both fixed elsewhere.)
+
+Planning in standby was rejected (it would plan theories, and a standby
+D50 would win shared targets from an open SBT). Instead
+`rts2-sensor-scheduler` connects to the centrald of every telescope
+(`--server` each; `rts2-start` adds localhost), so it learns of a state
+change first hand, and runs the scheduler:
+- when a telescope becomes ready (ON at dusk or night, from
+  `setMasterState ()`, which `Block` would otherwise fold into one state);
+- on the `run` command (manual, later grbd after a GRB);
+- every `interval` (1200 s) while one is ready.
+
+`--telescope name:host` maps a telescope to its `--server` host
+(`Device::getCentraldConn ()` compares host names only).
+`--command` goes to `/bin/sh -c` and must log to a file itself: ConnFork
+turns every stderr line into an rts2 error. No exit status is
+available (`Block` reaps with `waitpid (-1, nullptr, ...)`).
+
+Only one run at a time, by MJ's choice: a trigger during a run sets
+`pending` and one new run starts from `idle ()` when the current one
+ends. Killing the running instance for a newer trigger was rejected:
+repeated triggers could kill every run before it uploads.
+
+Verified on stin with two `rts2-centrald -i` (A started ON with
+`reboot_on`, B off), a 6-20 s dummy command:
+- A ready at connect: run starts at once;
+- two concurrent `run` commands during a run: one held, one run 14 ms
+  after the first ended;
+- interval: runs 45 s after the last start, repeatedly;
+- B restarted with `reboot_on`: connection lost (not ready), back after
+  the 60 s reconnect, ON at night, run "b ready";
+- daemon stopped (SIGTERM) during a run: the run was killed.
+
+Found along the way:
+- `Daemon::endRunLoop ()` calls `exit (0)` from the signal handler, so a
+  ConnFork child outlives its daemon (its destructor never runs). Worked
+  around in the scheduler's own `endRunLoop ()`. Other ConnFork users
+  (imgproc, focusing) are probably affected the same way; not checked.
+- `rts2-sendcmd` exits only on the next event after the reply: its exit
+  is checked in `idle ()`. A `run` sent during a run returned only when
+  the run ended. Harmless, but slow for scripts.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

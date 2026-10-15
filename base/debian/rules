@@ -82,6 +82,7 @@ RTS2_BASE_BINARIES = \
 	sensord/avelab/rts2-sensor-avelab \
 	sensord/windrs/rts2-sensor-windrs \
 	sensord/external/rts2-sensor-external \
+	sensord/scheduler/rts2-sensor-scheduler \
 	dome/d50/rts2-dome-d50 \
 	dome/bart/rts2-dome-bart \
 	dome/zelio/rts2-dome-zelio \

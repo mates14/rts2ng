@@ -58,7 +58,7 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
 | `dome/` | `Dome`, `Ford` + `d50`, `bart`, `zelio`, `perek2m` (links `base_teld` for `perek2m::Tcs`) |
 | `focusd/` | `dummy`, `tefo`, `fli`, `aaf`, `optec`, `nstep` |
 | `filterd/` | `dummy`, `fli` |
-| `sensord/` | `system`, `nut`, `cloud4`, `bart-rain`, `aws-mlab`, `d50-wfunit`, `makak-shutter`, `external`, `fram-weather`, `windrs`, `avelab` |
+| `sensord/` | `system`, `nut`, `cloud4`, `bart-rain`, `aws-mlab`, `d50-wfunit`, `makak-shutter`, `external`, `fram-weather`, `windrs`, `avelab`, `scheduler` |
 | `script/`, `scriptexec/` | `rts2script` engine, `rts2-scriptexec` |
 | `monitor/`, `focusc/`, `sendcmd/` | `rts2-mon`, `rts2-focusc`, `rts2-sendcmd` |
 | `packaging/`, `debian/` | `rts2-start`/`rts2-stop`, systemd units, rsyslog/logrotate, `/etc/rts2` defaults |
@@ -189,6 +189,15 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   switches the instruments' power.
 - The default `--tcs-host` is the real alhena: a test must point at
   `teld/perek2m/telescoped_sim.py` on 127.0.0.1.
+
+**Scheduler trigger** (`sensord/scheduler`)
+- One run at a time. A trigger during a run (ready, `run`, interval) is
+  held and starts one new run when the current one ends; a run is never
+  killed for a newer trigger.
+- Each telescope's centrald state is kept apart in `setMasterState ()`:
+  `Block` keeps only one master state. A lost centrald counts as not ready.
+- `endRunLoop ()` kills the running scheduler: `Daemon::endRunLoop ()`
+  exits from the signal handler and no destructor runs.
 
 **Other drivers**
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,
