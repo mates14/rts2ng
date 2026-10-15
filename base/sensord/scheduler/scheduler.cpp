@@ -23,6 +23,7 @@
 #include "centralstate.h"
 
 #include <cmath>
+#include <unistd.h>
 #include <string>
 #include <vector>
 
@@ -145,6 +146,11 @@ SchedulerRun::~SchedulerRun ()
 
 int SchedulerRun::newProcess ()
 {
+	// The child inherits every socket of the daemon (forkedInstance () closes
+	// only the listening one): a run held all centrald and client connections
+	// open, so a connection SCH dropped stayed up for its peer until the run
+	// ended. Keep only stdin/stdout/stderr, which ConnFork set to its pipes.
+	closefrom (3);
 	execl ("/bin/sh", "sh", "-c", command.c_str (), (char *) NULL);
 	return -1;
 }

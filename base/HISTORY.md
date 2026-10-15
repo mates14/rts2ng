@@ -3292,6 +3292,15 @@ Found along the way:
   ConnFork child outlives its daemon (its destructor never runs). Worked
   around in the scheduler's own `endRunLoop ()`. Other ConnFork users
   (imgproc, focusing) are probably affected the same way; not checked.
+- A ConnFork child inherits every socket of its daemon:
+  `Daemon::forkedInstance ()` closes only the listening socket, the rest
+  stay open across `exec` (classic does the same). Seen on lascaux the
+  first night: the running scheduler held all of SCH's centrald and
+  client connections, so a connection SCH dropped stayed up for its
+  peer until the run ended. `SchedulerRun::newProcess ()` now calls
+  `closefrom (3)`; on stin the run then has only fds 0-2. imgproc and
+  focusing children probably hold their daemon's sockets too; a fix
+  for every ConnFork would go in `ConnFork::init ()`, not done.
 - `rts2-sendcmd` exits only on the next event after the reply: its exit
   is checked in `idle ()`. A `run` sent during a run returned only when
   the run ended. Harmless, but slow for scripts.

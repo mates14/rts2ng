@@ -198,6 +198,8 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   `Block` keeps only one master state. A lost centrald counts as not ready.
 - `endRunLoop ()` kills the running scheduler: `Daemon::endRunLoop ()`
   exits from the signal handler and no destructor runs.
+- The run closes every fd above 2 before `exec` (`closefrom (3)`): a
+  ConnFork child otherwise holds all the daemon's connections open.
 
 **Other drivers**
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,
