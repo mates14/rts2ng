@@ -132,6 +132,9 @@ class FordConn: public ConnSerial
 	private:
 		unsigned char stav_portu[3];
 
+		int readPortState (unsigned char c_port, unsigned char &state);
+		int readStablePort (unsigned char c_port);
+
 		int zapni_pin (unsigned char c_port, unsigned char pin);
 		int vypni_pin (unsigned char c_port, unsigned char pin);
 };

@@ -19,6 +19,9 @@
 
 #include "connford.h"
 
+#include <sys/ioctl.h>
+#include <termios.h>
+
 using namespace rts2core;
 
 #define CTENI_PORTU 0
@@ -52,37 +55,64 @@ struct typ_a
 };
 
 int
+FordConn::readPortState (unsigned char c_port, unsigned char &state)
+{
+	char cmd = STAV_PORTU | c_port;
+	char echo, st;
+
+	if (writePort (cmd))
+		return -1;
+	if (readPort (echo) != 1)
+		return -1;
+	if (readPort (st) != 1)
+		return -1;
+	if (echo != cmd)
+	{
+		logStream (MESSAGE_ERROR) << "Ford board: reply to the port " << (int) c_port << " query starts with 0x"
+			<< std::hex << std::setw (2) << std::setfill ('0') << (int) (unsigned char) echo
+			<< ", not with its echo, state discarded" << sendLog;
+		return -1;
+	}
+	state = st;
+	return 0;
+}
+
+int
 FordConn::zjisti_stav_portu ()
 {
-	char ta, tb;
-	char ca = STAV_PORTU | PORT_A;
+	// base note: classic read the two reply bytes of each port blindly and never
+	// flushed the line, so one stray byte (a power glitch on the board) shifted all
+	// later replies by one: the command echo was taken for the port state until the
+	// driver was restarted, and every pin write rewrote the whole port from it (on
+	// the BART roof a close then drives the motor in the opening direction). Stale
+	// input is dropped before each query, the echo is checked (the board echoes the
+	// command, 30 days of BART logs), and bytes left after the reply are an error.
+	// See UPSTREAM_BUGS.md, "Ford board replies are never resynchronised".
+	unsigned char ca, cb;
 
-	if (writePort (ca))
-		return -1;
-	if (readPort (ta) != 1)
-	  	return -1;
-	if (readPort (ca) != 1)
-		return -1;
+	tcflush (sock, TCIFLUSH);
 
-	char cb = STAV_PORTU | PORT_B;
-
-	if (writePort (cb))
+	if (readPortState (PORT_A, ca) || readPortState (PORT_B, cb))
+	{
+		tcflush (sock, TCIFLUSH);
 		return -1;
-	if (readPort (tb) != 1)
-	  	return -1;
-	if (readPort (cb) != 1)
-	  	return -1;
+	}
+
+	int pending = 0;
+	if (ioctl (sock, FIONREAD, &pending) == 0 && pending > 0)
+	{
+		logStream (MESSAGE_ERROR) << "Ford board: " << pending << " unexpected byte(s) after the port state, state discarded" << sendLog;
+		tcflush (sock, TCIFLUSH);
+		return -1;
+	}
 
 	if (stav_portu[PORT_A] != ca || stav_portu[PORT_B] != cb)
 	{
-		int p_ca = ca;
-		int p_cb = cb;
-		int p_ta = ta;
-		int p_tb = tb;
-		logStream (MESSAGE_DEBUG) << "A 0x" << std::hex << std::setw (2) << std::setfill ('0') << p_ta
-			<< " state 0x" << std::hex << std::setw (2) << std::setfill ('0') << (int) p_ca
-			<< " B 0x" << std::hex << std::setw (2) << std::setfill ('0') << (int) p_tb
-			<< " state 0x" << std::hex << std::setw (2) << std::setfill ('0') << (int) p_cb << sendLog;
+		// base note: classic printed the state bytes sign-extended (0xffffffe0)
+		logStream (MESSAGE_DEBUG) << "A 0x" << std::hex << std::setw (2) << std::setfill ('0') << (STAV_PORTU | PORT_A)
+			<< " state 0x" << std::hex << std::setw (2) << std::setfill ('0') << (int) ca
+			<< " B 0x" << std::hex << std::setw (2) << std::setfill ('0') << (STAV_PORTU | PORT_B)
+			<< " state 0x" << std::hex << std::setw (2) << std::setfill ('0') << (int) cb << sendLog;
 	}
 
 	stav_portu[PORT_A] = ca;
@@ -91,15 +121,35 @@ FordConn::zjisti_stav_portu ()
 	return 0;
 }
 
+int
+FordConn::readStablePort (unsigned char c_port)
+{
+	// base note: a pin write rewrites the whole port from the state read just
+	// before it, so a misread byte switches every relay on that port (motor,
+	// direction, the BART wall sockets). Two reads in a row must agree.
+	if (zjisti_stav_portu ())
+		return -1;
+	unsigned char first = stav_portu[c_port];
+	if (zjisti_stav_portu ())
+		return -1;
+	if (stav_portu[c_port] != first)
+	{
+		logStream (MESSAGE_ERROR) << "Ford board: port " << (int) c_port << " read 0x"
+			<< std::hex << std::setw (2) << std::setfill ('0') << (int) first << " and 0x"
+			<< std::hex << std::setw (2) << std::setfill ('0') << (int) stav_portu[c_port]
+			<< " in a row, not writing it" << sendLog;
+		return -1;
+	}
+	return 0;
+}
+
 
 int
 FordConn::zapni_pin (unsigned char c_port, unsigned char pin)
 {
 	unsigned char c;
-	int ret;
 
-	ret = zjisti_stav_portu ();
-	if (ret)
+	if (readStablePort (c_port))
 		return -1;
 
 	c = ZAPIS_NA_PORT | c_port;
@@ -119,9 +169,8 @@ int
 FordConn::vypni_pin (unsigned char c_port, unsigned char pin)
 {
 	unsigned char c;
-	int ret;
-	ret = zjisti_stav_portu ();
-	if (ret)
+
+	if (readStablePort (c_port))
 		return -1;
 
 	c = ZAPIS_NA_PORT | c_port;
@@ -216,7 +265,7 @@ FordConn::isOn (int c_port)
 
 FordConn::FordConn (const char *_devName, rts2core::Block * _master, bSpeedT _baudSpeed, cSizeT _cSize, parityT _parity, int _vTime):ConnSerial (_devName, _master, _baudSpeed, _cSize, _parity)
 {
-
+	stav_portu[PORT_A] = stav_portu[PORT_B] = stav_portu[PORT_C] = 0;
 }
 
 
