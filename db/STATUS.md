@@ -1022,3 +1022,12 @@ To run it: add a line to `/etc/rts2/services` and a config file.
 ```
 recordd    RECORD    --database stars --run-as rts2 /etc/rts2/record
 ```
+
+## postinst: images directory on a site without an rts2 group (2026-10-16) [MJ]
+
+Installing on D50 failed in configure with `chown: invalid group:
+'rts2:rts2'`. D50's `rts2` user predates the package and sits in `nogroup`,
+so the postinst skips `adduser --group` and no `rts2` group ever exists.
+The postinst now runs `chown rts2: /var/lib/rts2/images`. With no group
+named, chown takes the user's login group: `nogroup` at D50, `rts2` on a
+fresh install. Nothing else in the db packaging names the group.

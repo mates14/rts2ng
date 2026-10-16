@@ -24,6 +24,11 @@ rts2-db (0.1.0-9) UNRELEASED; urgency=medium
     but only the sql/update scripts had ever mentioned them - a database
     built from the create scripts had nowhere to record into.
 
+  * postinst: chown /var/lib/rts2/images to the rts2 user's login group
+    ("rts2:"), not "rts2:rts2". At D50 the rts2 user predates the package
+    and sits in nogroup, so there is no 'rts2' group and chown failed the
+    configure step.
+
  -- RTS2 Project <petr@rts2.org>  Sun, 31 Aug 2026 18:30:00 +0200
 
 rts2-db (0.1.0-8) UNRELEASED; urgency=medium

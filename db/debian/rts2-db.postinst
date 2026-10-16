@@ -48,8 +48,11 @@ case "$1" in
         # (/images/) is root-owned and silently unwritable otherwise - found
         # via a live install where images just never appeared, no error
         # logged (see the matching fitsfile.cpp fix).
+        # "user:" with no group takes the user's login group: a site whose
+        # rts2 user predates this package (D50: rts2 in nogroup) has no
+        # 'rts2' group, and "rts2:rts2" failed the whole configure there.
         mkdir -p /var/lib/rts2/images
-        chown "$RTS2_DB_USER:$RTS2_DB_USER" /var/lib/rts2/images
+        chown "$RTS2_DB_USER:" /var/lib/rts2/images
 
         if command -v pg_lsclusters >/dev/null 2>&1 && pg_lsclusters --no-header 2>/dev/null | grep -q .; then
             if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname = '$RTS2_DB_USER'\"" | grep -q 1; then
