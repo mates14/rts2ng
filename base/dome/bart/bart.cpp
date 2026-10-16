@@ -67,13 +67,21 @@ class Bart:public Ford
 {
 	private:
 		int handle_zasuvky (int zas);
+		int stopMotor ();
+		bool motorRunning (bool closing);
 
-		time_t domeTimeout;
+		// base note: classic shared one domeTimeout between opening and closing, so
+		// isOpened () called on a roof closing for more than 20 s (an open command)
+		// timed out and reported it opened
+		time_t openTimeout;
+		time_t closeTimeout;
+		bool switchFaultReported;
 
 		rts2core::ValueInteger *sw_state;
 		rts2core::ValueBool *socket1, *socket2, *socket3, *socket4, *socket5, *socket6;
 		rts2core::ValueBool *domeMotorPower;
 		rts2core::ValueSelection *domeMotorDirection, *domeSouthSwitchOpened, *domeSouthSwitchClosed;
+		rts2core::ValueBool *domeNorthSwitchOpened, *domeNorthSwitchClosed;
 
 	protected:
 		virtual int init ();
@@ -103,7 +111,9 @@ class Bart:public Ford
 
 Bart::Bart (int argc, char **argv):Ford (argc, argv)
 {
-	domeTimeout = 0;
+	openTimeout = 0;
+	closeTimeout = 0;
+	switchFaultReported = false;
 
 	createValue (sw_state, "sw_state", "state of dome switches", false, RTS2_DT_HEX);
 	createValue (domeMotorPower, "motor_power", "power to dome-motor", false, RTS2_DT_ONOFF);
@@ -116,6 +126,10 @@ Bart::Bart (int argc, char **argv):Ford (argc, argv)
 	createValue (domeSouthSwitchClosed, "south_roof_closed", "switch on south roof, closed state", false, RTS2_DT_ONOFF);
 	domeSouthSwitchClosed->addSelVal ("---");
 	domeSouthSwitchClosed->addSelVal ("CLOSED");
+	// base note: the north switches are wired (BART logs show their bits) but their
+	// meaning is not confirmed, so they are only shown, not used
+	createValue (domeNorthSwitchOpened, "north_roof_opened", "switch on north roof, opened state (not used)", false, RTS2_DT_ONOFF);
+	createValue (domeNorthSwitchClosed, "north_roof_closed", "switch on north roof, closed state (not used)", false, RTS2_DT_ONOFF);
 	createValue (socket1, "socket1", "wall socket #1 (camera C1)", false, RTS2_DT_ONOFF | RTS2_VALUE_WRITABLE);
 	createValue (socket2, "socket2", "wall socket #2 (camera C2)", false, RTS2_DT_ONOFF | RTS2_VALUE_WRITABLE);
 	createValue (socket3, "socket3", "wall socket #3 (camera C3)", false, RTS2_DT_ONOFF | RTS2_VALUE_WRITABLE);
@@ -128,19 +142,58 @@ Bart::~Bart ()
 {
 }
 
+// Switches the motor off and checks that it is off. Every end of a move and
+// every failed start goes through here.
+int Bart::stopMotor ()
+{
+	for (int i = 0; i < 3; i++)
+	{
+		if (VYP (MOTOR) == 0 && isOn (MOTOR) == 1)
+			return 0;
+		sleep (1);
+	}
+	logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "cannot switch the roof motor off" << sendLog;
+	return -1;
+}
+
+bool Bart::motorRunning (bool closing)
+{
+	if (zjisti_stav_portu ())
+		return false;
+	return getPortState (MOTOR) && getPortState (SMER) == closing;
+}
+
+// base note: classic ignored the result of every pin write and of isOn () (-1 on
+// a failed read counted as true). A direction write lost to one bad read let the
+// next ZAP (MOTOR) drive a closing roof open. Each step is now checked, and the
+// motor is stopped again unless it runs in the intended direction.
 int Bart::startOpen ()
 {
-	if (!isOn (KONCAK_OTEVRENI_JIH))
+	int notOpened = isOn (KONCAK_OTEVRENI_JIH);
+	if (notOpened < 0)
+		return -1;
+	if (!notOpened)
 		return endOpen ();
-	VYP (MOTOR);
+	if (stopMotor ())
+		return -1;
 	sleep (1);
-	VYP (SMER);
+	if (VYP (SMER) || isOn (SMER) != 1)
+	{
+		logStream (MESSAGE_ERROR) << "cannot set the roof motor direction to opening" << sendLog;
+		return -1;
+	}
 	sleep (1);
-	ZAP (MOTOR);
+	if (ZAP (MOTOR) || !motorRunning (false))
+	{
+		stopMotor ();
+		logStream (MESSAGE_ERROR) << "roof motor did not start in the opening direction, stopped" << sendLog;
+		return -1;
+	}
 	logStream (MESSAGE_DEBUG) << "oteviram strechu" << sendLog;
 
-	time (&domeTimeout);
-	domeTimeout += CAS_NA_OTEVRENI;
+	closeTimeout = 0;
+	time (&openTimeout);
+	openTimeout += CAS_NA_OTEVRENI;
 
 	return 0;
 }
@@ -149,32 +202,38 @@ long Bart::isOpened ()
 {
 	int ret;
 	ret = zjisti_stav_portu ();
-	if (domeTimeout != 0 && domeTimeout < time (NULL))
+	if (ret == 0 && getPortState (KONCAK_OTEVRENI_JIH))
+		return -2;
+	// the BART open switch rarely makes (2026-10 logs): most openings end here
+	if (openTimeout != 0 && openTimeout < time (NULL))
 	{
 		logStream (MESSAGE_ERROR) << "Timeout reached during dome opening, dome is regarded as opened" << sendLog;
 		return -2;
 	}
-	if (ret)
-		return ret;
-	if (isOn (KONCAK_OTEVRENI_JIH))
-		return USEC_SEC;
-	return -2;
+	// base note: classic returned the failed read (-1), and Dome then stopped the
+	// roof half open and marked it opened. One bad reply is not worth that; a
+	// failed read keeps the move going, and the timeout ends it.
+	return USEC_SEC;
 }
 
 int Bart::endOpen ()
 {
-	VYP (MOTOR);
+	int ret = stopMotor ();
 	zjisti_stav_portu ();		 //kdyz se to vynecha, neposle to posledni prikaz nebo znak
 	setTimeout (USEC_SEC);
-	domeTimeout = 0;
-	return 0;
+	openTimeout = 0;
+	return ret;
 }
 
 int Bart::startClose ()
 {
+	int notClosed;
 	int motor;
 	int smer;
-	if (!isOn (KONCAK_ZAVRENI_JIH))
+	notClosed = isOn (KONCAK_ZAVRENI_JIH);
+	if (notClosed < 0)
+		return -1;
+	if (!notClosed)
 		return endClose ();
 	motor = isOn (MOTOR);
 	smer = isOn (SMER);
@@ -187,17 +246,37 @@ int Bart::startClose ()
 	{
 		// closing in progress
 		if (!smer)
+		{
+			// base note: a close found running (at startup) had no timeout
+			if (closeTimeout == 0)
+			{
+				time (&closeTimeout);
+				closeTimeout += CAS_NA_OTEVRENI;
+			}
 			return 0;
+		}
 		// let it go to open state and then close it..
+		// (kept as classic: the roof may have to finish opening before it can
+		// reverse; to be tested on site. Dome retries the close every 30 s.)
 		return -1;
 	}
-	ZAP (SMER);
+	if (ZAP (SMER) || isOn (SMER) != 0)
+	{
+		logStream (MESSAGE_ERROR) << "cannot set the roof motor direction to closing" << sendLog;
+		return -1;
+	}
 	sleep (1);
-	ZAP (MOTOR);
+	if (ZAP (MOTOR) || !motorRunning (true))
+	{
+		stopMotor ();
+		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "roof motor did not start in the closing direction, stopped" << sendLog;
+		return -1;
+	}
 	logStream (MESSAGE_DEBUG) << "zaviram strechu" << sendLog;
 
-	time (&domeTimeout);
-	domeTimeout += CAS_NA_OTEVRENI;
+	openTimeout = 0;
+	time (&closeTimeout);
+	closeTimeout += CAS_NA_OTEVRENI;
 
 	return 0;
 }
@@ -206,34 +285,35 @@ long Bart::isClosed ()
 {
 	int ret;
 
-	if (domeTimeout != 0 && domeTimeout < time (NULL))
-	{
-		logStream (MESSAGE_ERROR) << "Timeout reached during dome closing. Aborting dome closing." << sendLog;
+	ret = zjisti_stav_portu ();
+	if (ret == 0 && getPortState (KONCAK_ZAVRENI_JIH))
 		return -2;
+
+	// base note: classic returned -2 here, which Dome takes for "closed": a roof
+	// that never reached the switch was logged "dome closed" and, through the
+	// domeCloseStart () probe, the motor was left running (BART, 2026-09-15). It
+	// is an error now, so Dome stops the motor, retries and reports it.
+	if (closeTimeout != 0 && closeTimeout < time (NULL))
+	{
+		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "roof did not reach the closed switch within " << CAS_NA_OTEVRENI << " s" << sendLog;
+		return -1;
 	}
 
-	ret = zjisti_stav_portu ();
-	if (ret)
-		return ret;
-	if (isOn (KONCAK_ZAVRENI_JIH))
-		return USEC_SEC;
-	return -2;
+	// a failed read while closing keeps the motor going; the timeout ends it
+	return USEC_SEC;
 }
 
 int Bart::endClose ()
 {
-	int motor;
-	motor = isOn (MOTOR);
-	domeTimeout = 0;
-	if (motor == -1)
-		return -1;
-	if (motor)
-		return 0;
-	VYP (MOTOR);
+	closeTimeout = 0;
+	// base note: classic switched the motor off only when it read it as running,
+	// so a failed or wrong read left it on
+	int ret = stopMotor ();
 	sleep (1);
-	VYP (SMER);
+	if (VYP (SMER))
+		logStream (MESSAGE_ERROR) << "cannot reset the roof motor direction" << sendLog;
 	zjisti_stav_portu ();
-	return 0;
+	return ret;
 }
 
 int Bart::init ()
@@ -248,9 +328,11 @@ int Bart::init ()
 	if (ret)
 		return -1;
 
-	if (isOn (KONCAK_OTEVRENI_JIH) && !isOn (KONCAK_ZAVRENI_JIH))
+	bool opened = getPortState (KONCAK_OTEVRENI_JIH);
+	bool closed = getPortState (KONCAK_ZAVRENI_JIH);
+	if (closed && !opened)
 		maskState (DOME_DOME_MASK, DOME_CLOSED, "dome is closed");
-	else if (!isOn (KONCAK_OTEVRENI_JIH) && isOn (KONCAK_ZAVRENI_JIH))
+	else if (opened && !closed)
 		maskState (DOME_DOME_MASK, DOME_OPENED, "dome is opened");
 
 	return 0;
@@ -264,11 +346,13 @@ int Bart::handle_zasuvky (int zas)
 		int zasuvka_num = zasuvky_index[i];
 		if (zasuvky_stavy[zas][i] == ZAS_VYP)
 		{
-			ZAP (zasuvka_num);
+			if (ZAP (zasuvka_num))
+				logStream (MESSAGE_ERROR) << "cannot switch off socket " << (i + 1) << sendLog;
 		}
 		else
 		{
-			VYP (zasuvka_num);
+			if (VYP (zasuvka_num))
+				logStream (MESSAGE_ERROR) << "cannot switch on socket " << (i + 1) << sendLog;
 		}
 		sleep (1);				 // doplnil Ford
 	}
@@ -360,6 +444,18 @@ int Bart::info ()
 	domeMotorDirection->setValueInteger (getPortState (SMER));
 	domeSouthSwitchOpened->setValueInteger (getPortState (KONCAK_OTEVRENI_JIH));
 	domeSouthSwitchClosed->setValueInteger (getPortState (KONCAK_ZAVRENI_JIH));
+	domeNorthSwitchOpened->setValueBool (getPortState (KONCAK_OTEVRENI_SEVER));
+	domeNorthSwitchClosed->setValueBool (getPortState (KONCAK_ZAVRENI_SEVER));
+	if (getPortState (KONCAK_OTEVRENI_JIH) && getPortState (KONCAK_ZAVRENI_JIH))
+	{
+		if (!switchFaultReported)
+			logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "both south roof switches (opened and closed) are active, check the wiring" << sendLog;
+		switchFaultReported = true;
+	}
+	else
+	{
+		switchFaultReported = false;
+	}
 	socket1->setValueBool (!getPortState (ZASUVKA_1));
 	socket2->setValueBool (!getPortState (ZASUVKA_2));
 	socket3->setValueBool (!getPortState (ZASUVKA_3));
