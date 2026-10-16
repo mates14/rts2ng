@@ -31,6 +31,7 @@
 #define OPT_COMMAND     OPT_LOCAL + 901
 #define OPT_INTERVAL    OPT_LOCAL + 902
 #define OPT_TIMEOUT     OPT_LOCAL + 903
+#define OPT_READY_HOLD  OPT_LOCAL + 904
 
 namespace rts2sensord
 {
@@ -73,6 +74,12 @@ class SchedulerRun:public rts2core::ConnFork
  * run at a time: a trigger during a run is held, and a single new run
  * starts as soon as the current one ends, so the plan reflects the latest
  * state without killing a run halfway.
+ *
+ * A telescope becoming ready while nothing runs waits ready_hold (30 s)
+ * first, so that the other one, switched on a moment later, gets into the
+ * same plan. Of 155 nights both were switched on within 30 min of each
+ * other (2025-09 to 2026-10), the second followed within 30 s in 87, the
+ * median lag was 25 s. The run command and the interval do not wait.
  *
  * @author Martin Jelinek <mates@lascaux.asu.cas.cz>
  */
@@ -121,8 +128,12 @@ class Scheduler:public Sensor
 		rts2core::ValueInteger *runs;
 		rts2core::ValueDouble *interval;
 		rts2core::ValueInteger *timeout;
+		rts2core::ValueDouble *readyHold;
+		rts2core::ValueTime *holdUntil;
+		std::string holdReason;
 
 		void setReady (Telescope &t, bool ready);
+		void triggerReady (const std::string &reason);
 		void trigger (const std::string &reason);
 		void startRun (const std::string &reason);
 		bool anyReady ();
@@ -175,14 +186,20 @@ Scheduler::Scheduler (int argc, char **argv):Sensor (argc, argv)
 	interval->setValueDouble (1200);
 	createValue (timeout, "timeout", "[s] kill a run that takes longer", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 	timeout->setValueInteger (900);
+	createValue (readyHold, "ready_hold", "[s] wait after a telescope gets ready, for the other to follow", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
+	readyHold->setValueDouble (30);
+	createValue (holdUntil, "hold_until", "a run held for a telescope getting ready starts then", false);
 
 	addOption (OPT_TELESCOPE, "telescope", 1, "name:centrald, one per telescope (centrald as given to --server)");
 	addOption (OPT_COMMAND, "command", 1, "scheduler command, run by /bin/sh -c; it should log to a file");
 	addOption (OPT_INTERVAL, "interval", 1, "run at least every that many seconds while a telescope is ready (1200)");
 	addOption (OPT_TIMEOUT, "timeout", 1, "kill a run after that many seconds (900)");
+	addOption (OPT_READY_HOLD, "ready-hold", 1, "wait that many seconds after a telescope gets ready, for the other to follow (30)");
 
 	// state changes arrive at once, this is only for the periodic run
 	setIdleInfoInterval (10);
+	// idle () releases a held run; 10 s (the default) is coarse for a 30 s hold
+	setTimeout (USEC_SEC);
 }
 
 Scheduler::~Scheduler ()
@@ -223,6 +240,9 @@ int Scheduler::processOption (int opt)
 			break;
 		case OPT_TIMEOUT:
 			timeout->setValueCharArr (optarg);
+			break;
+		case OPT_READY_HOLD:
+			readyHold->setValueCharArr (optarg);
 			break;
 		default:
 			return Sensor::processOption (opt);
@@ -294,7 +314,28 @@ void Scheduler::setReady (Telescope &t, bool ready)
 	t.available->setValueBool (ready);
 	sendValueAll (t.available);
 	if (ready)
-		trigger (t.name + " ready");
+		triggerReady (t.name + " ready");
+}
+
+void Scheduler::triggerReady (const std::string &reason)
+{
+	// a run going on, or a hold of no length: the usual path
+	if (currentRun != NULL || !(readyHold->getValueDouble () > 0))
+	{
+		trigger (reason);
+		return;
+	}
+	if (!std::isnan (holdUntil->getValueDouble ()))
+	{
+		// the other telescope followed within the hold: one plan for both
+		holdReason += ", " + reason;
+		logStream (MESSAGE_INFO) << reason << ": joins the held run" << sendLog;
+		return;
+	}
+	holdUntil->setValueDouble (getNow () + readyHold->getValueDouble ());
+	holdReason = reason;
+	sendValueAll (holdUntil);
+	logStream (MESSAGE_INFO) << reason << ": planning in " << (int) readyHold->getValueDouble () << " s, so that a telescope switched on meanwhile joins" << sendLog;
 }
 
 int Scheduler::commandAuthorized (rts2core::Connection *conn)
@@ -311,7 +352,7 @@ int Scheduler::commandAuthorized (rts2core::Connection *conn)
 
 int Scheduler::info ()
 {
-	if (currentRun == NULL && !pending->getValueBool () && anyReady ()
+	if (currentRun == NULL && !pending->getValueBool () && std::isnan (holdUntil->getValueDouble ()) && anyReady ()
 		&& (std::isnan (lastStart->getValueDouble ()) || getNow () - lastStart->getValueDouble () >= interval->getValueDouble ()))
 		trigger ("interval");
 	return Sensor::info ();
@@ -321,7 +362,15 @@ void Scheduler::trigger (const std::string &reason)
 {
 	if (currentRun == NULL)
 	{
-		startRun (reason);
+		std::string r = reason;
+		if (!std::isnan (holdUntil->getValueDouble ()))
+		{
+			// run command or interval during a hold: the held trigger goes along now
+			r += ", " + holdReason;
+			holdUntil->setValueDouble (NAN);
+			sendValueAll (holdUntil);
+		}
+		startRun (r);
 		return;
 	}
 	if (!pending->getValueBool ())
@@ -388,6 +437,12 @@ void Scheduler::endRunLoop ()
 
 int Scheduler::idle ()
 {
+	if (currentRun == NULL && !std::isnan (holdUntil->getValueDouble ()) && getNow () >= holdUntil->getValueDouble ())
+	{
+		holdUntil->setValueDouble (NAN);
+		sendValueAll (holdUntil);
+		startRun (holdReason);
+	}
 	if (currentRun == NULL && pending->getValueBool ())
 	{
 		std::string reason = pendingReason->getValueString ();

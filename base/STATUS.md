@@ -198,6 +198,9 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   `Block` keeps only one master state. A lost centrald counts as not ready.
 - `endRunLoop ()` kills the running scheduler: `Daemon::endRunLoop ()`
   exits from the signal handler and no destructor runs.
+- A telescope getting ready while nothing runs waits `ready_hold` (30 s)
+  so that the other, switched on a moment later, joins the same run; the
+  `run` command and the interval never wait, and take a held trigger along.
 - The run closes every fd above 2 before `exec` (`closefrom (3)`): a
   ConnFork child otherwise holds all the daemon's connections open.
 

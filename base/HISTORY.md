@@ -3301,6 +3301,18 @@ Found along the way:
   `closefrom (3)`; on stin the run then has only fds 0-2. imgproc and
   focusing children probably hold their daemon's sockets too; a fix
   for every ConnFork would go in `ConnFork::init ()`, not done.
+- Both telescopes became ready within milliseconds after SCH started, and
+  it planned twice, the second plan the same. Now a telescope getting
+  ready while nothing runs waits `ready_hold` (writable, autosaved,
+  `--ready-hold`, 30 s) and the other joins. From the rtspy logs of both
+  hosts (2025-09 to 2026-10), 155 nights with both switched ON within
+  30 min of each other: the second followed within 5 s 9 times, 15 s 42,
+  30 s 87, 60 s 105; median 25 s. A hold H beats planning twice while
+  H < R/2 (R a run, 72-150 s on 2026-10-15). The automatic transitions do
+  not help: NIGHT starts at both within 10 ms, but DUSK (already ready)
+  starts 6-7 min apart. Tested on stin with a 10 s hold: two readies, one
+  run 10.9 s later (1 s idle timeout); a run command 3 s into a hold
+  started at once, with the held trigger, and no second run followed.
 - `rts2-sendcmd` exits only on the next event after the reply: its exit
   is checked in `idle ()`. A `run` sent during a run returned only when
   the run ended. Harmless, but slow for scripts.
