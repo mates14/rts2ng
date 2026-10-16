@@ -1711,3 +1711,46 @@ the devices keep the clients they had. rts2ng stores the centrald number
 from `auth` and matches on number and ID, and only on connections waiting
 for authorization.
 
+
+## Ford board replies are never resynchronised (`lib/rts2/connford.cpp`) [MJ 2026-10-17]
+
+`FordConn::zjisti_stav_portu ()` sends a query per port and reads two bytes
+back, echo and state, without checking the echo, and the port is flushed
+only at start (`flushSleepTime` -1, so not even after a read timeout). One
+stray byte on the line (a power glitch on the board) shifts every later reply
+by one for as long as the driver runs: the echoes (0x00, 0x01) are taken for
+the port states. Every pin write then rewrites the whole port from that
+(`zapni_pin`/`vypni_pin` read, OR/AND one bit, write all eight), so the motor,
+its direction and every other output on the port follow the garbage. On the
+BART roof (with the state seen as A=0x00 B=0x01) a close writes "direction
+closing" and then "motor on, direction opening": the roof opens, and in bad
+weather the close repeats every second, relay on/off, until the driver is
+restarted. Reproduced with a board simulator (`dome/tests/bart-bench`).
+rts2ng flushes input before each query, checks the echo (the real board
+echoes, BART logs), treats bytes left after the reply as an error, and
+writes a port only after two reads in a row agree.
+
+## BART roof: a close that times out is reported closed, motor left on (`src/dome/bart.cpp`) [MJ 2026-10-17]
+
+`Bart::isClosed ()` returns -2 when the 20 s timeout passes, which `Dome`
+takes for "closed": the state becomes `DOME_CLOSED`, the log says "dome
+closed" and nothing retries. Through the `domeCloseStart ()` probe (which
+calls `isClosed ()` but not `endClose ()`) the motor is not even switched
+off and the timeout never reset: at BART on 2026-09-15 the closed switch
+did not make and the close motor ran, on and off, for half an hour, each
+attempt logged "dome closed". Related, same file:
+- `endClose ()` switches the motor off only if it reads it as running; a
+  failed or wrong read leaves it on.
+- No pin write result and no `isOn ()` error (-1, which counts as true) is
+  checked. A direction write lost to one failed read lets the next
+  `ZAP (MOTOR)` drive a closing roof open.
+- One `domeTimeout` serves opening and closing: `isOpened ()` called on a
+  roof closing for more than 20 s (an open command) reports it opened.
+- A failed read while opening ends the opening (`Dome` stops the roof
+  where it is and marks it opened).
+
+rts2ng: a close timeout is an error (Dome stops the motor, retries 3 times,
+then EMERGENCY), the motor is always switched off and checked, every write
+and the direction are checked before and after the motor starts, separate
+open and close timeouts, a failed read during a move keeps it going until
+the timeout.

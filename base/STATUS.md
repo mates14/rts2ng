@@ -43,7 +43,8 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
   `fliusb-dkms`. There are no CMake `install()` rules; `debian/rules`
   copies binaries from the build tree, so a new binary must be added to
   `RTS2_BASE_BINARIES` (or the FLI/gxccd list) there.
-- Tests: `kernel/tests`, `teld/tests`, `dome/tests`. Most drivers are
+- Tests: `kernel/tests`, `teld/tests`, `dome/tests` (with the D50 and
+  BART roof benches, run by hand). Most drivers are
   verified by running them, not by ctest; there is no automated
   centrald + device integration test yet.
 
@@ -156,6 +157,20 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - `ConnREMOTES::init()` returns the real result and `D50::init()` checks it.
   A failed raw socket used to segfault.
 
+**Ford board and BART roof** (`dome/src/connford.cpp`, `dome/bart`;
+`UPSTREAM_BUGS.md` "Ford board replies are never resynchronised" and
+"BART roof: a close that times out ...", bench in `dome/tests/bart-bench`)
+- Every Ford query flushes stale input first, checks the echo and rejects
+  bytes left after the reply. A pin write rewrites the whole port, so it
+  happens only after two reads in a row agree. One stray byte used to
+  desync the board until a restart and drive a closing roof open.
+- A BART close that does not reach the closed switch in 20 s is an error
+  (`isClosed ()` -1), never "closed". The end of every move switches the
+  motor off and checks it; the direction is checked before and after the
+  motor starts.
+- An opening that times out counts as opened: the BART open switch rarely
+  makes (2026-10), so this is how the roof opens. [MJ 2026-10-17]
+
 **Gemini UDP** (`teld/gemini-udp`, SBT; operator notes in its `OPERATION.md`)
 - The startup handshake (boot menu, `:hW#`, clock, limits) runs in the
   caring loop and is re-checked periodically, so a mount that reboots under
@@ -257,6 +272,13 @@ it, and say which classes you added.
   (also possible after a centrald restart), fixed (HISTORY, "Authorization replies matched on the ID alone"). Data:
   `/var/log/rts2.log`, `~torman/rts2diag/` on lascaux. HISTORY,
   "Lost inter-daemon connections". [JS 2026-10-15]
+- BART roof, on site [MJ 2026-10-17]: the south open switch almost never
+  makes and the closed switch sometimes drops out (HISTORY, "BART roof").
+  With the fix a bad closed switch gives CRITICAL/EMERGENCY instead of a
+  silent "dome closed". To test there: whether the roof can reverse during
+  an opening (a close then is refused until it is open, classic, retried
+  every 30 s), what the north switch bits mean, the real travel time vs
+  the 20 s timeout.
 - `LTM1_1`/`LTM2_2` ignore binning.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on

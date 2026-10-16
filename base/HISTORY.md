@@ -3317,6 +3317,66 @@ Found along the way:
   is checked in `idle ()`. A `run` sent during a run returned only when
   the run ended. Harmless, but slow for scripts.
 
+## BART roof: Ford serial desync, close timeout, incident review (2026-10-17) [MJ]
+
+MJ asked for a review of `dome-bart`: the roof let rain in once, and a short
+on/off pulse during rain was known to open it and send it "bananas" until a
+full restart. Built `dome/tests/bart-bench` (Ford board simulator on a pty,
+the real driver and centrald) and read 30 days of `/var/log/rts2.log` on
+lascaux.
+
+Found and fixed (classic bugs, `UPSTREAM_BUGS.md` "Ford board replies are
+never resynchronised" and "BART roof: a close that times out ..."):
+- One stray byte desynchronises the Ford replies for good. Reproduced: the
+  close then drove the motor open, and in bad weather it was switched on
+  and off every second with the roof open. That is the "bananas until
+  restart". `connford.cpp` now flushes before each query, checks the echo,
+  rejects leftover bytes, and writes a port only after two agreeing reads.
+  This is shared with `dome-d50` (its bench passes).
+- `isClosed ()` timeout = "closed", motor left running; `endClose ()` stopping
+  the motor only when read as running; unchecked writes; shared timeout.
+  `bart.cpp` fixed as listed there.
+- The debug state line printed bytes sign-extended (`0xffffffe0`).
+- North switches shown as `north_roof_opened`/`north_roof_closed`, not
+  used: their bits are live at BART (0x10 with the roof closed, also with
+  south open), meaning not confirmed. Both south switches active at once is
+  reported as a wiring fault.
+
+What the BART logs show (2026-09-16 to 2026-10-16):
+- The board echoes each query (first byte always 0x00/0x01). No desync in
+  the 30 days.
+- The south open switch almost never makes: nearly every opening ends on
+  "Timeout reached during dome opening" with port A = 0x00. Opening works
+  on the 20 s timer, which is kept ("regarded as opened").
+- The closed switch drops out at times: on 2026-09-15 11:43:58 it went off
+  with the motor off; from 12:02 (rain from RAIN_D50) every close ran 20 s
+  and was logged "dome closed" for half an hour. A normal close takes
+  about 9 s (02:08 that day). On 2026-10-01 the roof sat with A = 0x00
+  before opening, and a close timed out the same way.
+
+The incident (MJ): centrald switched ON in bad weather but no rain
+reported, the roof started to open, OFF at once, and it stayed open.
+`startClose ()` refuses a close while the motor runs open ("let it go to
+open state"). Classic `domeCloseStart ()` then reported once and never
+retried, and with good weather reported nothing else asks for a close:
+reproduced with the classic binary on the bench. rts2ng retries every 30 s
+since 548edd6 (2026-10-09), and closes ~10 s after the open timeout on the
+bench. Classic does close once bad weather arrives (bench, centrald
+stopped), so the water also needs the rain to be missed or the close to
+fail (a desync or the closed-switch fault above). The incident is older
+than the logs; MJ's ON/OFF in the 30 days are not it. Refusing the close
+while opening is kept: MJ says the roof may have to finish opening before
+it can reverse; to be tested on site.
+
+Verified on the bench (open switch dead, closed switch dead, stray byte,
+byte inside a reply, ON/OFF during opening; see its README). Not verified
+on the hardware: everything. ctest 10/10, dome builds clean with the
+Debian hardening flags. The D50 bench (`dome-d50` shares connford.cpp):
+7/8, "close during slew" fails with "no 'dome closed'" (the close command
+never reached DOME, no `commandAuthorized`); unmodified master fails the
+same way on the same night (2026-10-17 00:30 CEST), so it is the bench, not
+this change. Not looked into further.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
