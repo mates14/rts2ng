@@ -12,6 +12,10 @@
 #   flags: o = the open switch never makes (as at BART), c = the closed switch never makes
 #   SIGUSR1: send one stray 0x00 byte now (a power glitch on the board's TX line)
 #   SIGUSR2: put one extra 0x00 byte in front of the next reply
+#   <link>.cmd: a file read (and removed) every 0.1 s, one command per line:
+#     manual on|off           the box selector: in manual the board's motor
+#                             relays are bypassed (the board does not see it)
+#     hand open|close|stop    the push buttons, effective in manual only
 import os, sys, time, select, signal, tty
 
 link = sys.argv[1]
@@ -31,6 +35,8 @@ latch = {0: 0x00, 1: 0x20}	# motor off, socket 6 (heating) off
 pending_write = None
 stray = [0]
 inreply = [0]
+manual = False
+hand = None	# None, "open", "close"
 t0 = time.time ()
 
 def log (msg):
@@ -54,10 +60,36 @@ def port_a ():
 	return v
 
 def motor ():
+	if manual:
+		return {"open": "OPENING (hand)", "close": "CLOSING (hand)"}.get (hand, "stopped (manual)")
 	b = latch[1]
 	if not (b & 0x40):
 		return "stopped"
 	return "CLOSING" if b & 0x80 else "OPENING"
+
+def read_cmds ():
+	global manual, hand
+	try:
+		with open (link + ".cmd") as f:
+			lines = f.read ().split ("\n")
+		os.unlink (link + ".cmd")
+	except FileNotFoundError:
+		return
+	for l in lines:
+		w = l.split ()
+		if w == ["manual", "on"]:
+			manual = True
+		elif w == ["manual", "off"]:
+			manual = False
+			hand = None
+		elif len (w) == 2 and w[0] == "hand" and w[1] in ("open", "close", "stop"):
+			hand = None if w[1] == "stop" else w[1]
+		elif w:
+			log ("*** unknown command %s" % l)
+			continue
+		else:
+			continue
+		log ("*** %s" % l)
 
 def end ():
 	return "CLOSED" if pos <= 0.0 else ("OPEN" if pos >= 1.0 else None)
@@ -71,9 +103,14 @@ while True:
 	now = time.time ()
 	dt = now - last
 	last = now
-	if latch[1] & 0x40:
+	read_cmds ()
+	# the hardware end switches cut the motor at both ends, hence the clamp
+	if manual:
+		if hand:
+			pos += (-dt if hand == "close" else dt) / travel
+	elif latch[1] & 0x40:
 		pos += (-dt if latch[1] & 0x80 else dt) / travel
-		pos = min (1.0, max (0.0, pos))
+	pos = min (1.0, max (0.0, pos))
 	if stray[0]:
 		stray[0] -= 1
 		os.write (m, b"\x00")

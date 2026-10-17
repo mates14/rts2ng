@@ -6,6 +6,8 @@
 #   bench.sh state on|off      switch centrald ON / OFF
 #   bench.sh stray|inreply     inject a stray byte / an extra byte in a reply
 #   bench.sh badweather        stop centrald (DOME then closes as in bad weather)
+#   bench.sh manual on|off     the box's manual/PC selector
+#   bench.sh hand open|close|stop  the push buttons (manual only)
 #   bench.sh log               roof and DOME messages
 #   bench.sh stop
 
@@ -62,6 +64,9 @@ EOF
 	badweather)
 		pkill -f "rts2-centrald -i --config $DIR/rts2.ini"
 		;;
+	manual|hand)
+		echo "$1 $2" >> "$DIR/ford.cmd"
+		;;
 	log)
 		grep -v "roof closed, travel" "$DIR/fordsim.log" | grep -E "motor|roof at|\*\*\*"
 		echo "-- DOME"
@@ -72,7 +77,7 @@ EOF
 		pkill -f "fordsim.py $DIR/ford"
 		;;
 	*)
-		sed -n '2,12p' "$0"
+		sed -n '2,14p' "$0"
 		exit 1
 		;;
 esac

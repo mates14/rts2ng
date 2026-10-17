@@ -8,7 +8,9 @@ Build first; the script uses `base/build` (override with `BUILD=`).
   real one, a roof 15 s end to end. Flags: `o` the open switch never makes
   (the state at BART in 2026-10: openings end on the 20 s timeout), `c` the
   closed switch never makes. It can inject a stray byte (`bench.sh stray`) or
-  an extra byte inside a reply (`bench.sh inreply`).
+  an extra byte inside a reply (`bench.sh inreply`). `manual on|off` and
+  `hand open|close|stop` (via `bench.sh`) are the box's selector and push
+  buttons: in manual the board's motor relays are bypassed.
 - `bench.sh`: start/stop, commands, centrald ON/OFF, bad weather (centrald
   stopped), `log` prints motor moves and DOME's messages.
 
@@ -23,4 +25,8 @@ Scenarios checked on 2026-10-17 (see `HISTORY.md`, "BART roof"):
     "roof did not reach the closed switch", motor stopped, 3 retries, EMERGENCY
 ./bench.sh start o; ./bench.sh state on; sleep 4; ./bench.sh state off
     close refused while opening, roof closes ~10 s after the open timeout
+./bench.sh start o; ./bench.sh manual on; ./bench.sh hand open; sleep 18;
+./bench.sh hand stop; sleep 50; ./bench.sh manual off
+    "roof found open" warning, a quiet close times out (no alarm), the
+    next one after manual off closes the roof
 ```
