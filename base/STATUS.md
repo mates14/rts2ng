@@ -69,7 +69,7 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
 
 | Site | Drivers |
 | --- | --- |
-| D50 (Ondřejov) | `camd-andor`, `focusd-tefo`, `teld-d50`, `dome-d50`, sensors `system`, `nut`, `cloud4`, `bart-rain`, `aws-mlab`, `d50-wfunit`. Still on classic RTS2; switch-over checklist in `D50_READINESS.md` |
+| D50 (Ondřejov) | `camd-andor`, `focusd-tefo`, `teld-d50`, `dome-d50`, sensors `system`, `nut`, `cloud4`, `bart-rain`, `aws-mlab`, `d50-wfunit`. On the rts2ng packages (`/usr/bin`, no classic in `/usr/local/bin`, seen 2026-10-17 [MJ]); the hardware checks of `D50_READINESS.md` still apply |
 | SBT/BART | `dome-bart`, `teld-gemini` / `teld-gemini-udp`, `focusd-aaf`, `sensor-bart-rain`, `sensor-aws-mlab` |
 | FRAM Los Leones | `focusd-aaf`, `sensor-fram-weather`, `dome-zelio`, `teld-lx200`, `sensor-nut`, `camd-gxccd` |
 | FRAM Paranal (brown, white) | `teld-paramount`, `dome-zelio`, `camd-gxccd`, `focusd-nstep`, `sensor-windrs`, `sensor-external` |
@@ -156,6 +156,13 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   (`Dome::closeFailed()`), then reported as critical.
 - `ConnREMOTES::init()` returns the real result and `D50::init()` checks it.
   A failed raw socket used to segfault.
+- `D50::isClosed ()` is also Dome's "closed already?" probe, at every idle
+  in bad weather: -2 only with the closed switch made and the opening motor
+  off, separate open/close timeouts cleared first thing in `endOpen ()` /
+  `endClose ()`, a close timeout is -1. A leftover timeout used to answer
+  every close in the rain with "dome closed". A mount found moving or
+  outside stops a running close. Motor writes are read back, motors running
+  at start are stopped. Timeout 40 s (travel 26-27 s). [MJ 2026-10-17]
 
 **Ford board and BART roof** (`dome/src/connford.cpp`, `dome/bart`;
 `UPSTREAM_BUGS.md` "Ford board replies are never resynchronised" and

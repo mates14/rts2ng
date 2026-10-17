@@ -1,6 +1,9 @@
 # D50: is rts2ng ready to replace classic RTS2? (teld-d50 + dome-d50)
 
-Report of 2026-10-09. Scope: the two daemons that must cooperate
+Report of 2026-10-09. [MJ 2026-10-17]: D50 has since moved to the rts2ng
+packages (running from 2026-10-12); the roof driver was reviewed again on
+2026-10-17 (`HISTORY.md`, "D50 roof review"). The hardware checks of section
+4 that were not done remain open. Scope: the two daemons that must cooperate
 without fault at D50 (Ondřejov, host lascaux50) - the mount `T0`
 (`rts2-teld-d50`) and the roof `DOME` (`rts2-dome-d50`). If they get it
 wrong, the telescope hits the roof or rain gets in.

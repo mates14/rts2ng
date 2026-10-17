@@ -1754,3 +1754,36 @@ then EMERGENCY), the motor is always switched off and checked, every write
 and the direction are checked before and after the motor starts, separate
 open and close timeouts, a failed read during a move keeps it going until
 the timeout.
+
+## D50 roof: a leftover move timeout reports an open roof closed (`src/dome/d50.cpp`) [MJ 2026-10-17]
+
+`D50` keeps one `timeToMoveMax` for opening and closing, and `endOpen ()` /
+`endClose ()` return on a failed board read before clearing it. `isClosed ()`
+tests that timeout before it reads the switch and returns -2 ("closed") when
+it has passed. `Dome::domeCloseStart ()` calls `isClosed ()` to ask whether
+the roof is closed already, at every idle in bad weather: after one failed
+read at the end of a move, every close request in the rain was answered
+"dome closed" without the switch being read. Related, same file:
+- The probe returns -2 whenever the closed switch is made, also with the
+  opening motor running: a roof that has not left the switch 2 s after the
+  start of an opening is marked closed in bad weather, and Dome stops
+  watching the motor.
+- `startClose ()` checks the mount before it looks at a running close. In
+  bad weather (a call at every idle) a mount found moving returns 1: Dome
+  goes to "waiting" with the closing motor still on and nobody watching it.
+- Motor writes are not read back: a lost `VYP` of one direction followed by
+  `ZAP` of the other drives both outputs. `stop ()` acts on the last read
+  state, not the board.
+- `init ()` tests `isOn ()`, which is -1 (true) on a failed read, and leaves
+  a motor found running at start without any timeout.
+- The 30 s timeout against a 26-27 s travel (D50 logs 2026-10): a slow
+  opening ends "interrupted", short of the switch.
+- One failed read during a move aborts it.
+
+rts2ng: separate open and close timeouts, cleared before anything else;
+-2 needs the end switch and no motor running the other way; a close timeout
+is -1 (Dome retries, then EMERGENCY); a mount found moving or outside stops
+a running close (a mount that stops answering does not: it was inside when
+the close started); every motor write is read back, `stop ()` and the ends
+of moves switch both motors off and check it; motors found running at start
+are stopped; the timeout is 40 s; a failed read keeps the move going.

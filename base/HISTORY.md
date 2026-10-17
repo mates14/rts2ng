@@ -3412,6 +3412,49 @@ at once; dead closed switch with an ordinary close still gives 3 retries
 and EMERGENCY. ctest 10/10, clean with the hardening flags. Not verified on
 the hardware, in particular that manual bypasses the board's relays.
 
+## D50 roof review (2026-10-17) [MJ]
+
+MJ asked for a review of `dome-d50` after the Ford board fixes, to update
+both sites tonight. Found: D50 already runs the rts2ng packages (2026-10-16
+build installed, `/usr/bin`, no classic binary in `/usr/local/bin`; the
+running DOME and T0 were started on 2026-10-12, so they predate today's
+fixes). STATUS said "still on classic"; corrected. The debug log
+`/var/log/rts2-debug` is empty since 2026-10-12 15:18; the messages are in
+`/var/log/rts2.log` (lascaux50, group adm).
+
+Logs 2026-10-12..16 (DOME pid 1200474): 16 closes and 13 opens, all clean,
+no read errors, no timeouts. Port states only the expected ones (A 0x02
+open / 0x04 closed / 0x00 between, B 0x01 opening / 0x02 closing). Travel
+26-27 s each way against the 30 s timeout.
+
+Fixed in `dome/d50/d50.cpp` (details in `UPSTREAM_BUGS.md`, "D50 roof: a
+leftover move timeout ..."):
+- One shared move timeout, left set when `endOpen ()`/`endClose ()` failed
+  to read the board; `isClosed ()` tested it before the switch and returned
+  -2. Dome's `domeCloseStart ()` probe then said "closed" to every close in
+  the rain without reading the switch. Now separate open/close timeouts,
+  cleared first; -2 needs the switch made and the other motor off; a close
+  timeout is -1 (Dome stops, retries, EMERGENCY).
+- In bad weather `startClose ()` runs at every idle, also during a close: a
+  mount found moving returned 1 and left the motor running unwatched in
+  "waiting". A mount moving or outside now stops the closing roof (it
+  closes once the mount is at rest); a mount that stops answering lets the
+  running close finish (it was inside at the start and refuses moves).
+- Motor writes are read back (both outputs on was possible after a lost
+  `VYP`); ends of moves and `stop ()` switch both motors off and check it.
+- `init ()`: motors found running are stopped (systemd now restarts hung
+  daemons, so a restart mid-move is real); `isOn ()` -1 no longer counts as
+  a made switch.
+- Timeout 30 -> 40 s; one failed read no longer aborts a move.
+
+D50 bench: the "close during slew" failure of the earlier session was a
+flake, not the bench being broken: unmodified master passed 8/8 today, the
+scenario needs ~33 s of its 40 s window; widened to 60 s. New scenarios: the
+mount moving during a close stops the roof and it closes after; `kill -9`
+of DOME mid-move, the restarted daemon stops the motor and closes the roof
+(`bench.sh dome-restart`). ctest 10/10, clean with the hardening flags.
+Not verified on the hardware.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
