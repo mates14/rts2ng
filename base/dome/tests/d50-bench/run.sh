@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run the D50 dome bench scenarios (about 6 minutes) and report PASS/FAIL.
+# Run the D50 dome bench scenarios (about 9 minutes) and report PASS/FAIL.
 # Same environment as bench.sh. Exit status is the number of failed scenarios.
 
 HERE=$(dirname "$(readlink -f "$0")")
@@ -68,7 +68,8 @@ mark
 "$B" cmd T0 move "$(lst 30)" 49.9 > /dev/null &	# 30 deg at 2 deg/s
 sleep 2
 "$B" cmd DOME close > /dev/null
-if ! wait_for DOME "dome closed" 40; then
+# the slew (~15 s) and the close (12 s) take ~33 s: 40 s failed once (2026-10-17)
+if ! wait_for DOME "dome closed" 60; then
 	result "close during slew" 1 "no 'dome closed'"
 else
 	# TEL_MOVING is bit 0x1 of the state, i.e. an odd last hex digit
@@ -139,6 +140,47 @@ mark
 "$B" mount-up
 wait_for DOME "dome closed" 60
 result "mount back: roof closes by itself" $? "no 'dome closed' within 60 s"
+
+# 7. the mount starts to move while the roof closes: a close request then (in bad
+#    weather one comes at every idle) stops the roof until the mount is at rest
+open_roof
+wait_for DOME "dome opened" 20
+"$B" cmd T0 move "$(lst 0)" 49.9 > /dev/null	# the dummy restarted in 6: first move lands at once
+sleep 1
+"$B" cmd T0 X CAL_NUT = 1 > /dev/null
+mark
+"$B" cmd DOME close > /dev/null
+sleep 2
+"$B" cmd T0 move "$(lst 60)" 49.9 > /dev/null &	# 60 deg away
+sleep 2
+"$B" cmd DOME close > /dev/null
+if ! wait_for DOME "stopping the closing roof" 10; then
+	result "mount moving during a close stops the roof" 1 "no 'stopping the closing roof'"
+elif ! new fordsim | grep -q "motors B=0x00"; then
+	result "mount moving during a close stops the roof" 1 "the closing motor was not switched off"
+elif ! wait_for DOME "dome closed" 80; then
+	result "mount moving during a close: roof closes after the mount stops" 1 "no 'dome closed'"
+else
+	result "mount moving during a close stops the roof, closes after" 0
+fi
+wait
+
+# 8. the dome daemon restarted while the roof moves: the motor is stopped at start
+#    (classic left it running without a timeout)
+open_roof
+sleep 3
+mark
+"$B" dome-restart
+if ! wait_for DOME "a roof motor was running at start" 15; then
+	result "dome restart mid-move stops the motor" 1 "no 'a roof motor was running at start'"
+elif ! new fordsim | grep -q "motors B=0x00"; then
+	result "dome restart mid-move stops the motor" 1 "motor still on"
+else
+	result "dome restart mid-move stops the motor" 0
+fi
+"$B" cmd DOME close > /dev/null
+wait_for DOME "dome closed" 30
+result "after the restart the roof closes" $? "no 'dome closed'"
 
 echo "$failed failed, logs in $BENCH_DIR"
 exit $failed

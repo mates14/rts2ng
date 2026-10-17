@@ -9,12 +9,14 @@ root, nothing touched outside `$BENCH_DIR`:
   (its `CAL_NUT` stands in for the D50 mount's `inside_dome_limit`), and
   `rts2-bopwatch` printing every device's state and BOP bits on change.
 
-`./run.sh` runs the scenarios (about 6 minutes) and prints PASS/FAIL:
+`./run.sh` runs the scenarios (about 9 minutes) and prints PASS/FAIL:
 opening blocks exposures and telescope moves until the roof is open; closing
 waits for a slewing mount to stop; a jammed roof is retried 3 times and then
 reported; stopping an opening lifts the blocks; with the mount daemon dead the
 roof does not close, says so as a critical, and closes by itself once the
-mount is back.
+mount is back; a mount moving during a close stops the roof, which closes
+once the mount is at rest; a dome daemon killed mid-move stops the motor when
+restarted (`bench.sh dome-restart`).
 
 `./bench.sh start`, `./bench.sh cmd DOME open`, ... for poking by hand; logs
 (`DOME.log`, `T0.log`, `fordsim.log`, `bop.log`, `centrald.log`) are in
