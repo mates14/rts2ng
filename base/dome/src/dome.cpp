@@ -33,6 +33,7 @@ Dome::Dome (int in_argc, char **in_argv, int in_device_type, bool inhibit_auto_c
 
 	closeFailReported = 0;
 	closeRetries = 0;
+	quietClose = false;
 
 	createValue (weatherOpensDome, "weather_open", "if true, good weather can open dome", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 	weatherOpensDome->setValueBool (false);
@@ -157,9 +158,10 @@ int Dome::domeOpenStart ()
 	return 0;
 }
 
-int Dome::domeCloseStart ()
+int Dome::domeCloseStart (bool quiet)
 {
 	deleteTimers (EVENT_DOMECLOSE_RETRY);
+	quietClose = quiet;
 
 	if (isClosed () == -2)
 	{
@@ -299,9 +301,19 @@ int Dome::checkOpening ()
 			setTimeout (10 * USEC_SEC);	// this can be "overloaded" by a value in local endClose ();
 			endClose ();
 			infoAll ();
-			logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome closing interrupted" << sendLog;
 			maskState (DOME_DOME_MASK | DEVICE_BLOCK_OPEN | DEVICE_BLOCK_CLOSE, DOME_CLOSED | DEVICE_BLOCK_OPEN, "closing finished with error");
-			closeFailed ();
+			if (quietClose)
+			{
+				// nobody asked for this close and the weather is good: the roof
+				// may be under manual control, so no alarm; the caller retries
+				logStream (MESSAGE_INFO) << "dome did not close (manual control?), no alarm while the weather is good" << sendLog;
+				quietClose = false;
+			}
+			else
+			{
+				logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "dome closing interrupted" << sendLog;
+				closeFailed ();
+			}
 		}
 		if (ret == -2)
 		{

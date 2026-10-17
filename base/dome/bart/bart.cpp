@@ -20,6 +20,10 @@
 #include "domeford.h"
 
 #define CAS_NA_OTEVRENI              20
+// how often a roof that should be closed is checked against the closed switch
+#define ROOF_CHECK_INTERVAL          10
+// how often a roof found open is tried again (it may be under manual control)
+#define ROOF_RECLOSE_INTERVAL        120
 
 typedef enum
 {
@@ -77,6 +81,12 @@ class Bart:public Ford
 		time_t closeTimeout;
 		bool switchFaultReported;
 
+		// a roof found open while it should be closed was already reported;
+		// cleared when the closed switch makes again
+		bool roofFoundOpen;
+		double lastRoofCheck;
+		double nextQuietClose;
+
 		rts2core::ValueInteger *sw_state;
 		rts2core::ValueBool *socket1, *socket2, *socket3, *socket4, *socket5, *socket6;
 		rts2core::ValueBool *domeMotorPower;
@@ -88,6 +98,7 @@ class Bart:public Ford
 
 
 		virtual int info ();
+		virtual int idle ();
 
 		virtual int setValue (rts2core::Value * old_value, rts2core::Value * new_value);
 
@@ -114,6 +125,9 @@ Bart::Bart (int argc, char **argv):Ford (argc, argv)
 	openTimeout = 0;
 	closeTimeout = 0;
 	switchFaultReported = false;
+	roofFoundOpen = false;
+	lastRoofCheck = 0;
+	nextQuietClose = 0;
 
 	createValue (sw_state, "sw_state", "state of dome switches", false, RTS2_DT_HEX);
 	createValue (domeMotorPower, "motor_power", "power to dome-motor", false, RTS2_DT_ONOFF);
@@ -287,7 +301,10 @@ long Bart::isClosed ()
 
 	ret = zjisti_stav_portu ();
 	if (ret == 0 && getPortState (KONCAK_ZAVRENI_JIH))
+	{
+		roofFoundOpen = false;
 		return -2;
+	}
 
 	// base note: classic returned -2 here, which Dome takes for "closed": a roof
 	// that never reached the switch was logged "dome closed" and, through the
@@ -295,7 +312,7 @@ long Bart::isClosed ()
 	// is an error now, so Dome stops the motor, retries and reports it.
 	if (closeTimeout != 0 && closeTimeout < time (NULL))
 	{
-		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "roof did not reach the closed switch within " << CAS_NA_OTEVRENI << " s" << sendLog;
+		logStream (closingQuietly () ? MESSAGE_INFO : MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "roof did not reach the closed switch within " << CAS_NA_OTEVRENI << " s" << sendLog;
 		return -1;
 	}
 
@@ -463,6 +480,41 @@ int Bart::info ()
 	socket5->setValueBool (!getPortState (ZASUVKA_5));
 	socket6->setValueBool (!getPortState (ZASUVKA_6));
 	return Ford::info ();
+}
+
+// base note: classic read the end switches only on a state change or in bad
+// weather, so a roof opened by hand and then handed back to PC control stayed
+// open while the weather was good. The box does not report its manual/PC
+// selector, so a roof found open cannot be told from a visitor working it by
+// hand: it is reported once as a warning and then closed quietly every
+// ROOF_RECLOSE_INTERVAL s (in manual the relays are bypassed and the hardware
+// end switches stop the motor), so it closes soon after PC control is back.
+// In bad weather Dome closes it as always (retries, EMERGENCY).
+int Bart::idle ()
+{
+	// a failing ordinary close is left to Dome: a quiet one would cancel its
+	// retries and the EMERGENCY at their end
+	if ((getState () & DOME_DOME_MASK) == DOME_CLOSED && autoCloseEnabled () && !closeFailing ()
+		&& getNow () > lastRoofCheck + ROOF_CHECK_INTERVAL && isGoodWeather ())
+	{
+		lastRoofCheck = getNow ();
+		if (zjisti_stav_portu () == 0)
+		{
+			if (getPortState (KONCAK_ZAVRENI_JIH))
+			{
+				roofFoundOpen = false;
+			}
+			else if (!getPortState (MOTOR) && getNow () > nextQuietClose)
+			{
+				if (!roofFoundOpen)
+					logStream (MESSAGE_WARNING | MESSAGE_REPORTIT) << "roof found open while it should be closed (by hand or wind?), closing it, then every " << ROOF_RECLOSE_INTERVAL << " s" << sendLog;
+				roofFoundOpen = true;
+				nextQuietClose = getNow () + ROOF_RECLOSE_INTERVAL;
+				domeCloseStart (true);
+			}
+		}
+	}
+	return Ford::idle ();
 }
 
 int Bart::off ()

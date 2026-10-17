@@ -73,6 +73,11 @@ class Dome:public rts2core::Device
 		virtual int ready () { return 0; }
 
 	protected:
+		bool closingQuietly () { return quietClose; }
+		bool autoCloseEnabled () { return domeAutoClose == nullptr || domeAutoClose->getValueBool (); }
+		// an ordinary close failed: its retries are running or it gave up (EMERGENCY)
+		bool closeFailing () { return closeRetries > 0 || closeFailReported != 0; }
+
 		virtual int processOption (int in_opt);
 
 		virtual int init ();
@@ -86,7 +91,14 @@ class Dome:public rts2core::Device
 		// they call protected functions, which does the job
 		int domeOpenStart ();
 
-		int domeCloseStart ();
+		/**
+		 * Starts closing the dome.
+		 *
+		 * @param quiet  a close the dome was not asked for (a roof found open in good
+		 *               weather): a failure is not an alarm and is not retried here. Any
+		 *               later ordinary call (bad weather, a command) makes it loud again.
+		 */
+		int domeCloseStart (bool quiet = false);
 
 		int domeStop ();
 
@@ -195,6 +207,9 @@ class Dome:public rts2core::Device
 		 * Schedules a retry (up to DOME_CLOSE_MAX_RETRIES), then gives up loudly.
 		 */
 		void closeFailed ();
+
+		// the running close was started with domeCloseStart (true)
+		bool quietClose;
 
 		double centraldLastContactTime;
 
