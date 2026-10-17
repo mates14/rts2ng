@@ -20,7 +20,10 @@
 
 #include "domeford.h"
 
-#define TIME_TO_OPEN_DOME              30
+// base note: classic had 30 s; the roof takes 26-27 s each way (D50 logs,
+// 2026-10-12..16), too close: an opening that ends on the timeout is
+// "interrupted" and left short of the switch
+#define TIME_TO_OPEN_DOME              40
 // this is to surely cross the EMI-caused false signal of endswitch being connected
 #define MINIMAL_TIME_TO_MOVE              2
 
@@ -67,7 +70,24 @@ namespace rts2dome
 class D50:public Ford
 {
 	private:
-		time_t timeToMoveMax, timeToMoveMin;
+		// base note: classic shared one pair between opening and closing, and
+		// endOpen ()/endClose () returned before clearing it on a failed read. An
+		// expired leftover made every isClosed () return -2 without reading the
+		// switch, and Dome's domeCloseStart () took that for "already closed".
+		time_t timeToOpenMax, timeToOpenMin;
+		time_t timeToCloseMax, timeToCloseMin;
+
+		/**
+		 * Switches both motors off and checks they are off.
+		 *
+		 * @return 0 when both are off, -1 otherwise (logged as critical).
+		 */
+		int stopMotors ();
+
+		/**
+		 * Reads the board: 1 when only the given motor runs, 0 when not, -1 on error.
+		 */
+		int onlyMotor (int motor);
 
 		rts2core::ValueInteger *sw_state;
 		rts2core::ValueSelection *domeMotorState, *domeMotorStateOpening, *domeMotorStateClosing, *domeSwitchOpened, *domeSwitchClosed;
@@ -108,8 +128,8 @@ class D50:public Ford
 
 D50::D50 (int argc, char **argv):Ford (argc, argv)
 {
-	timeToMoveMax = 0;
-	timeToMoveMin = 0;
+	timeToOpenMax = timeToOpenMin = 0;
+	timeToCloseMax = timeToCloseMin = 0;
 
 	createValue (sw_state, "sw_state", "state of dome switches", false, RTS2_DT_HEX);
 	createValue (domeMotorState, "motor_state", "dome-motor state", false);
@@ -144,6 +164,31 @@ D50::~D50 ()
 {
 }
 
+int D50::stopMotors ()
+{
+	for (int i = 0; i < 3; i++)
+	{
+		if (switchOffPins (OTEVIRANI, ZAVIRANI) == 0 && zjisti_stav_portu () == 0
+			&& !getPortState (OTEVIRANI) && !getPortState (ZAVIRANI))
+			return 0;
+		sleep (1);
+	}
+	logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "cannot switch the roof motors off" << sendLog;
+	return -1;
+}
+
+int D50::onlyMotor (int motor)
+{
+	if (zjisti_stav_portu ())
+		return -1;
+	int other = (motor == OTEVIRANI) ? ZAVIRANI : OTEVIRANI;
+	return getPortState (motor) && !getPortState (other);
+}
+
+// base note: classic did not read back its motor writes (they have no reply). A
+// lost VYP of one direction followed by ZAP of the other drove both outputs. The
+// running motor is now checked to be off before the other one is started, and
+// the started one to be the only one on.
 int D50::startOpen ()
 {
 	int ret;
@@ -154,16 +199,22 @@ int D50::startOpen ()
 		return ret;	// error
 	}
 
-	if (getPortState (OTEVIRANI))
+	if (getPortState (OTEVIRANI) && !getPortState (ZAVIRANI))
 	{
 		// opening already in progress
+		if (timeToOpenMax == 0)
+		{
+			time (&timeToOpenMax);
+			timeToOpenMin = timeToOpenMax;
+			timeToOpenMax += TIME_TO_OPEN_DOME;
+		}
 		return 0;
 	}
 
 	if (getPortState (ZAVIRANI))
 	{
 		// the dome is just closing, but this is a decent dome, we can simply stop, wait a bit and then start the opening as requested
-		if (VYP (ZAVIRANI))
+		if (stopMotors ())
 		{
 			logStream (MESSAGE_ERROR) << "startOpen: cannot stop the closing motor" << sendLog;
 			return -1;
@@ -173,16 +224,18 @@ int D50::startOpen ()
 
 	// TODO: Pridat check na reseni zaparkovani dalekohledu atd.
 
-	if (ZAP (OTEVIRANI))
+	if (ZAP (OTEVIRANI) || onlyMotor (OTEVIRANI) != 1)
 	{
 		logStream (MESSAGE_ERROR) << "startOpen: cannot switch on the opening motor" << sendLog;
+		stopMotors ();
 		return -1;
 	}
 	logStream (MESSAGE_DEBUG) << "opening the dome" << sendLog;
 
-	time (&timeToMoveMax);
-	timeToMoveMin = timeToMoveMax + MINIMAL_TIME_TO_MOVE;
-	timeToMoveMax += TIME_TO_OPEN_DOME;
+	timeToCloseMax = timeToCloseMin = 0;
+	time (&timeToOpenMax);
+	timeToOpenMin = timeToOpenMax + MINIMAL_TIME_TO_MOVE;
+	timeToOpenMax += TIME_TO_OPEN_DOME;
 
 	return 0;
 }
@@ -191,25 +244,25 @@ long D50::isOpened ()
 {
 	int ret;
 	ret = zjisti_stav_portu ();
-	if (timeToMoveMax != 0 && timeToMoveMax < time (NULL))
+	if (ret == 0 && getPortState (KONCAK_OTEVRENI) && !getPortState (ZAVIRANI) && timeToOpenMin < time (NULL))
+		return -2;	// dome is open!
+	if (timeToOpenMax != 0 && timeToOpenMax < time (NULL))
 	{
 		logStream (MESSAGE_ERROR) << "A timeout reached during the dome opening!" << sendLog;
 		return -1;
 	}
+	// base note: classic aborted the opening on one failed read; the motor keeps
+	// going, the timeout ends it
 	if (ret)
-	{
 		logStream (MESSAGE_ERROR) << "isOpened: zjisti_stav_portu () error" << sendLog;
-		return ret;	// error
-	}
-	if (getPortState (KONCAK_OTEVRENI) && timeToMoveMin < time (NULL))
-		return -2;	// dome is open!
 	return USEC_SEC;
 }
 
 int D50::endOpen ()
 {
 	int ret;
-	if (VYP (OTEVIRANI))
+	timeToOpenMax = timeToOpenMin = 0;
+	if (stopMotors ())
 		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "endOpen: cannot switch off the opening motor!" << sendLog;
 	ret = zjisti_stav_portu ();	//kdyz se to vynecha, neposle to posledni prikaz nebo znak
 	if (ret)
@@ -218,7 +271,6 @@ int D50::endOpen ()
 		return ret;	// error
 	}
 
-	timeToMoveMax = 0;
 	setTimeout (2 * USEC_SEC);
 	if (!getPortState (KONCAK_OTEVRENI))
 		return -1;	// dome is not open properly :-(
@@ -236,13 +288,33 @@ int D50::startClose ()
 		return ret;	// error
 	}
 
+	bool closing = getPortState (ZAVIRANI) && !getPortState (OTEVIRANI);
+
 	if (!ignoreMountState->getValueBool ())
 	{
 		int mountState = getMountState ();
 		logStream (MESSAGE_DEBUG) << "startClose: mountState: " << mountState << sendLog;
+		// base note: in bad weather this runs at every idle, also while the roof
+		// closes. Classic then returned 1 with the motor running: Dome went to
+		// "waiting" and nothing watched the motor any more. A mount found moving
+		// or outside stops the roof now; a mount that stopped answering does not
+		// (it was inside when the close started and refuses moves while it runs).
+		if (closing && (mountState == 1 || mountState == 2))
+		{
+			logStream (MESSAGE_WARNING | MESSAGE_REPORTIT) << "mount not in the safe position, stopping the closing roof" << sendLog;
+			timeToCloseMax = timeToCloseMin = 0;
+			if (stopMotors ())
+				return -1;
+			closing = false;
+		}
 		switch (mountState)
 		{
 			case -1:
+				if (closing)
+				{
+					logStream (MESSAGE_WARNING) << "startClose: mount is not responding, letting the running close finish" << sendLog;
+					break;
+				}
 				logStream (MESSAGE_ERROR) << "startClose: Cannot close dome, mount is not responding (use 'ignore_mout_state' switch to bypass, but BE SURE the mount is really parked before!)." << sendLog;
 				return -1;
 				break;
@@ -265,16 +337,22 @@ int D50::startClose ()
 		}
 	}
 
-	if (getPortState (ZAVIRANI))
+	if (closing)
 	{
 		// closing already in progress
+		if (timeToCloseMax == 0)
+		{
+			time (&timeToCloseMax);
+			timeToCloseMin = timeToCloseMax;
+			timeToCloseMax += TIME_TO_OPEN_DOME;
+		}
 		return 0;
 	}
 
-	if (getPortState (OTEVIRANI))
+	if (getPortState (OTEVIRANI) || getPortState (ZAVIRANI))
 	{
 		// the dome is just opening, but this is a decent dome, we can simply stop, wait a bit and then start the closing as requested
-		if (VYP (OTEVIRANI))
+		if (stopMotors ())
 		{
 			logStream (MESSAGE_ERROR) << "startClose: cannot stop the opening motor" << sendLog;
 			return -1;
@@ -282,16 +360,18 @@ int D50::startClose ()
 		sleep (2);
 	}
 
-	if (ZAP (ZAVIRANI))
+	if (ZAP (ZAVIRANI) || onlyMotor (ZAVIRANI) != 1)
 	{
-		logStream (MESSAGE_ERROR) << "startClose: cannot switch on the closing motor" << sendLog;
+		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "startClose: cannot switch on the closing motor" << sendLog;
+		stopMotors ();
 		return -1;
 	}
 	logStream (MESSAGE_DEBUG) << "closing the dome" << sendLog;
 
-	time (&timeToMoveMax);
-	timeToMoveMin = timeToMoveMax + MINIMAL_TIME_TO_MOVE;
-	timeToMoveMax += TIME_TO_OPEN_DOME;
+	timeToOpenMax = timeToOpenMin = 0;
+	time (&timeToCloseMax);
+	timeToCloseMin = timeToCloseMax + MINIMAL_TIME_TO_MOVE;
+	timeToCloseMax += TIME_TO_OPEN_DOME;
 
 	return 0;
 }
@@ -300,21 +380,23 @@ long D50::isClosed ()
 {
 	int ret;
 
-	if (timeToMoveMax != 0 && timeToMoveMax < time (NULL))
+	// base note: also called by domeCloseStart () as "is it closed already?", in
+	// bad weather at every idle, so -2 needs the switch and no opening motor (the
+	// closed switch is still made in the first moments of an opening)
+	ret = zjisti_stav_portu ();
+	if (ret == 0 && getPortState (KONCAK_ZAVRENI) && !getPortState (OTEVIRANI) && timeToCloseMin < time (NULL))
+		return -2;	// dome is closed
+
+	// base note: classic returned -2 (closed) on the timeout
+	if (timeToCloseMax != 0 && timeToCloseMax < time (NULL))
 	{
 		logStream (MESSAGE_ERROR) << "A timeout reached during the dome closing." << sendLog;
-		return -2;
+		return -1;
 	}
 
-	ret = zjisti_stav_portu ();
+	// a failed read keeps the motor going, the timeout ends it
 	if (ret)
-	{
 		logStream (MESSAGE_ERROR) << "isClosed: zjisti_stav_portu () error" << sendLog;
-		return ret;	// error
-	}
-
-	if (getPortState (KONCAK_ZAVRENI) && timeToMoveMin < time (NULL))
-		return -2;	// dome is closed
 
 	return USEC_SEC;
 }
@@ -322,7 +404,8 @@ long D50::isClosed ()
 int D50::endClose ()
 {
 	int ret;
-	if (VYP (ZAVIRANI))
+	timeToCloseMax = timeToCloseMin = 0;
+	if (stopMotors ())
 		logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "endClose: cannot switch off the closing motor!" << sendLog;
 	ret = zjisti_stav_portu ();
 	if (ret)
@@ -331,21 +414,19 @@ int D50::endClose ()
 		return ret;	// error
 	}
 
-	timeToMoveMax = 0;
 	if (!getPortState (KONCAK_ZAVRENI))
 		return -1;	// dome is not closed properly :-(
 
 	return 0;
 }
 
+// base note: classic acted on the last read state (switching off only the motor
+// it believed on) and failed when none was
 int D50::stop ()
 {
-	if (getPortState (ZAVIRANI))
-		return VYP (ZAVIRANI);
-	if (getPortState (OTEVIRANI))
-		return VYP (OTEVIRANI);
-
-	return -1;
+	timeToOpenMax = timeToOpenMin = 0;
+	timeToCloseMax = timeToCloseMin = 0;
+	return stopMotors ();
 }
 
 int D50::getMountState ()
@@ -421,19 +502,23 @@ int D50::init ()
 		return -1;
 	}
 
-	if (isOn (KONCAK_OTEVRENI) && !isOn (KONCAK_ZAVRENI))
+	// base note: classic left a motor found running here without a timeout (and
+	// quit when both were on). With systemd restarting a hung daemon, a restart
+	// mid-move is real: stop it, Dome starts the move again under supervision.
+	if (getPortState (OTEVIRANI) || getPortState (ZAVIRANI))
+	{
+		logStream (MESSAGE_WARNING | MESSAGE_REPORTIT) << "a roof motor was running at start (B 0x" << std::hex << (int) getPortB () << "), stopping it" << sendLog;
+		if (stopMotors ())
+			return -1;
+	}
+
+	// base note: classic tested isOn (), which is -1 (true) on a failed read
+	if (!getPortState (KONCAK_OTEVRENI) && getPortState (KONCAK_ZAVRENI))
 		maskState (DOME_DOME_MASK, DOME_CLOSED, "dome is closed");
-	else if (!isOn (KONCAK_OTEVRENI) && isOn (KONCAK_ZAVRENI))
+	else if (getPortState (KONCAK_OTEVRENI) && !getPortState (KONCAK_ZAVRENI))
 		maskState (DOME_DOME_MASK, DOME_OPENED, "dome is open");
 	else
 		logStream (MESSAGE_ERROR) << "dome is neither open nor closed...?!?!" << sendLog;
-
-	if (getPortState (OTEVIRANI) && getPortState (ZAVIRANI))
-	{
-		logStream (MESSAGE_ERROR) << "Something is REALLY wrong, according to the ford-device, the motor is now working in both directions! It's better to quit now." << sendLog;
-		return -1;
-	}
-	// TODO: somehow solve a case when motor is moving at this point...? Simply stop it, maybe?
 
 	return 0;
 }
