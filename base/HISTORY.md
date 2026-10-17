@@ -3377,6 +3377,41 @@ never reached DOME, no `commandAuthorized`); unmodified master fails the
 same way on the same night (2026-10-17 00:30 CEST), so it is the bench, not
 this change. Not looked into further.
 
+## BART roof: a roof found open is closed, manual control (2026-10-17) [MJ]
+
+MJ: in the dome there is a manual/PC selector, open/close buttons and a
+mushroom stop. A visitor may open the roof by hand and switch back to PC;
+the roof should then close. Classic (and Dome) read the end switches only on
+a state change or in bad weather, so with good weather it stayed open.
+
+The board does not see the selector: in the lascaux logs (2026-09-16 to
+10-17, the 09-15 log has rotated out) port A bits 0x20-0x80 are never set,
+nor is 0x01. So a roof found open cannot be told from a visitor at work or
+from wind. MJ: the hardware has its own end switches, which cut the motor
+even with the relay on; wiring the selector to a spare input is unlikely
+(nobody left who knows the box).
+
+Compromise agreed with MJ: `Bart::idle ()` checks the closed switch every
+10 s when the dome state is closed and the weather good. A roof found open
+with the motor off is reported once (warning) and closed with
+`domeCloseStart (true)`, a quiet close: if it fails, Dome logs an info line,
+no `closeFailed ()`, no alarm. Bart repeats it every 120 s until the closed
+switch makes, so the roof closes at most ~2 min after PC control is back.
+First version tried only once, which on the bench was spent while the
+visitor was still in manual. Bad weather, a command or a state change make
+the running close loud again (`domeCloseStart ()` resets the flag). The
+quiet close is skipped while an ordinary close is failing: on the bench it
+first jumped in between the retries and cancelled them, so the EMERGENCY
+never came (`Dome::closeFailing ()`). After an EMERGENCY there are no quiet
+closes either, so a dead closed switch does not click the relay forever.
+
+Bench (`fordsim.py` got `manual on|off` and `hand open|close|stop`): roof
+opened by hand in manual, one warning, the quiet close times out silently,
+back on PC the next attempt closes it; roof pushed open while on PC closes
+at once; dead closed switch with an ordinary close still gives 3 retries
+and EMERGENCY. ctest 10/10, clean with the hardening flags. Not verified on
+the hardware, in particular that manual bypasses the board's relays.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

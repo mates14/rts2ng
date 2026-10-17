@@ -170,6 +170,13 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   motor starts.
 - An opening that times out counts as opened: the BART open switch rarely
   makes (2026-10), so this is how the roof opens. [MJ 2026-10-17]
+- The box does not report its manual/PC selector (no port A bit moves), so
+  a BART roof found open while it should be closed (good weather, dome
+  state closed) is reported once as a warning and closed quietly every
+  120 s: a failure is no alarm, so a visitor working it by hand causes no
+  panic, and it closes soon after PC control is back. The quiet close stays
+  out while an ordinary close is failing (it would cancel the retries and
+  the EMERGENCY). Bad weather closes as always. [MJ 2026-10-17]
 
 **Gemini UDP** (`teld/gemini-udp`, SBT; operator notes in its `OPERATION.md`)
 - The startup handshake (boot menu, `:hW#`, clock, limits) runs in the
@@ -278,7 +285,8 @@ it, and say which classes you added.
   silent "dome closed". To test there: whether the roof can reverse during
   an opening (a close then is refused until it is open, classic, retried
   every 30 s), what the north switch bits mean, the real travel time vs
-  the 20 s timeout.
+  the 20 s timeout; that manual really bypasses the board's motor relays
+  (the quiet close drives them while a visitor works the roof).
 - `LTM1_1`/`LTM2_2` ignore binning.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
