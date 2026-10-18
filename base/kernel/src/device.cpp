@@ -283,6 +283,10 @@ void DevConnectionMaster::connConnected ()
 		}
 	}
 	setConnState (CONN_AUTH_PENDING);
+	// base note: an authorize for a client queSent while the link was down
+	// went to no socket and is the running command - fail it, or the
+	// register waits behind it for ever (see connectionError)
+	failSentCommand ();
 	queSend (new CommandRegister (getMaster (), getCentraldNum (), device_name, device_type, device_host, device_port));
 }
 
@@ -296,6 +300,14 @@ void DevConnectionMaster::connectionError (int last_data_size)
 	if (!isConnState (CONN_BROKEN))
 	{
 		setConnState (CONN_BROKEN);
+		// base note: a command sent before the link broke (the register
+		// itself, or an authorize for a client) never gets its reply, but
+		// stays the running command; classic keeps it, so after the
+		// reconnect queSend puts the new register behind it, never to be
+		// sent, and the device stays unregistered with this centrald for
+		// good (BART sensors with D50, 2026-10-17). Fail it now, while
+		// its handlers still act on the broken link.
+		failSentCommand ();
 		master->centraldConnBroken (this);
 		time (&nextTime);
 		nextTime += 60;

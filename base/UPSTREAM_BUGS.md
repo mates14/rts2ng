@@ -1712,6 +1712,22 @@ from `auth` and matches on number and ID, and only on connections waiting
 for authorization.
 
 
+## A reply lost with a broken centrald link blocks the next register (`lib/rts2/device.cpp`, `connection.cpp`) [JS 2026-10-18]
+
+`DevConnectionMaster::connectionError ()` leaves the running command in
+place. If the link to centrald breaks after a command was sent (the
+`register` itself, or an `authorize` for a client), its reply never comes.
+After the reconnect, `connConnected ()` queSends the new `register`, and
+`Connection::queSend ()` puts it behind that running command, so it is
+never sent. An `authorize` queSent while the link is down goes to no
+socket and counts as sent too. The device then stays unregistered with
+that centrald until it is restarted, logging nothing. Seen at BART: the
+weather sensors that also report to the D50 centrald were missing there
+for a day after both centralds restarted, and again after a network
+outage. centrald meanwhile counts the half-open connection's bad weather
+under an empty name. rts2ng fails a sent running command when the link
+breaks and again on reconnect (`Connection::failSentCommand ()`).
+
 ## Ford board replies are never resynchronised (`lib/rts2/connford.cpp`) [MJ 2026-10-17]
 
 `FordConn::zjisti_stav_portu ()` sends a query per port and reads two bytes

@@ -97,6 +97,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   which logs who and why; do not call `connectionError ()` directly from
   Connection's error paths. `ConnFork` opts out via `logsDrops ()`.
   [JS 2026-10-15]
+- When a device's link to centrald breaks, and again before the register on
+  a reconnect, a running command that was already sent is failed
+  (`Connection::failSentCommand ()`). Otherwise the register waits behind
+  it for ever and the device stays off that centrald. [JS 2026-10-18]
 - DEBUG messages reach neither syslog nor centrald unless the daemon runs
   with `--debug` (`Daemon::sendMessage`, `Device::sendMessage`).
   [JS 2026-10-15]
@@ -291,7 +295,10 @@ it, and say which classes you added.
   to a slow peer; a lost authorization handshake leaves the connection in
   `CONN_AUTH_PENDING` for ever (warned after 60 s, never retried). One
   stuck authorization at BART was an ID collision between two centralds
-  (also possible after a centrald restart), fixed (HISTORY, "Authorization replies matched on the ID alone"). Data:
+  (also possible after a centrald restart), fixed (HISTORY, "Authorization replies matched on the ID alone"). Devices
+  that never registered again with a second centrald, after a reply lost
+  with the link, fixed (HISTORY, "A lost reply keeps a device off a second
+  centrald"). Data:
   `/var/log/rts2.log`, `~torman/rts2diag/` on lascaux. HISTORY,
   "Lost inter-daemon connections". [JS 2026-10-15]
 - BART roof, on site [MJ 2026-10-17]: the south open switch almost never

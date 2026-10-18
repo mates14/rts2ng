@@ -445,6 +445,14 @@ class Connection:public Object
 		void queClear (bool running = false);
 
 		/**
+		 * Fail and delete the running command if it was already sent.
+		 * For a connection opened again: a command sent on the previous
+		 * socket never gets its reply, and would hold the que for ever.
+		 * Commands still in the que are kept.
+		 */
+		void failSentCommand ();
+
+		/**
 		 * Called when connection will be deleted from system to
 		 * remove any possible reference to this connection.
 		 *

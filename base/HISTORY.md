@@ -3478,6 +3478,45 @@ repeats); the real check is D50: no `EXPTIME < 0.1` with `SCRIPREP` >= 1
 after the update. Wrong filters (a dark filter, failed astrometry) are a
 separate problem, not traced yet.
 
+## A lost reply keeps a device off a second centrald for good (2026-10-18) [JS]
+
+After the UPS and switch were replaced at BART (JS, 2026-10-18), its log showed
+RAIN_BART, WEATHER_BART and SCH "still waiting for authorization" on their link
+to the D50 centrald at 19:49-19:50, once the network was back. The D50 centrald
+(`info` as a client) had none of the three registered; BART held three open but
+unregistered TCP connections into it. RAIN_BART and WEATHER_BART had never
+registered there since both centralds were restarted on 2026-10-17 15:02: the
+sensors' first register went to the old D50 centrald as it was stopping.
+
+Cause, classic: `DevConnectionMaster::connectionError ()` keeps the running
+command. A command sent before the link broke (the register itself, or an
+`authorize` for a client) never gets its reply, and after the reconnect
+`queSend ()` puts the new register behind it, so the register is never sent.
+An `authorize` queSent while the link is down does the same: it goes to no
+socket and counts as sent. That is likely how SCH stuck, because KAFKA on D50
+reconnected to it throughout the outage. Side effect on D50 at 19:50:39: such a
+half-open connection is unnamed and has no type in centrald, but it still carries the
+device's state. centrald counted its bad weather ("received bad weather from
+claiming that : 'device ready'", empty name) and sent D50, which was ON, to
+standby with the roof closed, until JS switched it on at 19:53:57.
+
+Fixed: `Connection::failSentCommand ()` fails and deletes a running command
+that was already sent, with a warning naming it. `DevConnectionMaster` calls it
+when the link breaks, while the handlers still act on the broken link
+(`CommandRegister`'s failure ends the connection), and again before the
+register on a reconnect, for an `authorize` sent while the link was down.
+Commands still in the queue are kept, as before.
+
+Verified with centrald A and B and `focusd-dummy --server B --server A`
+(scripts not kept). Three cases: the register in flight (B
+stopped, then killed and started again); an `authorize` in flight (a client
+with a key from B, B stopped, then killed and restarted); and an `authorize`
+sent while B was down. Without the fix the focuser is never on the new B and
+logs "still waiting for authorization". With it, all three re-register within
+the 60 s retry. ctest passes. Not changed: centrald still counts the weather of an
+unregistered connection, and the client whose `authorize` was dropped stays
+pending, as before.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

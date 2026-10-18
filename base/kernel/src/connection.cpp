@@ -1399,6 +1399,19 @@ void Connection::queClear (bool running)
 	commandQue.clear ();
 }
 
+void Connection::failSentCommand ()
+{
+	if (!runningCommand || runningCommandStatus != SEND)
+		return;
+	Command *cmd = runningCommand;
+	runningCommand = nullptr;
+	logStream (MESSAGE_WARNING) << "connection " << dropLabel () << ": command '" << cmd->getText ()
+		<< "' got no reply before the connection was lost, dropped" << sendLog;
+	commandReturn (cmd, DEVDEM_E_SYSTEM);
+	cmd->commandReturn (DEVDEM_E_SYSTEM, this);
+	delete cmd;
+}
+
 void Connection::deleteConnection (Connection *conn)
 {
 	// look if connection isn't entered among originators or controll connections..
