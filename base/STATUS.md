@@ -302,6 +302,12 @@ it, and say which classes you added.
   every 30 s), what the north switch bits mean, the real travel time vs
   the 20 s timeout; that manual really bypasses the board's motor relays
   (the quiet close drives them while a visitor works the roof).
+- Wheel moves the camera did not start (filterd `--daytime-filter` on DAY,
+  `--default-filter`, homing, a manual move) do not hold the camera, and its
+  `FILTA` follows only at its next `info ()`: frames in that window go
+  through the wrong filter with the old name in the header. Classic. Seen in
+  the past as dark-filter frames failing astrometry, not recently; left
+  alone on purpose. [MJ 2026-10-18]
 - `LTM1_1`/`LTM2_2` ignore binning.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
