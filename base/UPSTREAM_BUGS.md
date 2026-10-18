@@ -1787,3 +1787,27 @@ a running close (a mount that stops answering does not: it was inside when
 the close started); every motor write is read back, `stop ()` and the ends
 of moves switch both motors off and check it; motors found running at start
 are stopped; the timeout is 40 s; a failed read keeps the move going.
+
+## A skipped "equal" value change is overwritten by a queued one: 0 s frames (`lib/rts2/daemon.cpp`, `src/camd/andor.cpp`) [MJ 2026-10-18]
+
+`Daemon::setCondValue ()` answers an `=` to the value a variable already holds
+with "ok" and does nothing, unless that same variable is in the queue. It
+compares with the current content while changes of *other* values are still
+queued, and a queued change can rewrite this one when it is finally applied.
+
+Andor shows it at every script repeat. The repeat starts while the camera
+reads out the last frame. `Andor::scriptEnds ()` sets `intExposure = 0`, which
+does not show in `exposure` (its `setTiming ()` fails with 20072 during the
+readout), and queues its ADCMODE reset. The new script's `exposure = 20`
+equals the shown value and is skipped. After the readout the queued ADCMODE
+runs `setTiming ()`, which writes `intExposure` (0, i.e. 1e-6 s) into
+`exposure`, and the waiting `expose` takes a 0 s frame. The script loses that
+frame (`for 5 { filter=g E 60 filter=r E 60 ... }` loses the g frame).
+D50 2026-10-14..16: 8 frames with `EXPTIME = 1e-06`, every one the first of a
+repeat (`SCRIPREP` >= 1), none on the first run of an observation, when the
+camera is idle at script start.
+
+rts2ng: while anything is queued, a change that would be queued in the
+current state is queued too, equal or not, so changes apply in the order they
+came (`kernel/tests/test_value_que.cpp`). `Andor::scriptEnds ()` no longer
+resets `intExposure`: every script sets the exposure.

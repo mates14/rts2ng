@@ -703,7 +703,12 @@ Andor::scriptEnds ()
   //kinCycleGap->setValueFloat (0.0);
   accNumber->setValueInteger (1);
   kinNumber->setValueInteger (1);
-  intExposure = 0;
+  // base note: classic also set intExposure = 0 here. That reset never
+  // showed in "exposure" until the next setTiming (), which a queued
+  // ADCMODE change ran after the readout - after the next script's
+  // "exposure = 20" had been skipped as equal. Every script repeat on D50
+  // began with a 0 s frame. Every script sets exposure anyway, so the
+  // last one stays. See UPSTREAM_BUGS.md.
   // set straight, not through setValue(), so setTiming() does not run here
   setExposureTotal (NAN);
   changeValue (acqMode, 1);     // Single scan default

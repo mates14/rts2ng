@@ -100,6 +100,12 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - DEBUG messages reach neither syslog nor centrald unless the daemon runs
   with `--debug` (`Daemon::sendMessage`, `Device::sendMessage`).
   [JS 2026-10-15]
+- While any value change is queued, `Daemon::setCondValue ()` queues a
+  change the current state would queue even when it equals the current
+  value. A queued change can rewrite other values when applied (Andor
+  ADCMODE -> `setTiming ()` -> `exposure`); skipping the "equal" set gave
+  0 s frames at every script repeat on D50. `kernel/tests/test_value_que`.
+  [MJ 2026-10-18]
 
 **Event loop**
 - Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
@@ -136,6 +142,8 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   CCD while idle. Both are deliberate.
 - Optional per-camera config (`instrume`, `telescop`, `origin`, `template`,
   `environment`) is read with the quiet lookups. Missing keys must not warn.
+- Andor: `scriptEnds ()` does not reset `intExposure` (hidden state that
+  `setTiming ()` later copies into `exposure`). [MJ 2026-10-18]
 
 **Telescope**
 - A correction whose move fails is dropped and `corr` restored

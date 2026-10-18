@@ -3455,6 +3455,29 @@ of DOME mid-move, the restarted daemon stops the motor and closes the roof
 (`bench.sh dome-restart`). ctest 10/10, clean with the hardening flags.
 Not verified on the hardware.
 
+## Zero-length exposures at script repeats (2026-10-18) [MJ]
+
+MJ reported frames with `EXPTIME = 9.99999997475243E-07` on D50 (C0, Andor),
+also seen with classic, and wrong filters in the past. All 8 frames of
+2026-10-14..16 are the first exposure of a script repeat (`SCRIPREP` >= 1).
+Traced 20261016205915-158 (target 1095) through `/var/log/rts2.log.1`: the
+repeat starts during the readout of the last frame; `Andor::scriptEnds ()`
+zeroes `intExposure` and queues ADCMODE; the next `exposure = 20` equals the
+shown value and is skipped; the queued ADCMODE runs `setTiming ()` after the
+readout, which sets `exposure` to 1e-6; the queued `expose` takes that. The
+"value exposure change was queued" seen right after is the next frame's set.
+Both pieces are classic (UPSTREAM_BUGS.md, "A skipped equal value change").
+
+Fixed both: `setCondValue ()` queues an equal change while anything is queued
+and the state would queue it, and Andor's `scriptEnds ()` keeps
+`intExposure`. New `kernel/tests/test_value_que` (fails without the kernel
+fix). Smoke run centrald + camd-dummy (`--read-sleep 1`) + filterd-dummy +
+scriptexec, `for 2 { filter=g E 2 filter=r E 1 filter=N E 3 }`: six frames,
+EXPTIME and FILTER right. That run does not reach the queue (scriptexec has no
+repeats); the real check is D50: no `EXPTIME < 0.1` with `SCRIPREP` >= 1
+after the update. Wrong filters (a dark filter, failed astrometry) are a
+separate problem, not traced yet.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.
