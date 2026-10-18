@@ -1200,7 +1200,14 @@ void Daemon::changeValue (Value * value, double nval)
 int Daemon::setCondValue (CondValue * old_value_cond, char op, Value * new_value)
 {
 	// que change if that's necessary
-	if ((op != '=' || !old_value_cond->getValue ()->isEqual (new_value) || queValues.contains (old_value_cond->getValue ()))
+	// base note: classic queued an '=' to the value's current content only
+	// when that same value was already queued. A queued change of another
+	// value can rewrite this one when it is applied (Andor ADCMODE ->
+	// setTiming () -> exposure), and the skipped set was then lost: D50 took
+	// 0 s frames at every script repeat. While anything is queued, a change
+	// this state would queue is queued too, so changes apply in the order
+	// they came. See UPSTREAM_BUGS.md.
+	if ((op != '=' || !old_value_cond->getValue ()->isEqual (new_value) || !queValues.empty ())
 		&& (queValueChange (old_value_cond, getState ()))
 		)
 	{
