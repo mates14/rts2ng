@@ -39,3 +39,12 @@
  * @return new target object. Caller must deallocate target object (delete it).
  */
 rts2db::Target *createTargetByString (std::string tar_string, bool debug);
+
+/**
+ * Return a new target without coordinates: an opportunity target with a
+ * NaN position, stored as NULL, which the executor observes without
+ * moving the telescope (darks, scripts run where the mount is).
+ *
+ * @return new target object. Caller must deallocate target object (delete it).
+ */
+rts2db::Target *createEmptyTarget ();

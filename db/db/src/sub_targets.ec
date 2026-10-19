@@ -119,6 +119,8 @@ int ConstTarget::saveWithID (bool overwrite, int tar_id)
 	EXEC SQL BEGIN DECLARE SECTION;
 	double d_tar_ra;
 	double d_tar_dec;
+	int d_tar_ra_ind;
+	int d_tar_dec_ind;
 	double d_tar_pm_ra;
 	double d_tar_pm_dec;
 	int d_tar_id;
@@ -132,6 +134,19 @@ int ConstTarget::saveWithID (bool overwrite, int tar_id)
 
 	d_tar_ra = position.ra;
 	d_tar_dec = position.dec;
+	// db note: a target without coordinates (NaN, or only one of the two
+	// known) is stored as NULL, never as NaN or 0 - classic wrote the NaN
+	// as is, so the database held both forms (and 0 0 in the seed rows),
+	// and the scheduler, which tests for NULL, saw NaN as a position
+	if (std::isnan (d_tar_ra) || std::isnan (d_tar_dec))
+	{
+		d_tar_ra_ind = d_tar_dec_ind = -1;
+		d_tar_ra = d_tar_dec = 0;
+	}
+	else
+	{
+		d_tar_ra_ind = d_tar_dec_ind = 0;
+	}
 
 	d_tar_pm_ra = proper_motion.ra;
 	d_tar_pm_dec = proper_motion.dec;
@@ -142,8 +157,8 @@ int ConstTarget::saveWithID (bool overwrite, int tar_id)
 		UPDATE
 			targets
 		SET
-			tar_ra = :d_tar_ra,
-			tar_dec = :d_tar_dec,
+			tar_ra = :d_tar_ra :d_tar_ra_ind,
+			tar_dec = :d_tar_dec :d_tar_dec_ind,
 			tar_pm_ra = :d_tar_pm_ra,
 			tar_pm_dec = :d_tar_pm_dec
 		WHERE
@@ -323,6 +338,8 @@ void FlatTarget::load ()
 	EXEC SQL BEGIN DECLARE SECTION;
 		double d_tar_ra;
 		double d_tar_dec;
+		int d_tar_ra_ind;
+		int d_tar_dec_ind;
 		int d_tar_id;
 		int db_target_flat = TARGET_FLAT;
 	EXEC SQL END DECLARE SECTION;
@@ -360,11 +377,15 @@ void FlatTarget::load ()
 	while (1)
 	{
 		EXEC SQL FETCH next FROM flat_targets INTO
-				:d_tar_ra,
-				:d_tar_dec,
+				:d_tar_ra :d_tar_ra_ind,
+				:d_tar_dec :d_tar_dec_ind,
 				:d_tar_id;
 		if (sqlca.sqlcode)
 			break;
+		// db note: a flat field without coordinates is skipped; without the
+		// indicators its NULL ended the fetch with an error
+		if (d_tar_ra_ind || d_tar_dec_ind || std::isnan (d_tar_ra) || std::isnan (d_tar_dec))
+			continue;
 		d_tar.ra = d_tar_ra;
 		d_tar.dec = d_tar_dec;
 		// we should be at least 10 deg above horizon to be considered..
@@ -446,6 +467,8 @@ void CalibrationTarget::load ()
 
 	double db_tar_ra;
 	double db_tar_dec;
+	int db_tar_ra_ind;
+	int db_tar_dec_ind;
 	int db_tar_id;
 	char db_type_id;
 	// cannot use TARGET_NAME_LEN, as it does not work with some ecpg veriosn
@@ -497,13 +520,17 @@ void CalibrationTarget::load ()
 	{
 		EXEC SQL FETCH next FROM pos_calibration
 		INTO
-			:db_tar_ra,
-			:db_tar_dec,
+			:db_tar_ra :db_tar_ra_ind,
+			:db_tar_dec :db_tar_dec_ind,
 			:db_tar_id,
 			:db_type_id,
 			:db_tar_name;
 		if (sqlca.sqlcode)
 			break;
+		// db note: a calibration field without coordinates is skipped, as
+		// in FlatTarget::load ()
+		if (db_tar_ra_ind || db_tar_dec_ind || std::isnan (db_tar_ra) || std::isnan (db_tar_dec))
+			continue;
 		struct ln_equ_posn pos;
 		pos.ra = db_tar_ra;
 		pos.dec = db_tar_dec;

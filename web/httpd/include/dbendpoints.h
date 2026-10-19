@@ -85,12 +85,17 @@ struct TargetUpdate
 	// TYPE_TERESTIAL, which is a legacy fixed-RA/Dec type despite its
 	// name - see STATUS.md's target-editor design note). Rejected for
 	// any other target type (e.g. EllTarget, whose position is derived
-	// from its orbit, not stored directly).
+	// from its orbit, not stored directly). NaN means "no coordinates"
+	// (stored as NULL, the telescope is not moved); a save or create
+	// must give both as numbers or both as NaN, never one of each.
 	const double *ra = nullptr;
 	const double *dec = nullptr;
 	// Proper motion, arcdeg/year - same ConstTarget-only restriction as ra/dec.
 	const double *pmRa = nullptr;
 	const double *pmDec = nullptr;
+	// Set when a ra/dec/pm_ra/pm_dec parameter was present but not a
+	// number: dbUpdateTarget ()/dbCreateTarget () refuse the request.
+	const std::string *paramError = nullptr;
 };
 
 /**

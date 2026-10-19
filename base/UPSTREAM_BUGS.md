@@ -1827,3 +1827,20 @@ rts2ng: while anything is queued, a change that would be queued in the
 current state is queued too, equal or not, so changes apply in the order they
 came (`kernel/tests/test_value_que.cpp`). `Andor::scriptEnds ()` no longer
 resets `intExposure`: every script sets the exposure.
+
+## Targets without coordinates: NaN stored, NULL breaks the flat and calibration search (`lib/rts2db/sub_targets.ec`, `src/db/newtarget.cpp`) [JS 2026-10-19]
+
+A target without coordinates was stored three ways:
+- `ConstTarget::saveWithID ()` writes a NaN position as float NaN;
+- the seed (`targets.sql`, until f1c9f6688 changed it to NULL) gave 0 0,
+  a real position. Type `o` target 3 is a plain ConstTarget and slews there;
+- NULL rows were made by hand or by f1c9f6688's seed.
+
+`FlatTarget::load ()` and `CalibrationTarget::load ()` fetch `tar_ra`/
+`tar_dec` without indicators. One NULL flat or calibration field ends the
+fetch with `-213 null value without indicator`, and the generic flat or
+"cannot locate any calibration target" follows. f1c9f6688's `-n` also
+writes NaN, not NULL. 95282de7b's `-m` name prompt sets `n_tar_name` to
+the `c_str ()` of a string local to the `if` block, used after it ends.
+rts2ng stores NULL, reads with indicators and skips such fields, and keeps
+the asked name in a member.

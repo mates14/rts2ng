@@ -3517,6 +3517,29 @@ the 60 s retry. ctest passes. Not changed: centrald still counts the weather of 
 unregistered connection, and the client whose `authorize` was dropped stays
 pending, as before.
 
+## Upstream RTS2 since the port; rts2-mon fixes (2026-10-19) [JS]
+
+Compared rts2ng with github.com/RTS2/rts2 master (last commit 2026-05-02).
+rts2ng is ported from upstream as of about June 2023 (it has e7f67c32f
+of 2023-06-02), not from `~jstrobl/rts2`, which lacks Karpov's
+2018-2022 work merged upstream in 2023. All 185 commits since the common
+base were matched against the tree. Older misses are either ported but
+rewritten (gxccd filter re-set after reinit), or in parts not ported
+(web/httpd rewritten, selector, grbd, miccd, CTA-FRAM dome, planewave,
+apc, python astrometry/focusing, JPEG previews) or reworked (executor
+queue). New since mid-2023:
+- ported now: `7cda35b5b` (rts2-mon: a leading `-` applies to the whole
+  d/m/s value; "-10d30m" read as -9.5), `331169f39` (Backspace as `^H`);
+  in db, `95282de7b` and `f1c9f6688` (`rts2-newtarget -m` name prompt,
+  `-n`; db/STATUS.md, "Targets without coordinates");
+- not needed: `817ef8590` (only gates a DEBUG line, which rts2ng no longer
+  logs without `--debug`), `f1dd40dbc` (multidev, unused), `7266388dd`
+  (TLE, not ported), `a52969145` (UTF-8 drawing in rts2-mon, cosmetic,
+  not taken), the rest Python, Java, build or unported drivers.
+
+The degree parser was checked on its own (`-10d30m` -> -10.5,
+`-0d30m` -> -0.5, `+5d15m36s` -> 5.26). rts2-mon was built, not run.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

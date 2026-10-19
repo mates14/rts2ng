@@ -45,7 +45,9 @@
 #define OPT_STATIC_DIR       OPT_LOCAL + 5
 #define OPT_BIND_ADDRESS     OPT_LOCAL + 6
 
+#include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -112,6 +114,7 @@ struct ParsedTargetUpdate
 	float priority = 0, bonus = 0;
 	bool enabled = false, interruptible = false;
 	double ra = 0, dec = 0, pmRa = 0, pmDec = 0;
+	std::string paramError;
 
 	rts2web::TargetUpdate toUpdate () const
 	{
@@ -128,9 +131,34 @@ struct ParsedTargetUpdate
 		if (hasDec) u.dec = &dec;
 		if (hasPmRa) u.pmRa = &pmRa;
 		if (hasPmDec) u.pmDec = &pmDec;
+		if (!paramError.empty ()) u.paramError = &paramError;
 		return u;
 	}
 };
+
+/**
+ * A coordinate parameter: empty means "no coordinates" (NaN), anything
+ * else must be a whole finite number. atof () used to turn an empty or
+ * garbled value into 0, a real position at RA 0, Dec 0.
+ */
+static double parseCoordParam (const char *name, const char *value, std::string &paramError)
+{
+	while (isspace ((unsigned char) *value))
+		value++;
+	if (*value == '\0')
+		return NAN;
+	char *end;
+	double v = strtod (value, &end);
+	while (isspace ((unsigned char) *end))
+		end++;
+	if (*end != '\0' || !std::isfinite (v))
+	{
+		if (paramError.empty ())
+			paramError = std::string (name) + " is not a number: '" + value + "'";
+		return NAN;
+	}
+	return v;
+}
 
 ParsedTargetUpdate parseTargetUpdate (struct MHD_Connection *connection)
 {
@@ -152,13 +180,13 @@ ParsedTargetUpdate parseTargetUpdate (struct MHD_Connection *connection)
 	if ((p.hasInterruptible = hasParam (connection, "interruptible")))
 		p.interruptible = strcmp (getParam (connection, "interruptible", "1"), "0") != 0;
 	if ((p.hasRa = hasParam (connection, "ra")))
-		p.ra = atof (getParam (connection, "ra", "0"));
+		p.ra = parseCoordParam ("ra", getParam (connection, "ra", ""), p.paramError);
 	if ((p.hasDec = hasParam (connection, "dec")))
-		p.dec = atof (getParam (connection, "dec", "0"));
+		p.dec = parseCoordParam ("dec", getParam (connection, "dec", ""), p.paramError);
 	if ((p.hasPmRa = hasParam (connection, "pm_ra")))
-		p.pmRa = atof (getParam (connection, "pm_ra", "0"));
+		p.pmRa = parseCoordParam ("pm_ra", getParam (connection, "pm_ra", ""), p.paramError);
 	if ((p.hasPmDec = hasParam (connection, "pm_dec")))
-		p.pmDec = atof (getParam (connection, "pm_dec", "0"));
+		p.pmDec = parseCoordParam ("pm_dec", getParam (connection, "pm_dec", ""), p.paramError);
 	return p;
 }
 #endif

@@ -42,6 +42,8 @@ keyRet NComWin::injectKey (int key)
 	{
 		case KEY_BACKSPACE:
 		case 127:
+		// base note: from upstream (331169f39), terminals that send ^H
+		case '\b':
 			getyx (comwin, y, x);
 			mvwdelch (comwin, y, x - 1);
 			break;

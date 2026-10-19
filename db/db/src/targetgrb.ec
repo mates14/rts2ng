@@ -396,6 +396,8 @@ int TargetGRB::isContinues ()
 	int db_tar_id = getTargetID ();
 	double db_tar_ra;
 	double db_tar_dec;
+	int db_tar_ra_ind;
+	int db_tar_dec_ind;
 	EXEC SQL END DECLARE SECTION;
 
 	struct ln_equ_posn pos;
@@ -408,8 +410,8 @@ int TargetGRB::isContinues ()
 			tar_ra,
 			tar_dec
 		INTO
-			:db_tar_ra,
-			:db_tar_dec
+			:db_tar_ra :db_tar_ra_ind,
+			:db_tar_dec :db_tar_dec_ind
 		FROM
 			grb,
 			targets
@@ -422,6 +424,10 @@ int TargetGRB::isContinues ()
 		logMsgDb ("TargetGRB::isContinues", MESSAGE_ERROR);
 		return -1;
 	}
+	// db note: a GRB without coordinates reads as NULL (an error without
+	// the indicators); nothing to compare, so no update either
+	if (db_tar_ra_ind || db_tar_dec_ind)
+		return 1;
 	getPosition (&pos, ln_get_julian_from_sys ());
 	if (pos.ra == db_tar_ra && pos.dec == db_tar_dec)
 		return 1;

@@ -2944,3 +2944,24 @@ camera. Not tried through Apache itself (no `/observ` login here).
       ProxyPass /observ/allsky-d65/ http://allsky-d65.asu.cas.cz:80/
       ProxyPassReverse /observ/allsky-d65/ http://allsky-d65.asu.cas.cz:80/
 - **Applied by the user** on lascaux; the image loads on BART's page.
+
+### Targets without coordinates in the API and the editor (2026-10-19) [JS]
+
+- **Bug**: the editor saved an empty or unreadable RA/Dec as `0`
+  (`params.set ('ra', ra ?? '0')`), and `parseTargetUpdate ()` read the
+  parameters with `atof ()`, so `ra=` or `ra=abc` became 0 too. Opening a
+  target without coordinates (18 GLORIA) and saving a name change would
+  store RA 0, Dec 0, a real position.
+- **Fix**: `ra`/`dec`/`pm_ra`/`pm_dec` are parsed strictly
+  (`parseCoordParam ()`). Empty means NaN, which is "no coordinates",
+  stored as NULL by `ConstTarget::saveWithID ()` (db, same date). Anything
+  else must be a whole finite number, or the request gets a 400 naming
+  the parameter. Save and create refuse one coordinate without the
+  other, and create accepts both empty. The editor sends empty fields as
+  empty, and stops with a message on unreadable text or only one of the
+  two.
+- Tested on lascaux: the new `rts2-httpd` on a private port against the
+  scratch DB `rts2test`, covering every case above through `curl`. The
+  editor's `readWhatFormParams ()` was run under `gjs` with a mocked form
+  for empty, sexagesimal, decimal, one-sided and garbled input. The
+  editor was not clicked through in a browser.

@@ -1031,3 +1031,50 @@ so the postinst skips `adduser --group` and no `rts2` group ever exists.
 The postinst now runs `chown rts2: /var/lib/rts2/images`. With no group
 named, chown takes the user's login group: `nogroup` at D50, `rts2` on a
 fresh install. Nothing else in the db packaging names the group.
+
+## Targets without coordinates: NULL, never 0 0 or NaN (2026-10-19) [JS]
+
+A target without coordinates is stored as NULL in `tar_ra`/`tar_dec` and is
+NaN in memory. The executor then does not move the telescope
+(`DevClientTelescopeExec::syncTarget ()` in base). Before, both
+databases held three forms. `rts2-newtarget` with an empty RA DEC wrote float NaN (18
+GLORIA, 60, 2000, 7019, ... at BART), some rows were NULL (BART 1, 13), and
+the seed gave the special targets and planets 0 0. 0 0 is a real
+position: target 3 "Focusing frames" (type `o`, a plain ConstTarget) and
+6 (before it picks a field) would slew there. MJ's scheduler
+(`~mates/sch`) tests `tar_ra is None` and took NaN for a position.
+
+- `ConstTarget::saveWithID ()` writes NULL when RA or Dec is NaN (both
+  NULL; one coordinate alone is no position).
+- `FlatTarget::load ()` and `CalibrationTarget::load ()` read with NULL
+  indicators and skip fields without coordinates. Classic's cursors had
+  none: one NULL row ended the search with `-213 null value without
+  indicator` (checked on lascaux with the d272f7e binary) and the generic
+  flat was used. `TargetGRB::isContinues ()` reads NULL safely too.
+- `createEmptyTarget ()` (targetres) is the one way to make such a target:
+  an empty RA DEC and the new `rts2-newtarget -n <id> <name>` (upstream
+  f1c9f6688) both use it. `-n` with coordinates is refused. `-m` without
+  a name now asks for it (upstream 95282de7b, which kept a pointer into a
+  freed string; fixed). The tool says "without coordinates" instead of
+  printing nan.
+- The `pg_astrolib` SQL functions return NULL for NULL arguments, so
+  distance and airmass queries drop such targets as they did NaN.
+- Seeds (`sql/data/targets.sql`, `planets.sql`) use `\N`.
+  `sql/update/rel_1_0_4.sql` converts existing databases. It changes NaN or
+  half-set rows, and 0 0 on the special targets (`tar_id` < 20 of their
+  own types) and on the planets. Other rows at exactly 0 0 are left for
+  a human: BART 4648 (scan field), 7011 "OX Dra", 10 GRBs; D50 6666
+  "planetka fantom", 2 GRBs. Dry run (SELECT) on 2026-10-19: 23 rows at
+  BART, 21 at D50. **Not applied yet**; it needs `psql stars -f`.
+
+Tested on lascaux in a scratch database `rts2test` (made by JS, owned by
+torman; built with `rts2-builddb -A` as torman, so no C functions and no
+`images` table). Covered:
+- `rts2-newtarget -n` (forced, interactive, name asked), an empty RA DEC,
+  `-n` with coordinates (refused), `-m` without a name (match and new);
+- NULL and NaN rows load the same;
+- the flat search passes a NULL field and picks the next one;
+- a private centrald + teld-dummy + camd-dummy + this executor. `now`
+  on a target without coordinates left the dummy mount at 30 40 and
+  recorded the observation with NULL position; the control target moved
+  the mount to 10 -5.

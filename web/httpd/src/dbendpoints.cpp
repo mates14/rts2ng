@@ -19,6 +19,7 @@
 #include "configuration.h"
 
 #include <libnova/libnova.h>
+#include <cmath>
 #include <ctime>
 #include <map>
 #include <mutex>
@@ -264,6 +265,9 @@ void rts2web::dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostrin
 {
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
 
+	if (upd.paramError)
+		throw rts2core::Error (*upd.paramError);
+
 	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
 
 	rts2db::ConstTarget *ct = dynamic_cast <rts2db::ConstTarget *> (tar);
@@ -339,7 +343,15 @@ void rts2web::dbUpdateTarget (int targetId, const TargetUpdate &upd, std::ostrin
 	{
 		struct ln_equ_posn rawPos;
 		ct->getRawPosition (&rawPos);
-		ct->setPosition (upd.ra ? *upd.ra : rawPos.ra, upd.dec ? *upd.dec : rawPos.dec);
+		double ra = upd.ra ? *upd.ra : rawPos.ra;
+		double dec = upd.dec ? *upd.dec : rawPos.dec;
+		// both or neither: one coordinate alone is no position
+		if (std::isnan (ra) != std::isnan (dec))
+		{
+			delete tar;
+			throw rts2core::Error ("give both ra and dec, or leave both empty for a target without coordinates");
+		}
+		ct->setPosition (ra, dec);
 	}
 	if (ct && (upd.pmRa || upd.pmDec))
 	{
@@ -376,6 +388,8 @@ void rts2web::dbCreateTarget (int targetId, const std::string &type, const Targe
 
 	bool elliptical = (type == "elliptical");
 
+	if (upd.paramError)
+		throw rts2core::Error (*upd.paramError);
 	if (upd.name && upd.name->length () > 150)
 		throw rts2core::Error ("name is too long (max 150 characters)");
 	if (upd.comment && upd.comment->length () > 2000)
@@ -402,8 +416,10 @@ void rts2web::dbCreateTarget (int targetId, const std::string &type, const Targe
 	{
 		if (!upd.ra || !upd.dec)
 		{
-			throw rts2core::Error ("ra and dec are required to create an equatorial target");
+			throw rts2core::Error ("ra and dec are required to create an equatorial target (both empty for one without coordinates)");
 		}
+		if (std::isnan (*upd.ra) != std::isnan (*upd.dec))
+			throw rts2core::Error ("give both ra and dec, or leave both empty for a target without coordinates");
 		rts2db::ConstTarget *ct = new rts2db::ConstTarget ();
 		// TYPE_OPORTUNITY ('O') - the generic "just observe this" type
 		// already used elsewhere for ad-hoc science targets (confirmed

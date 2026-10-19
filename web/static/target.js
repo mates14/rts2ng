@@ -381,12 +381,23 @@ function readWhatFormParams () {
 	params.set ('comment', document.getElementById ('f-comment').value);
 
 	if (!document.getElementById ('position-fields').hidden) {
-		const ra = parseCoordinate (document.getElementById ('f-ra').value, true);
-		const dec = parseCoordinate (document.getElementById ('f-dec').value, false);
-		params.set ('ra', ra ?? '0');
-		params.set ('dec', dec ?? '0');
-		params.set ('pm_ra', document.getElementById ('f-pmra').value || '0');
-		params.set ('pm_dec', document.getElementById ('f-pmdec').value || '0');
+		// Empty RA and Dec mean a target without coordinates (stored as
+		// NULL, the telescope is not moved) - never 0, which is a real
+		// position. Unreadable text or only one of the two stops the save.
+		const raText = document.getElementById ('f-ra').value.trim ();
+		const decText = document.getElementById ('f-dec').value.trim ();
+		const ra = parseCoordinate (raText, true);
+		const dec = parseCoordinate (decText, false);
+		if (raText !== '' && ra === null)
+			throw new Error (`cannot read RA '${raText}'`);
+		if (decText !== '' && dec === null)
+			throw new Error (`cannot read Dec '${decText}'`);
+		if ((ra === null) !== (dec === null))
+			throw new Error ('give both RA and Dec, or leave both empty for a target without coordinates');
+		params.set ('ra', ra ?? '');
+		params.set ('dec', dec ?? '');
+		params.set ('pm_ra', document.getElementById ('f-pmra').value.trim ());
+		params.set ('pm_dec', document.getElementById ('f-pmdec').value.trim ());
 	}
 
 	if (!document.getElementById ('mpec-label').hidden) {
@@ -402,7 +413,13 @@ document.getElementById ('target-form').addEventListener ('submit', async (ev) =
 	if (currentId === null)
 		return;
 
-	const params = readWhatFormParams ();
+	let params;
+	try {
+		params = readWhatFormParams ();
+	} catch (e) {
+		setStatus (saveStatusEl, false, e.message);
+		return;
+	}
 	const results = [];
 
 	// A 401 here triggers the browser's own native credential prompt

@@ -19,6 +19,7 @@
 
 #include "rts2db/appdb.h"
 #include "rts2db/target.h"
+#include "rts2db/targetres.h"
 #include "rts2db/targetset.h"
 #include "configuration.h"
 #include "libnova_cpp.h"
@@ -51,7 +52,10 @@ class Rts2NewTarget:public Rts2TargetApp
 		int n_tar_id;
 		bool tryMatch;
 		bool forcedRun;
+		bool nullCoords;
 		const char *n_tar_name;
+		// holds a name asked for by -m, n_tar_name points into it
+		std::string asked_name;
 		const char *n_tar_ra_dec;
 		double radius;
 
@@ -66,6 +70,7 @@ Rts2NewTarget::Rts2NewTarget (int in_argc, char **in_argv):Rts2TargetApp (in_arg
 	n_tar_id = -1;
 	tryMatch = false;
 	forcedRun = false;
+	nullCoords = false;
 	n_tar_name = nullptr;
 	n_tar_ra_dec = nullptr;
 
@@ -78,6 +83,7 @@ Rts2NewTarget::Rts2NewTarget (int in_argc, char **in_argv):Rts2TargetApp (in_arg
 	addOption ('m', NULL, 0, "try to match target name and RA DEC");
 	addOption ('r', NULL, 2, "radius for target checks");
 	addOption ('f', NULL, 0, "force run, don't ask questions about target overwrite");
+	addOption ('n', NULL, 0, "no coordinates, don't move the telescope");
 
 	addOption (OPT_PI_NAME, "pi", 1, "set PI name");
 	addOption (OPT_PROGRAM_NAME, "program", 1, "set program name");
@@ -102,6 +108,8 @@ void Rts2NewTarget::usage ()
 		<< "  " << getAppName () << " 1003 NGC567 '20:10:11 +11:14:15'" << std::endl
 		<< "Same as above, but don't bug user with questions:" << std::endl
 		<< "  " << getAppName () << " -f 1003 NGC567 '20:10:11 +11:14:15'" << std::endl
+		<< "To enter new target called Custom_Routine1, with ID 1003, that won't move the telescope:" << std::endl
+		<< "  " << getAppName () << " -n 1003 Custom_Routine1" << std::endl
 		<< std::endl;
 }
 
@@ -124,6 +132,9 @@ int Rts2NewTarget::processOption (int in_opt)
 			break;
 		case 'f':
 			forcedRun = true;
+			break;
+		case 'n':
+			nullCoords = true;
 			break;
 		case OPT_PI_NAME:
 			n_pi = optarg;
@@ -239,9 +250,12 @@ int Rts2NewTarget::saveTarget ()
 	  	target->setProgramName (n_program);
 
 	std::cout << "Created target #" << target->getTargetID ()
-		<< " named " << target->getTargetName ()
-		<< " on J2000.0 coordinates " << LibnovaRaDec (&pos)
-		<< " horizontal " << LibnovaHrz (&hrz) << std::endl;
+		<< " named " << target->getTargetName ();
+	if (std::isnan (pos.ra) || std::isnan (pos.dec))
+		std::cout << " without coordinates (the telescope is not moved)" << std::endl;
+	else
+		std::cout << " on J2000.0 coordinates " << LibnovaRaDec (&pos)
+			<< " horizontal " << LibnovaHrz (&hrz) << std::endl;
 
 	if (ret)
 	{
@@ -256,8 +270,20 @@ int Rts2NewTarget::doProcessing ()
 	if (!std::isnan (radius))
 		t_radius = radius;
 	int ret;
+	if (nullCoords)
+	{
+		// db note: -n from upstream (f1c9f6688), the same target as an
+		// empty RA DEC argument gives (createTargetByString ())
+		if (n_tar_ra_dec)
+		{
+			std::cerr << "-n creates a target without coordinates, but coordinates were given: " << n_tar_ra_dec << std::endl;
+			return -1;
+		}
+		target = createEmptyTarget ();
+		ret = 0;
+	}
 	// ask for target name..
-	if (n_tar_ra_dec == nullptr)
+	else if (n_tar_ra_dec == nullptr)
 	{
 		if (n_tar_name == nullptr)
 		{
@@ -279,6 +305,13 @@ int Rts2NewTarget::doProcessing ()
 	if (tryMatch)
 	{
 		rts2db::TargetSet ts;
+		// db note: from upstream (95282de7b), which left n_tar_name
+		// pointing into a local string; asked_name outlives the call
+		if (n_tar_name == nullptr)
+		{
+			askForString ("Target NAME", asked_name);
+			n_tar_name = asked_name.c_str ();
+		}
 		ts.loadByName (n_tar_name, true);
 		if (ts.size () == 1)
 		{

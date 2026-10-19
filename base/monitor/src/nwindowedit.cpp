@@ -84,6 +84,8 @@ keyRet NWindowEdit::injectKey (int key)
 	{
 		case KEY_BACKSPACE:
 		case 127:
+		// base note: from upstream (331169f39), terminals that send ^H
+		case '\b':
 			getyx (getWriteWindow (), y, x);
 			mvwdelch (getWriteWindow (), y, x - 1);
 			return RKEY_HANDLED;
@@ -310,6 +312,16 @@ double NWindowEditDegrees::getValueDouble ()
 	mvwinnstr (getWriteWindow (), 0, 0, buf, getLength ());
 	char *p = buf;
 	double tval = 0;
+	// base note: from upstream (7cda35b5b) - the sign belongs to the whole
+	// value: "-10d30m" is -10.5, not -10 + 0.5 = -9.5
+	bool neg = false;
+	while (*p == ' ')
+		p++;
+	if (*p == '-' || *p == '+')
+	{
+		neg = (*p == '-');
+		p++;
+	}
 	while (*p != '\0')
 	{
 		double v = strtod (p, &endptr);
@@ -329,13 +341,13 @@ double NWindowEditDegrees::getValueDouble ()
 				tval += v / 3600.0;
 				break;
 			default:
-				return tval;
+				return neg ? -tval : tval;
 		}
 		p = endptr;
 		if (*p != '\0')
 			p++;
 	}
-	return tval;
+	return neg ? -tval : tval;
 }
 
 
