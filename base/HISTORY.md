@@ -3719,3 +3719,27 @@ at 45 s: no attempt in between ("left centrald"), connected at 45.2 s on
 centrald's announcement, as the old code. The handshake retry tests (key,
 `authorization_ok`, `+0 OK authorized`, register), the client test and the
 10-pair startup test pass as before. ctest passes.
+
+## gxccd: no reinit on a failed filter move (2026-10-20) [JS]
+
+C1 and C2 at SBT hung together at 2026-10-15 21:47:01 and 2026-10-20
+20:36:32 and needed a power cycle; `reinitCamera ()` failed and every later
+filter move gave "Invalid parameter". Both times: C1 and C2 had just ended
+an exposure and were reading out (about 9 s), the target expired, C3 was
+still in the old target's script, and QUEUE issued NOW (to 1013, 8044).
+The executor's `killall` (`Camera::killAll ()` -> `gxccd_abort_exposure
+()`) cleared the reading state while the camera was still busy, the new
+script's filter change ran at once, `gxccd_set_filter ()` failed (empty
+message), and the driver answered with `reinitCamera ()`, which the busy
+camera did not survive. Classic `GXCCD::setFilterNum ()` made one attempt
+and only reported a failure; the retry loop with `reinitCamera ()` came
+with the initial import, and `? -1 : 0` made every failure a -1. Now the
+move is retried after 1 s (up to three times) without reinitializing. The
+stop path is unchanged and the same as classic. Not reproduced with the old
+code on the cameras (it needs a power cycle); built, not yet run.
+
+The 2026-10-14 and 2026-10-15 morning filter errors were partly C3 itself
+(and "Camera is not connected" on 14 Oct): its 12 V socket was faulty,
+repaired by JS on 2026-10-20. With the socket repaired, C1, C2 and C3
+together made 24 filter moves and exposures without an error
+(`rts2-scriptexec`, 21:12).

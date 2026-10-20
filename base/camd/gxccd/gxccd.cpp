@@ -607,9 +607,12 @@ int GXCCD::setCamFilterNum (int new_filter)
 			filterFailed->inc ();
 			valueError (filterFailed);
 			sendValueAll (filterFailed);
-
-			if (ret == -1)
-				reinitCamera ();
+			// base note: classic only reported a failed move. Reinitializing
+			// here (every failure, ret is -1 for any error) wedged C1 and C2
+			// at SBT until power-cycled: the move fails when a NOW's killall
+			// has just aborted a readout and the camera is still busy, and
+			// a release and initialize then is what the camera does not
+			// survive (2026-10-15 21:47, 2026-10-20 20:36).
 		}
 
 		usleep (USEC_SEC);
