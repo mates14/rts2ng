@@ -5,12 +5,13 @@
 Description=RTS2 alerts to Telegram
 After=network-online.target
 Wants=network-online.target
+# never give up restarting (a [Unit] key - systemd ignores it in [Service])
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-alertd --config @BASE_CONFDIR@/rts2/alertd
 Restart=always
 RestartSec=10
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

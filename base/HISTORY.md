@@ -3658,3 +3658,14 @@ needed `--reinstall`. `buildme.sh` now writes
 higher for apt (the hash does not sort), the commit comes from git
 (`.dirty` with uncommitted changes) or from `GIT_COMMIT` in a `git archive`
 tree, and the old format sorts below the new one.
+
+## systemd units: StartLimitIntervalSec in [Unit] (2026-10-20) [JS]
+
+At the c684477 install D50's systemd logged "rts2-alertd.service:13:
+Unknown key 'StartLimitIntervalSec' in section [Service], ignoring". It is
+a `[Unit]` key, so in `rts2@.service` and `rts2-alertd.service` "never give
+up restarting" never applied: systemd's default start limit (5 starts in
+10 s) stops a unit that keeps crashing. Moved to `[Unit]`;
+`systemd-analyze verify` on lascaux50 (systemd 252) is clean for both now.
+Neither unit is enabled at BART or D50 at the moment (rts2-start runs the
+daemons).
