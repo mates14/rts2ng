@@ -3647,3 +3647,14 @@ then (after retries at 30 and 90 s, three key requests queued, one
 dropped got its frame after the retry at 30 s (old client not run, it has
 no retry path). The 10-pair startup test: no stuck connection, no retry.
 ctest passes.
+
+## Package version names the commit (2026-10-20) [JS]
+
+Two builds on one day had the same version (`0.1.0-20261020~d12`), so
+`dpkg -l` could not tell e74689d's packages from a5a58aa's, and the second
+needed `--reinstall`. `buildme.sh` now writes
+`<upstream>-<YYYYMMDD>.<HHMM>+g<commit>~<o><ver>`, e.g.
+`0.1.0-20261020.2000+ga5a58aa~d12`: the time keeps later builds sorting
+higher for apt (the hash does not sort), the commit comes from git
+(`.dirty` with uncommitted changes) or from `GIT_COMMIT` in a `git archive`
+tree, and the old format sorts below the new one.

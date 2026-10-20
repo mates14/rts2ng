@@ -222,15 +222,27 @@ if [ $build_deb == 1 ] || [ $build_src == 1 ]; then
     META_DIR="$(pwd)/dist/meta/$ID/$VERSION_CODENAME"
     mkdir -p "$DIST_DIR" "$META_DIR"
 
-    # Package version = <upstream from debian/changelog>-<YYYYMMDD>~<o><ver>,
-    # e.g. 0.1.0-20260917~u2404 or 0.1.0-20260917~d13. The date makes each
-    # day's build supersede the previous one for apt; a second build on the
-    # same day reuses the version and overwrites the files (install such a one
-    # by hand with dpkg -i). The suffix makes a dist-upgraded machine pick up
-    # the new release's build instead of keeping the old one as "same version".
+    # Package version =
+    #   <upstream from debian/changelog>-<YYYYMMDD>.<HHMM>+g<commit>~<o><ver>,
+    # e.g. 0.1.0-20260917.1412+ga5a58aa~d13. The date and time make each
+    # build supersede the previous one for apt (the hash alone does not
+    # sort); the commit says which tree was built, so `dpkg -l` tells two
+    # builds of one day apart. It comes from git (".dirty" with uncommitted
+    # changes), or from a GIT_COMMIT file in a tree made by `git archive`,
+    # and is left out when neither is there. The suffix makes a
+    # dist-upgraded machine pick up the new release's build instead of
+    # keeping the old one as "same version". Versions without the time
+    # (0.1.0-20260917~d13, before 2026-10-20) sort below this format.
     # The changelog entry is temporary - every debian/changelog is restored on
     # exit, so the committed changelogs stay untouched.
-    BUILD_VERSION_REV="$(date +%Y%m%d)~${ID:0:1}${VERSION_ID//./}"
+    build_commit=
+    if [ "$(git rev-parse --show-toplevel 2> /dev/null)" = "$(pwd -P)" ]; then
+        build_commit=$(git rev-parse --short=7 HEAD)
+        git diff --quiet HEAD -- || build_commit="$build_commit.dirty"
+    elif [ -f GIT_COMMIT ]; then
+        build_commit=$(tr -cd '0-9a-f' < GIT_COMMIT | cut -c1-7)
+    fi
+    BUILD_VERSION_REV="$(date +%Y%m%d.%H%M)${build_commit:++g$build_commit}~${ID:0:1}${VERSION_ID//./}"
 
     stamp_changelog() {
         local cl="$1/debian/changelog" src ver maint
