@@ -201,11 +201,14 @@ lock_pid ()
 }
 
 # Is $1 a live process that looks like $2? /proc/pid/comm is world readable
-# but truncated to 15 characters, so compare only that much.
+# but truncated to 15 characters, so compare only that much. Liveness from
+# /proc, not kill -0: that fails for another user's process (EPERM), and
+# a daemon run as root then looked like a different program to a non-root
+# caller.
 pid_looks_like ()
 {
 	local pid=$1 bin=$2 comm
-	kill -0 "$pid" 2>/dev/null || return 1
+	[ -d "/proc/$pid" ] || return 1
 	comm=$(cat "/proc/$pid/comm" 2>/dev/null) || return 0
 	[ -z "$comm" ] && return 0
 	[ "$comm" = "${bin:0:15}" ]
@@ -306,6 +309,10 @@ stop_one ()
 	# never kill on the strength of a recorded pid alone
 	if ! pid_looks_like "$pid" "$bin"; then
 		report "$kind" "$name" "FAILED - pid $pid in $lock is not $bin, refusing to kill"
+		return 1
+	fi
+	if ! kill -0 "$pid" 2>/dev/null; then
+		report "$kind" "$name" "FAILED - not permitted to stop pid $pid (run as root?)"
 		return 1
 	fi
 

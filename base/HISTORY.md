@@ -3754,3 +3754,16 @@ The 2026-10-14 and 2026-10-15 morning filter errors were partly C3 itself
 repaired by JS on 2026-10-20. With the socket repaired, C1, C2 and C3
 together made 24 filter moves and exposures without an error
 (`rts2-scriptexec`, 21:12).
+
+## rts2-start: "not permitted" instead of "is not <program>" (2026-10-21) [JS]
+
+`rts2-start -k C1 C2 C3` run without sudo at SBT answered "pid ... in
+/var/run/rts2_C1 is not rts2-camd-gxccd, refusing to kill" for the running
+cameras. `pid_looks_like ()` tested liveness with `kill -0`, which fails
+with EPERM for another user's process, so a root daemon looked like a
+different program. Liveness now comes from `/proc/<pid>`, and `stop_one ()`
+checks `kill -0` separately: "not permitted to stop pid N (run as root?)".
+Tested on lascaux as non-root, with a rendered copy (`~torman/wip-rts2-start`):
+C1-C3 give the new message and keep running; with a private device file, a
+lock pointing at a `sleep` is still refused and the `sleep` lives, and our
+own process named `rts2-camd-gxccd` is stopped.
