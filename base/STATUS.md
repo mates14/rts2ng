@@ -148,8 +148,8 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   `environment`) is read with the quiet lookups. Missing keys must not warn.
 - Andor: `scriptEnds ()` does not reset `intExposure` (hidden state that
   `setTiming ()` later copies into `exposure`). [MJ 2026-10-18]
-- gxccd: a failed filter move is reported and retried, never answered with
-  `reinitCamera ()` (classic did not either). After a NOW's `killall`
+- gxccd: a failed filter move is retried every 0.5 s for up to 15 s and
+  never answered with `reinitCamera ()` (classic did not reinit either). After a NOW's `killall`
   aborts a readout the camera is still busy, the move fails, and
   reinitializing it then wedged C1 and C2 until power-cycled (HISTORY,
   "gxccd: no reinit on a failed filter move"). [JS 2026-10-20]

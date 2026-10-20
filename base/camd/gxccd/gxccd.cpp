@@ -43,10 +43,15 @@
 #include "gxccd.h"
 #include "utilsfunc.h"
 #include <iomanip>
+#include <sstream>
 
 #include <sys/file.h>
 
 #define EVENT_TE_RAMP	      RTS2_LOCAL_EVENT + 678
+
+// a failed filter move is retried this often, for this long (setCamFilterNum ())
+#define FILTER_RETRY_USEC     500000
+#define FILTER_RETRY_SEC      15
 
 namespace rts2camd
 {
@@ -587,35 +592,44 @@ int GXCCD::setCamFilterNum (int new_filter)
 	rts2core::ValueSelection *fv = internalFilterValue ();
 	logStream (MESSAGE_INFO) << "moving filter from #" << fv->getValueInteger () << " (" << fv->getSelName () << ")" << " to #" << new_filter << " (" << fv->getSelName (new_filter) << ")" << sendLog;
 
-	int iter;
+	// base note: classic made one attempt and only reported a failure. A
+	// move fails while the camera is still busy with a readout that a NOW's
+	// killall has just aborted (C1/C2 about 9 s); retrying every
+	// FILTER_RETRY_USEC moves the wheel as soon as the camera is free, so
+	// the next exposure starts in the right filter. Never reinitialize
+	// here: that wedged C1 and C2 at SBT until power-cycled
+	// (2026-10-15 21:47, 2026-10-20 20:36).
+	int attempts = 0;
 	int ret = 0;
+	double move_start = getNow ();
 
-	for (iter = 0; iter < 3; iter ++)
+	while (true)
 	{
+		attempts++;
 		double last_filter_move = getNow ();
 		ret = gxccd_set_filter (camera, new_filter) ? -1 : 0;
 		last_filter_move = getNow () - last_filter_move;
 		if (ret == 0)
 		{
-			logStream (MESSAGE_INFO) << "filter moved to #" << new_filter << " (" << fv->getSelName (new_filter) << ")" << " in " << std::setprecision (3) << last_filter_move << "s" << sendLog;
+			std::ostringstream _os;
+			_os << "filter moved to #" << new_filter << " (" << fv->getSelName (new_filter) << ")" << " in " << std::setprecision (3) << last_filter_move << "s";
+			if (attempts > 1)
+				_os << ", after " << attempts << " attempts in " << std::setprecision (3) << getNow () - move_start << "s";
+			logStream (MESSAGE_INFO) << _os.str () << sendLog;
 			break;
 		}
-		else
+		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+		filterFailed->inc ();
+		valueError (filterFailed);
+		sendValueAll (filterFailed);
+		if (attempts == 1)
+			logStream (MESSAGE_INFO) << "filter movement error: " << gx_err << " - retrying for up to " << FILTER_RETRY_SEC << " s" << sendLog;
+		if (getNow () - move_start >= FILTER_RETRY_SEC)
 		{
-			gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-			logStream (MESSAGE_INFO) << "filter movement error on iter " << iter << " : " << gx_err << sendLog;
-			filterFailed->inc ();
-			valueError (filterFailed);
-			sendValueAll (filterFailed);
-			// base note: classic only reported a failed move. Reinitializing
-			// here (every failure, ret is -1 for any error) wedged C1 and C2
-			// at SBT until power-cycled: the move fails when a NOW's killall
-			// has just aborted a readout and the camera is still busy, and
-			// a release and initialize then is what the camera does not
-			// survive (2026-10-15 21:47, 2026-10-20 20:36).
+			logStream (MESSAGE_ERROR) << "filter movement to #" << new_filter << " failed " << attempts << " times in " << std::setprecision (3) << getNow () - move_start << "s, last error: " << gx_err << sendLog;
+			break;
 		}
-
-		usleep (USEC_SEC);
+		usleep (FILTER_RETRY_USEC);
 	}
 
 	checkQueuedExposures ();

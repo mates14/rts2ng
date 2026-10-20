@@ -3734,9 +3734,20 @@ message), and the driver answered with `reinitCamera ()`, which the busy
 camera did not survive. Classic `GXCCD::setFilterNum ()` made one attempt
 and only reported a failure; the retry loop with `reinitCamera ()` came
 with the initial import, and `? -1 : 0` made every failure a -1. Now the
-move is retried after 1 s (up to three times) without reinitializing. The
-stop path is unchanged and the same as classic. Not reproduced with the old
-code on the cameras (it needs a power cycle); built, not yet run.
+move is retried without reinitializing. The stop path is unchanged and the
+same as classic. Not reproduced with the old code on the cameras (it needs
+a power cycle).
+
+Tested on SBT's C2 with e999dd1 (`~torman/wip-gxccd-test.sh`, 21:40):
+a 10 s exposure, `killall` 2 s after "end exposure" (mid-readout), then the
+filter move `killall`'s `loadValues ()` makes: three attempts 1 s apart all
+failed, no reinit, and the camera then moved the wheel (4.5 s, 2.3 s) and
+took and read out two 2 s exposures normally. As the three attempts fit
+inside the 9 s readout, the first exposure after a NOW would still have
+been in the old filter. So the move is now retried every 0.5 s for up to
+15 s (`FILTER_RETRY_USEC`, `FILTER_RETRY_SEC`), and succeeds as soon as
+the camera is free; the log has the first error and then "filter moved ...
+after N attempts", or one error after 15 s.
 
 The 2026-10-14 and 2026-10-15 morning filter errors were partly C3 itself
 (and "Camera is not connected" on 14 Oct): its 12 V socket was faulty,
