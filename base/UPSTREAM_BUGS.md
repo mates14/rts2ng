@@ -1865,3 +1865,15 @@ daemon does not start.
 rts2ng: the key goes to the device's own connection waiting for
 authorization (`Block::findKeyPending ()`), the focuser client checks for
 NULL, `FOC_TEMP` is created once.
+
+## A lost authorization handshake waits for ever (`lib/rts2/connection.cpp`, `device.cpp`, `client.cpp`) [JS 2026-10-20]
+
+Nothing times out or retries `CONN_AUTH_PENDING`. If the key reply, the
+peer's answer to `auth` or centrald's answer to `authorize` is lost or is
+only an error (centrald's "client vanished during auth sequence",
+"cannot find device with name"), the connection waits, unusable, until
+the process restarts. The same for a device whose register gets no reply.
+
+rts2ng: the side that started the handshake retries it on a new socket
+after 30 s, then up to every 300 s; a device re-registers when its
+register is not answered (base/HISTORY.md, "Handshake retry").

@@ -812,6 +812,35 @@ class Connection:public Object
 		 */
 		virtual std::string dropLabel () { return strlen (getName ()) ? getName () : "(unnamed)"; }
 
+		/**
+		 * Start the authorization handshake again, called by idle() when
+		 * the connection has waited for authorization too long (see
+		 * authRetryDelay ()). Only the side that started the handshake
+		 * can retry it; the other side just waits for the new one.
+		 *
+		 * @return true if a retry was started, false if this connection
+		 * cannot retry (idle() then only warns, once)
+		 */
+		virtual bool retryAuthorization () { return false; }
+
+		/**
+		 * Close the socket and connect again to the same peer, for a
+		 * handshake retry. A fresh socket can't receive a late reply
+		 * meant for the old one (replies are matched to commands by
+		 * order alone). The name, the address and the queued commands
+		 * stay; the auth command sent on the old socket is dropped.
+		 */
+		void reconnectSocket ();
+
+		/**
+		 * Mark that the key was sent to the peer on this socket.
+		 *
+		 * @return true the first time, false if it was already sent - a
+		 * second auth on one socket would get a second reply, taken as
+		 * the reply to the next command
+		 */
+		bool markAuthSent ();
+
 		virtual int command ();
 		int sendNextCommand ();
 
@@ -886,6 +915,16 @@ class Connection:public Object
 		// has already warned that it is still waiting - see idle()
 		time_t authPendingSince;
 		bool authPendingWarned;
+		// handshake retries since the connection was last authorized, and
+		// whether the key went out on the current socket (markAuthSent ())
+		int authRetries;
+		bool authSent;
+
+		/**
+		 * How long to wait for authorization before the next retry:
+		 * 30 s, doubled with each retry, at most 300 s.
+		 */
+		time_t authRetryDelay ();
 
 		/**
 		 * Called to process buffer.

@@ -202,12 +202,24 @@ void DevConnection::connConnected ()
 	return;
 }
 
+// base note: our own connection to another device: connect again and go
+// through the whole handshake (key, auth) on the new socket
+bool DevConnection::retryAuthorization ()
+{
+	if (getType () != DEVICE_DEVICE || address == nullptr)
+		return false;
+	reconnectSocket ();
+	return true;
+}
+
 void DevConnection::setDeviceKey (int _centraldId, int _key)
 {
 	Connection::setKey (_key);
 	if (getType () == DEVICE_DEVICE)
 	{
-		if (isConnState (CONN_AUTH_PENDING))
+		// base note: a key request repeated by a handshake retry gets a
+		// second reply; one auth per socket (markAuthSent ())
+		if (isConnState (CONN_AUTH_PENDING) && markAuthSent ())
 		{
 			// que to begining, send command
 			// kill all runinng commands
@@ -312,6 +324,14 @@ void DevConnectionMaster::connectionError (int last_data_size)
 		time (&nextTime);
 		nextTime += 60;
 	}
+}
+
+// base note: the register got no reply - break the link, so idle ()
+// connects again and registers anew (connectionError () fails the register)
+bool DevConnectionMaster::retryAuthorization ()
+{
+	dropConnection (-1, "register not answered");
+	return true;
 }
 
 int DevConnectionMaster::init ()

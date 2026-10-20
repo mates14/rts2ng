@@ -59,6 +59,7 @@ class DevConnection:public Connection
 		virtual int init ();
 
 		virtual void connConnected ();
+		virtual bool retryAuthorization ();
 	private:
 		// in case we know address of other side..
 		NetworkAddress * address;
@@ -102,6 +103,7 @@ class DevConnectionMaster:public Connection
 		virtual void setBopState (rts2_status_t in_value);
 		virtual void connConnected ();
 		virtual void connectionError (int last_data_size);
+		virtual bool retryAuthorization ();
 		virtual std::string dropLabel () { return std::string ("centrald (") + master_host + ")"; }
 	private:
 		char *device_host;

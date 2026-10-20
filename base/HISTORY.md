@@ -3600,3 +3600,50 @@ still not retried.
   specific driver/client types, port only the base class and defer the
   subclasses (see "Deliberately incomplete ports" above) - write down
   *exactly* which ones were dropped and why, don't just say "some subclasses".
+
+## Handshake retry (2026-10-20) [JS]
+
+A lost authorization handshake left the connection waiting for ever. The
+places it could stop: the key reply from centrald (lost, misrouted as
+fixed above, or "cannot find device with name", which nothing handles),
+the peer's answer to `auth`, and centrald's answer to the peer's
+`authorize` ("client vanished during auth sequence" answers only `-`, so
+the peer never releases its side).
+
+Now `Connection::idle ()` calls `retryAuthorization ()` once a connection
+has waited 30 s, then after 60, 120, 240 and every 300 s, each attempt a
+warning ("not authorized after N s, handshake retried (retry #k, ...)").
+- Our own connection to another device (`DevConnection`,
+  `DEVICE_DEVICE`) and a client's connection to a device (`ConnClient`):
+  `reconnectSocket ()` closes the socket and connects again to the same
+  address, keeping the name, the address and the queued commands; the
+  handshake (key, auth) runs again on the new socket. Not on the same
+  socket: replies are matched to commands by order alone, so a second
+  `auth` there would get a second reply, taken as the reply to the next
+  command. Also not by dropping the connection: that forgets the address
+  for good. The `auth` command of the old socket is deleted unanswered.
+- `markAuthSent ()`: one `auth` per socket. Retries queue more `key`
+  requests on the centrald link (more pile up while it is down), and each
+  reply would otherwise send another `auth`.
+- The device's link to centrald (`DevConnectionMaster`): a register that
+  gets no reply drops the link ("register not answered"); its idle ()
+  connects again after 60 s and registers anew.
+- The other side (an incoming `DEVICE_SERVER` connection) does not retry:
+  the side that started retries, which closes the old socket. It still
+  warns once after 60 s, "the peer has to retry it".
+
+Verified on lascaux with a private centrald and `~torman/wip-proxy.py`, a
+line proxy that logs the traffic and drops one chosen line
+(`~torman/wip-retry-test.sh`, `wip-retry-client.sh`): `camd-dummy C0
+--focdev F0` to `focusd-dummy F0`, F0's announced port rewritten so the
+C0-F0 link runs through a proxy too. Dropped once each: the key reply for
+F0, F0's `authorization_ok`, F0's `+0 OK authorized`. Old code: C0 (and in
+the second case F0) "still waiting for authorization" for good. New code:
+retried at 30.2 s, one `auth` on the new socket, authorized, `this_device`
+sent, and F0's half-open old connection closed. Register reply dropped:
+the link dropped at 30 s, registered again at 100 s, and C0-F0 authorized
+then (after retries at 30 and 90 s, three key requests queued, one
+`auth`). Client: `rts2-scriptexec -c C0 -s 'E 1'` with the key for C0
+dropped got its frame after the retry at 30 s (old client not run, it has
+no retry path). The 10-pair startup test: no stuck connection, no retry.
+ctest passes.

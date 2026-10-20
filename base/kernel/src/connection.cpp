@@ -47,6 +47,7 @@
 
 #include <iostream>
 #include <iomanip>
+#include <algorithm>
 
 #include <cerrno>
 #include <syslog.h>
@@ -63,6 +64,9 @@ using namespace rts2core;
 
 // see Connection::idle()
 #define AUTH_PENDING_WARN_SEC   60
+// first handshake retry after this; doubled with each retry, up to the max
+#define AUTH_RETRY_FIRST_SEC    ((time_t) 30)
+#define AUTH_RETRY_MAX_SEC      300
 
 ConnError::ConnError (Connection *conn, const char *_msg): Error (_msg)
 {
@@ -107,6 +111,8 @@ Connection::Connection (Block * in_master):Object ()
 	commandInProgress = false;
 	authPendingSince = 0;
 	authPendingWarned = false;
+	authRetries = 0;
+	authSent = false;
 	info_time = nullptr;
 	last_info_time = 0;
 
@@ -152,6 +158,8 @@ Connection::Connection (int in_sock, Block * in_master):Object ()
 	commandInProgress = false;
 	authPendingSince = 0;
 	authPendingWarned = false;
+	authRetries = 0;
+	authSent = false;
 	info_time = nullptr;
 
 	time (&lastGoodSend);
@@ -688,17 +696,34 @@ void Connection::postMaster (Event * event)
 
 int Connection::idle ()
 {
-	// base note: nothing retries or times out a lost authorization
-	// handshake - the connection just waits, unusable, for ever (a device
-	// then stays invisible to its client until something reconnects it).
-	// Say so once, so the log shows it at the time it happens.
-	if (isConnState (CONN_AUTH_PENDING) && !authPendingWarned && authPendingSince > 0
-		&& time (nullptr) - authPendingSince > AUTH_PENDING_WARN_SEC)
+	// base note: classic never retried or timed out a lost authorization
+	// handshake - the connection waited, unusable, for ever (a device then
+	// stays invisible to its client until something reconnects it). The
+	// side that started the handshake now retries it (retryAuthorization ());
+	// a side that can't, says so once.
+	if (isConnState (CONN_AUTH_PENDING) && authPendingSince > 0)
 	{
-		authPendingWarned = true;
-		logStream (MESSAGE_WARNING) << "connection " << dropLabel () << " (centrald id " << getCentraldId ()
-			<< ") still waiting for authorization after " << (time (nullptr) - authPendingSince)
-			<< " s - the handshake was lost, and is not retried" << sendLog;
+		time_t pending = time (nullptr) - authPendingSince;
+		if (pending >= authRetryDelay ())
+		{
+			std::string label = dropLabel ();
+			int cid = getCentraldId ();
+			if (retryAuthorization ())
+			{
+				authRetries++;
+				logStream (MESSAGE_WARNING) << "connection " << label << " (centrald id " << cid
+					<< ") not authorized after " << pending << " s, handshake retried (retry #"
+					<< authRetries << ", next after " << authRetryDelay () << " s)" << sendLog;
+				return 0;
+			}
+		}
+		if (!authPendingWarned && pending > AUTH_PENDING_WARN_SEC)
+		{
+			authPendingWarned = true;
+			logStream (MESSAGE_WARNING) << "connection " << dropLabel () << " (centrald id " << getCentraldId ()
+				<< ") still waiting for authorization after " << pending
+				<< " s - the handshake was lost, and the peer has to retry it" << sendLog;
+		}
 	}
 	if (connectionTimeout > 0)
 	{
@@ -1399,6 +1424,45 @@ void Connection::queClear (bool running)
 	commandQue.clear ();
 }
 
+time_t Connection::authRetryDelay ()
+{
+	return std::min (AUTH_RETRY_FIRST_SEC << std::min (authRetries, 4), (time_t) AUTH_RETRY_MAX_SEC);
+}
+
+void Connection::reconnectSocket ()
+{
+	if (sock >= 0)
+		close (sock);
+	sock = -1;
+	// whatever the old socket had half-read is gone with it
+	buf_top = buf;
+	full_data_end = nullptr;
+	activeReadData = -1;
+	commandInProgress = false;
+	authSent = false;
+	// the auth sent on the old socket can't be answered on the new one;
+	// any other command goes again, after the new handshake
+	if (runningCommand)
+	{
+		if (dynamic_cast <CommandSendKey *> (runningCommand))
+			delete runningCommand;
+		else
+			commandQue.push_front (runningCommand);
+		runningCommand = nullptr;
+	}
+	setConnState (CONN_CONNECTING);
+	if (init ())
+		dropConnection (-1, "reconnect for the handshake retry failed");
+}
+
+bool Connection::markAuthSent ()
+{
+	if (authSent)
+		return false;
+	authSent = true;
+	return true;
+}
+
 void Connection::failSentCommand ()
 {
 	if (!runningCommand || runningCommandStatus != SEND)
@@ -2062,6 +2126,8 @@ void Connection::setConnState (conn_state_t new_conn_state)
 		authPendingSince = time (nullptr);
 		authPendingWarned = false;
 	}
+	if (new_conn_state == CONN_AUTH_OK)
+		authRetries = 0;
 	if (new_conn_state == CONN_AUTH_OK || new_conn_state == CONN_CONNECTED)
 	{
 		if (!runningCommand)

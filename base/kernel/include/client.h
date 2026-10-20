@@ -49,6 +49,7 @@ class ConnClient:public Connection
 
 	protected:
 		virtual void connConnected ();
+		virtual bool retryAuthorization ();
 	public:
 		ConnClient (Block *_master, int _centrald_num, char *_name);
 		virtual ~ ConnClient (void);

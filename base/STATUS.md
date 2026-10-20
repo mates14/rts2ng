@@ -292,8 +292,13 @@ it, and say which classes you added.
 - Lost inter-daemon connections at SBT after days of running (the daily
   restart cron is gone since 2026-10-15). Now logged, not fixed. Two
   suspects: `sendMsg ()` drops the connection on EAGAIN or a short write
-  to a slow peer; a lost authorization handshake leaves the connection in
-  `CONN_AUTH_PENDING` for ever (warned after 60 s, never retried). One
+  to a slow peer; a lost authorization handshake left the connection in
+  `CONN_AUTH_PENDING` for ever - now retried by the side that started it,
+  on a new socket, after 30 s and then up to every 300 s (HISTORY,
+  "Handshake retry") [JS 2026-10-20]. Found then, not changed: a dropped
+  link to another device forgets its address (`Connection::connectionError
+  ()` -> `deleteAddress ()`), and nothing connects again until centrald
+  announces the device anew (it re-registers). One
   stuck authorization at BART was an ID collision between two centralds
   (also possible after a centrald restart), fixed (HISTORY, "Authorization replies matched on the ID alone"). Devices
   that never registered again with a second centrald, after a reply lost

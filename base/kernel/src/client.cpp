@@ -108,10 +108,20 @@ void ConnClient::connConnected ()
 	setConnState (CONN_AUTH_PENDING);
 }
 
+// base note: as DevConnection::retryAuthorization ()
+bool ConnClient::retryAuthorization ()
+{
+	if (address == nullptr)
+		return false;
+	reconnectSocket ();
+	return true;
+}
+
 void ConnClient::setKey (int in_key)
 {
 	Connection::setKey (in_key);
-	if (isConnState (CONN_AUTH_PENDING))
+	// base note: one auth per socket, see DevConnection::setDeviceKey ()
+	if (isConnState (CONN_AUTH_PENDING) && markAuthSent ())
 	{
 		// que to begining, send command
 		// kill all runinng commands
