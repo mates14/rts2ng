@@ -1514,11 +1514,13 @@ int Connection::command ()
 	}
 	else if (isCommand ("delete_device"))
 	{
-		int p_centrald_num;
+		// base note: centrald sends the device's id there, not a centrald
+		// number - classic parsed it as one (Block::deleteAddress ())
+		int p_centrald_id;
 		char *p_name;
-		if (paramNextInteger (&p_centrald_num) || paramNextString (&p_name) || !paramEnd ())
+		if (paramNextInteger (&p_centrald_id) || paramNextString (&p_name) || !paramEnd ())
 			return -2;
-		master->deleteAddress (p_centrald_num, p_name);
+		master->deleteAddress (getCentraldNum (), p_centrald_id, p_name);
 		return -1;
 	}
 	else if (isCommand ("client"))
@@ -2001,6 +2003,7 @@ void Connection::dropConnection (int last_data_size, const std::string &reason)
 void Connection::connectionError (int last_data_size)
 {
 	activeReadData = -1;
+	bool wasOpen = !isConnState (CONN_DELETE) && !isConnState (CONN_BROKEN);
 	if (canDelete ())
 		setConnState (CONN_DELETE);
 	else
@@ -2008,8 +2011,10 @@ void Connection::connectionError (int last_data_size)
 	if (sock >= 0)
 		close (sock);
 	sock = -1;
-	if (strlen (getName ()) && master)
-		master->deleteAddress (getCentraldNum (), getName ());
+	// base note: classic deleted the device's address here, see
+	// Block::deleteAddress (); once per drop, it plans a reconnect
+	if (wasOpen && strlen (getName ()) && master)
+		master->addressLost (this);
 }
 
 int Connection::sendMessage (Message & msg)

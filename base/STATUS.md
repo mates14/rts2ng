@@ -295,10 +295,12 @@ it, and say which classes you added.
   to a slow peer; a lost authorization handshake left the connection in
   `CONN_AUTH_PENDING` for ever - now retried by the side that started it,
   on a new socket, after 30 s and then up to every 300 s (HISTORY,
-  "Handshake retry") [JS 2026-10-20]. Found then, not changed: a dropped
-  link to another device forgets its address (`Connection::connectionError
-  ()` -> `deleteAddress ()`), and nothing connects again until centrald
-  announces the device anew (it re-registers). One
+  "Handshake retry") [JS 2026-10-20]. A dropped link to another device
+  forgot its address, and nothing connected again until centrald announced
+  the device anew; now the address is kept and the link reconnected after
+  10 s, up to every 300 s, until centrald's `delete_device` (fixed, it
+  matched nothing) says the device left (HISTORY, "Dropped device links
+  reconnect") [JS 2026-10-20]. One
   stuck authorization at BART was an ID collision between two centralds
   (also possible after a centrald restart), fixed (HISTORY, "Authorization replies matched on the ID alone"). Devices
   that never registered again with a second centrald, after a reply lost

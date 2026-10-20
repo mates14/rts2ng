@@ -51,6 +51,8 @@ class ConnClient:public Connection
 		virtual void connConnected ();
 		virtual bool retryAuthorization ();
 	public:
+		virtual void addressRemoved (NetworkAddress * in_addr) { if (address == in_addr) address = nullptr; }
+
 		ConnClient (Block *_master, int _centrald_num, char *_name);
 		virtual ~ ConnClient (void);
 

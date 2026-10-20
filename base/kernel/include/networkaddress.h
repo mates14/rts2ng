@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cstring>
+#include <ctime>
 
 #include "status.h"
 
@@ -52,7 +53,7 @@ class NetworkAddress
 		 */
 		NetworkAddress (int _host_num, int _centrald_num, int _centrald_id, const char *_name, const char *_host, int _port, int _type);
 		virtual ~ NetworkAddress (void);
-		int update (int _centrald_num, const char *_name, const char *new_host, int new_port, int new_type);
+		int update (int _centrald_num, int _centrald_id, const char *_name, const char *new_host, int new_port, int new_type);
 
 		/**
 		 * Get address of the host, so we can issue socket call to
@@ -138,6 +139,35 @@ class NetworkAddress
 			return centrald_num == _centrald_num && !strcmp (_name, name);
 		}
 
+		/**
+		 * Check if this is the record a centrald's delete_device is
+		 * about: made from that centrald, for that registration.
+		 *
+		 * @param _host_num     number of the centrald connection the message came on
+		 * @param _centrald_id  the device's id on that centrald
+		 */
+		bool isRegistration (int _host_num, int _centrald_id, const char *_name)
+		{
+			return host_num == _host_num && centrald_id == _centrald_id && !strcmp (_name, name);
+		}
+
+		/**
+		 * Plan a reconnect after our connection to the device dropped
+		 * (Block::addressLost ()): 10 s, doubled for every reconnect
+		 * that did not last RECONNECT_GOOD_SEC, at most 300 s.
+		 *
+		 * @return the delay
+		 */
+		time_t planReconnect (time_t now);
+
+		bool reconnectDue (time_t now) { return reconnectAt > 0 && now >= reconnectAt; }
+		bool reconnectPlanned () { return reconnectAt > 0; }
+
+		/**
+		 * The planned reconnect is being made now (or is not needed).
+		 */
+		void reconnecting (time_t now) { reconnectAt = 0; lastReconnect = now; }
+
 	private:
 		// our centrald number - centrald which created address record
 		int host_num;
@@ -149,6 +179,12 @@ class NetworkAddress
 		char *host;
 		int port;
 		int type;
+
+		// reconnect after a dropped connection: when (0 - none planned),
+		// how many in a row, and when the last one was made
+		time_t reconnectAt;
+		int reconnectTries;
+		time_t lastReconnect;
 
 };
 

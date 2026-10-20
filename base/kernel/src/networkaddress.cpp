@@ -24,6 +24,8 @@
 
 #include "networkaddress.h"
 
+#include <algorithm>
+
 using namespace rts2core;
 
 NetworkAddress::NetworkAddress (int _host_num, int _centrald_num, int _centrald_id, const char *_name, const char *_host, int _port, int _type)
@@ -37,6 +39,9 @@ NetworkAddress::NetworkAddress (int _host_num, int _centrald_num, int _centrald_
 	strcpy (host, _host);
 	port = _port;
 	type = _type;
+	reconnectAt = 0;
+	reconnectTries = 0;
+	lastReconnect = 0;
 }
 
 NetworkAddress::~NetworkAddress (void)
@@ -44,16 +49,37 @@ NetworkAddress::~NetworkAddress (void)
 	delete[]host;
 }
 
-int NetworkAddress::update (int _centrald_num, const char *_name, const char *new_host, int new_port, int new_type)
+// base note: classic kept the centrald id of the first registration, so
+// delete_device for a device that had registered again matched nothing
+int NetworkAddress::update (int _centrald_num, int _centrald_id, const char *_name, const char *new_host, int new_port, int new_type)
 {
 	if (!isAddress (_centrald_num, _name))
 		return -1;
+	centrald_id = _centrald_id;
+	// registered again - centrald's announcement connects us, if needed
+	reconnectAt = 0;
+	reconnectTries = 0;
 	delete[]host;
 	host = new char[strlen (new_host) + 1];
 	strcpy (host, new_host);
 	port = new_port;
 	type = new_type;
 	return 0;
+}
+
+// a reconnect that lasted this long was good: the next drop starts at 10 s again
+#define RECONNECT_GOOD_SEC  60
+#define RECONNECT_FIRST_SEC ((time_t) 10)
+#define RECONNECT_MAX_SEC   ((time_t) 300)
+
+time_t NetworkAddress::planReconnect (time_t now)
+{
+	if (now - lastReconnect >= RECONNECT_GOOD_SEC)
+		reconnectTries = 0;
+	time_t delay = std::min (RECONNECT_FIRST_SEC << std::min (reconnectTries, 5), RECONNECT_MAX_SEC);
+	reconnectTries++;
+	reconnectAt = now + delay;
+	return delay;
 }
 
 int NetworkAddress::getSockaddr (struct addrinfo **info)

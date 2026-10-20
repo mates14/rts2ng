@@ -411,7 +411,24 @@ class Block: public App
 
 		void addAddress (int p_host_num, int p_centrald_num, int p_centrald_id, const char *p_name, const char *p_host, int p_port, int p_device_type);
 
-		void deleteAddress (int p_centrald_num, const char *p_name);
+		/**
+		 * Forget a device's address, on centrald's delete_device: the
+		 * record made from that centrald for that registration. Our
+		 * connections to the device keep running, but are not
+		 * reconnected when they drop.
+		 *
+		 * @param p_host_num     number of the centrald connection the message came on
+		 * @param p_centrald_id  the device's id on that centrald
+		 */
+		void deleteAddress (int p_host_num, int p_centrald_id, const char *p_name);
+
+		/**
+		 * Our connection to a device dropped (Connection::connectionError ()).
+		 * The address is kept, so getConnection () can open it again, and
+		 * a connection this block opens by itself (willConnect ()) is
+		 * reconnected after a while (NetworkAddress::planReconnect ()).
+		 */
+		void addressLost (Connection *conn);
 
 		virtual DevClient *createOtherType (Connection * conn, int other_device_type);
 		void addClient (int p_centraldId, const char *p_login, const char *p_name);
@@ -804,6 +821,11 @@ class Block: public App
 
 		std::list <NetworkAddress *> blockAddress;
 		clients_t blockUsers;
+
+		/**
+		 * Make the reconnects addressLost () planned, when they are due.
+		 */
+		void reconnectAddresses ();
 
 		rts2_status_t masterState;
 		Connection *stateMasterConn;

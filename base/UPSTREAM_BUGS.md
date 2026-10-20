@@ -1877,3 +1877,20 @@ the process restarts. The same for a device whose register gets no reply.
 rts2ng: the side that started the handshake retries it on a new socket
 after 30 s, then up to every 300 s; a device re-registers when its
 register is not answered (base/HISTORY.md, "Handshake retry").
+
+## A dropped link to another device is not reconnected; delete_device deletes nothing (`lib/rts2/connection.cpp`, `block.cpp`, `networkaddress.cpp`) [JS 2026-10-20]
+
+`Connection::connectionError ()` deletes the device's address when our
+connection to it drops, so the link stays down (and `getConnection ()`
+says "Cannot find device") until centrald announces the device again:
+when it registers again, or when a client of ours is authorized. A link
+that drops while the device stays registered (a send to a slow peer, the
+600 s timeout) is lost. centrald's `delete_device <centrald id> <name>`
+is parsed as `<centrald number> <name>`, so it never matches an address;
+and `NetworkAddress::update ()` keeps the centrald id of the first
+registration.
+
+rts2ng: the address is kept and the link reconnected (10 s, up to every
+300 s) by a block that opens it by itself (`willConnect ()`);
+`delete_device` deletes the address of that registration, after which no
+reconnect is made (base/HISTORY.md, "Dropped device links reconnect").

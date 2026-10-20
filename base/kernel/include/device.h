@@ -60,6 +60,7 @@ class DevConnection:public Connection
 
 		virtual void connConnected ();
 		virtual bool retryAuthorization ();
+		virtual void addressRemoved (NetworkAddress * in_addr) { if (address == in_addr) address = nullptr; }
 	private:
 		// in case we know address of other side..
 		NetworkAddress * address;

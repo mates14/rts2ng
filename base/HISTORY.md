@@ -3669,3 +3669,53 @@ up restarting" never applied: systemd's default start limit (5 starts in
 `systemd-analyze verify` on lascaux50 (systemd 252) is clean for both now.
 Neither unit is enabled at BART or D50 at the moment (rts2-start runs the
 daemons).
+
+## Dropped device links reconnect (2026-10-20) [JS]
+
+When our connection to another device dropped, `Connection::connectionError
+()` deleted the device's address (classic). The link came back only when
+centrald announced the device again: when it registered again, or, by
+chance, when a client of ours was authorized (centrald then sends the whole
+device list). A link that dropped while the peer stayed registered was lost
+for good, and `getConnection ()` said "Cannot find device" - EXEC losing T0
+so could not move the telescope until T0 was restarted. Not seen in the logs
+since drops were logged (2026-10-15): every isolated drop at BART came with
+the peer restarting or the 2026-10-18 outage, after which the peers
+registered again (EXEC and IMGP lost CLOUD and RAIN_D50 at 19:04-19:06 and
+got them back that way). Possible causes: a send to a slow peer
+(`sendMsg ()` drops on EAGAIN), the 600 s timeout, the peer closing on a
+bad command.
+
+centrald's `delete_device <centrald id> <name>` was parsed as `<centrald
+number> <name>` and matched no address, and `NetworkAddress::update ()`
+kept the centrald id of the first registration. That went unnoticed
+because the drop deleted the address anyway.
+
+Now:
+- A drop keeps the address (`Block::addressLost ()`). A block that opens
+  the link by itself (`willConnect ()`: EXEC, IMGP, a camera to its
+  focuser, rts2-mon) reconnects it with a new connection after 10 s,
+  doubled for every reconnect that did not last 60 s, at most 300 s
+  (`NetworkAddress::planReconnect ()`, `Block::reconnectAddresses ()` in
+  `idle ()`). Logged: "connection to X lost, reconnecting in N s",
+  "reconnecting to X". Not if we hold a connection of that name already
+  (the device connected to us). The commands queued on the dropped link are
+  dropped with it, as before - a move must not run minutes later. A link
+  opened on demand is opened again by the next `getConnection ()`.
+- `delete_device` deletes the address of that registration (`Block::
+  deleteAddress (host_num, centrald_id, name)`); connections holding it
+  forget it (`addressRemoved ()`), and a planned reconnect is not made
+  ("device X left centrald, not reconnecting to it"). `update ()` stores
+  the new centrald id and clears a planned reconnect.
+- Not covered: if centrald stops before a device (no `delete_device`),
+  the peers retry the device at 10, 20, 40 ... 300 s, each a refused
+  connect in the log, until it registers again.
+
+Verified on lascaux (`~torman/wip-reconnect-test.sh`, the proxy's new
+`cut:N` closes the first connection after N s): C0's link to F0 cut at
+10 s, both still registered - old code never reconnected, new code at
+20.1 s, authorized. F0 stopped (SIGTERM, and SIGKILL) at 10 s and started
+at 45 s: no attempt in between ("left centrald"), connected at 45.2 s on
+centrald's announcement, as the old code. The handshake retry tests (key,
+`authorization_ok`, `+0 OK authorized`, register), the client test and the
+10-pair startup test pass as before. ctest passes.

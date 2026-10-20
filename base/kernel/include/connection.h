@@ -467,6 +467,12 @@ class Connection:public Object
 		 */
 		virtual void addressUpdated (NetworkAddress * in_addr) {}
 
+		/**
+		 * The address record is being deleted (Block::deleteAddress ());
+		 * a connection holding it must forget it.
+		 */
+		virtual void addressRemoved (NetworkAddress * in_addr) {}
+
 		virtual void setConnState (conn_state_t new_conn_state);
 
 		int isConnState (conn_state_t in_conn_state);

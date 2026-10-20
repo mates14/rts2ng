@@ -339,6 +339,8 @@ int Block::idle ()
 	for (iter = centraldConns.begin (); iter != centraldConns.end (); iter++)
 		(*iter)->idle ();
 
+	reconnectAddresses ();
+
 	// add from connection queue..
 	for (iter = connections_added.begin (); iter != connections_added.end (); iter = connections_added.erase (iter))
 	{
@@ -764,7 +766,7 @@ void Block::addAddress (int p_host_num, int p_centrald_num, int p_centrald_id, c
 	#endif
 	if (an_addr)
 	{
-		ret = an_addr->update (p_centrald_num, p_name, p_host, p_port, p_device_type);
+		ret = an_addr->update (p_centrald_num, p_centrald_id, p_name, p_host, p_port, p_device_type);
 		#ifdef DEBUG_EXTRA
 		std::cout << "addAddress: findaddress nenasel, update hodil: " << ret << std::endl;
 		#endif
@@ -813,19 +815,65 @@ int Block::addAddress (NetworkAddress * in_addr)
 	return 0;
 }
 
-void Block::deleteAddress (int p_centrald_num, const char *p_name)
+// base note: classic matched delete_device's first number, the device's
+// centrald id, against the centrald number of the address, so it deleted
+// nothing; and a dropped connection deleted the address instead, so the
+// device was lost to us until centrald announced it again (it registered
+// again, or a client of ours was authorized). Now delete_device deletes the
+// address, and a dropped connection keeps it (addressLost ()).
+void Block::deleteAddress (int p_host_num, int p_centrald_id, const char *p_name)
 {
 	std::list < NetworkAddress * >::iterator addr_iter;
 
 	for (addr_iter = blockAddress.begin (); addr_iter != blockAddress.end (); addr_iter++)
 	{
 		NetworkAddress *addr = (*addr_iter);
-		if (addr->isAddress (p_centrald_num, p_name))
+		if (addr->isRegistration (p_host_num, p_centrald_id, p_name))
 		{
+			if (addr->reconnectPlanned ())
+				logStream (MESSAGE_INFO) << "device " << p_name << " left centrald, not reconnecting to it" << sendLog;
+			// connections hold the address they were opened with
+			connections_t::iterator iter;
+			for (iter = connections.begin (); iter != connections.end (); iter++)
+				(*iter)->addressRemoved (addr);
+			for (iter = connections_added.begin (); iter != connections_added.end (); iter++)
+				(*iter)->addressRemoved (addr);
 			blockAddress.erase (addr_iter);
 			delete addr;
 			return;
 		}
+	}
+}
+
+void Block::addressLost (Connection *conn)
+{
+	NetworkAddress *addr = findAddress (conn->getCentraldNum (), conn->getName ());
+	if (addr == nullptr || !willConnect (addr))
+		return;
+	time_t delay = addr->planReconnect (time (nullptr));
+	logStream (MESSAGE_INFO) << "connection to " << addr->getName () << " lost, reconnecting in " << delay << " s" << sendLog;
+}
+
+void Block::reconnectAddresses ()
+{
+	time_t now = time (nullptr);
+	std::list < NetworkAddress * >::iterator addr_iter;
+	for (addr_iter = blockAddress.begin (); addr_iter != blockAddress.end (); addr_iter++)
+	{
+		NetworkAddress *addr = (*addr_iter);
+		if (!addr->reconnectDue (now))
+			continue;
+		addr->reconnecting (now);
+		// connected meanwhile - the device registered again, or it
+		// connected to us (its connection carries its name)
+		Connection *conn = getOpenConnection (addr->getName ());
+		if (conn != nullptr && !conn->isConnState (CONN_DELETE))
+			continue;
+		conn = createClientConnection (addr);
+		if (conn == nullptr)
+			continue;
+		logStream (MESSAGE_INFO) << "reconnecting to " << addr->getName () << sendLog;
+		addConnection (conn);
 	}
 }
 
