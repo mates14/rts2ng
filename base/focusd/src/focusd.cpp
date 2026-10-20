@@ -297,7 +297,11 @@ int Focusd::createTemperature (const char *val)
 			return -1;
 		}
 	}
-	createValue (temperature, "FOC_TEMP", "focuser temperature");
+	// base note: a driver with its own sensor (dummy) creates FOC_TEMP in its
+	// constructor, before --temperature-variable calls this again; classic
+	// created it twice, and the daemon refused to start
+	if (temperature == nullptr)
+		createValue (temperature, "FOC_TEMP", "focuser temperature");
 	return 0;
 }
 

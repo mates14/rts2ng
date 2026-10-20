@@ -435,7 +435,9 @@ int DevConnectionMaster::command ()
 		if (paramNextString (&p_device_name)
 			|| paramNextInteger (&p_key) || !paramEnd ())
 			return -2;
-		conn = master->getOpenConnection (p_device_name);
+		// base note: only our own connection waiting for the key, not the
+		// other device's connection of the same name (Block::findKeyPending)
+		conn = master->findKeyPending (p_device_name);
 		if (conn)
 			((DevConnection *)conn)->setDeviceKey (getCentraldId (), p_key);
 		setCommandInProgress (false);

@@ -223,6 +223,16 @@ class Block: public App
 		Connection *findCentralId (int in_num, int in_id);
 
 		/**
+		 * Find the connection this device opened to a given device that
+		 * is waiting for its key (the reply to "key <device>").
+		 *
+		 * @param deviceName   name of the other device
+		 *
+		 * @return    the pending outgoing connection, or nullptr if there is none
+		 */
+		Connection *findKeyPending (const char *deviceName);
+
+		/**
 		 * Send BOP state to all connections.
 		 *
 		 * @param bop_state New BOP state.

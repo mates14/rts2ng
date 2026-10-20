@@ -298,7 +298,9 @@ it, and say which classes you added.
   (also possible after a centrald restart), fixed (HISTORY, "Authorization replies matched on the ID alone"). Devices
   that never registered again with a second centrald, after a reply lost
   with the link, fixed (HISTORY, "A lost reply keeps a device off a second
-  centrald"). Data:
+  centrald"). The key for a device that also connects to us (D50 T0 and
+  DOME) given to the other's connection of the same name, fixed
+  (HISTORY, "Two devices connecting to each other") [JS 2026-10-20]. Data:
   `/var/log/rts2.log`, `~torman/rts2diag/` on lascaux. HISTORY,
   "Lost inter-daemon connections". [JS 2026-10-15]
 - BART roof, on site [MJ 2026-10-17]: the south open switch almost never

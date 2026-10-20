@@ -42,7 +42,10 @@ void ClientFocusCamera::postEvent (rts2core::Event * event)
 		case EVENT_FOCUSER_SET:
 		case EVENT_FOCUSER_OFFSET:
 		case EVENT_FOCUSER_FILTEROFFSET:
-			if (!strcmp (getName (), fm->focuserName))
+			// base note: a focuser that also connects to the camera has two
+			// connections of its name here, and the first one clears
+			// focuserName; classic strcmp'ed the nullptr and crashed
+			if (fm->focuserName != nullptr && !strcmp (getName (), fm->focuserName))
 			{
 				if (event->getType () == EVENT_FOCUSER_SET)
 				{
@@ -77,7 +80,7 @@ void ClientFocusCamera::postEvent (rts2core::Event * event)
 			}
 			break;
 		case EVENT_FOCUSER_GET:
-			if (!strcmp (getName (), fm->focuserName))
+			if (fm->focuserName != nullptr && !strcmp (getName (), fm->focuserName))
 			{
 				fm->value = getConnection ()->getValueInteger ("FOC_POS");
 				fm->focuserName = nullptr;

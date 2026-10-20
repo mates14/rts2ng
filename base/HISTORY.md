@@ -3540,6 +3540,45 @@ queue). New since mid-2023:
 The degree parser was checked on its own (`-10d30m` -> -10.5,
 `-0d30m` -> -0.5, `+5d15m36s` -> 5.26). rts2-mon was built, not run.
 
+## Two devices connecting to each other: key lost, camera crash (2026-10-20) [JS]
+
+After the 2026-10-20 package install and restart, D50 T0 logged
+"connection DOME (centrald id -1) still waiting for authorization after
+61 s" at 16:23:53. T0 and DOME both connect to the other (`willConnect`,
+the dome follows `inside_dome_limit`, the mount checks `roof_opened`
+before a move), and they started in the same second as centrald. T0's own
+link to DOME never got authorized, so `getDomeState ()` failed and T0
+took the dome as closed: a slew would stay inside the closed-dome ceiling.
+d272f7e was not involved (no "got no reply" warning).
+
+Cause, classic: such a pair holds two connections of the other's name on
+each side: its own (`DEVICE_DEVICE`) and the other's (`DEVICE_SERVER`),
+renamed by the other's `this_device` once that one is authorized. The
+reply to "key DOME" was given to `getOpenConnection ("DOME")`, the first
+one of the name. When the other's connection came first in the list (it
+connected before centrald gave T0 DOME's address), `setDeviceKey ()` only
+stored the key there, and T0's own connection waited for ever. The
+authorize for DOME's link is queSent ahead of the queued "key DOME", so
+the rename usually comes before the key. The same pair crashes a camera:
+`ClientFocusCamera::postEvent ()` strcmp's `focuserName` after the first
+client of the focuser's name cleared it (SIGSEGV in `Camera::info ()` ->
+`getFocPos ()`). The wheel client already checked for nullptr.
+
+Fixed: `authorization_key` goes to `Block::findKeyPending ()`, our own
+`DEVICE_DEVICE` connection of that name waiting for authorization;
+`ClientFocusCamera` checks `focuserName` first. To reproduce it,
+`Focusd::createTemperature ()` no longer creates `FOC_TEMP` twice (the
+dummy creates it before `--temperature-variable`, and refused to start).
+
+Verified on lascaux with a private centrald and 10 pairs of
+`camd-dummy -d Cn --focdev Fn` and `focusd-dummy -d Fn
+--temperature-variable Cn.CCD_TEMP`, all started at once
+(`~torman/wip-auth-test.sh`). Old code: 3 rounds, each with one
+connection "still waiting for authorization", 6 camera segfaults in all.
+Fixed: 6 rounds, no stuck connection, no crash. ctest passes. Not
+changed: the pair still keeps two connections, and a lost handshake is
+still not retried.
+
 ## Conventions being used
 
 - `#pragma once`, `nullptr`, `<cstdint>`/`<cstring>`/... over C headers.

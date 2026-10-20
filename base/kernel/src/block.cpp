@@ -234,6 +234,25 @@ Connection * Block::findCentralId (int in_num, int in_id)
 	return nullptr;
 }
 
+// base note: two devices that both connect to the other (D50 T0 and DOME,
+// a camera and a focuser reading its temperature) each hold two
+// connections with the other's name: their own, and the other's, which
+// this_device renames. Classic gave the key to the first connection with
+// the name; when that was the other's, the key was dropped and our own
+// connection waited for authorization for ever (D50 T0, 2026-10-20).
+Connection * Block::findKeyPending (const char *deviceName)
+{
+	connections_t::iterator iter;
+	for (iter = connections.begin (); iter != connections.end (); iter++)
+	{
+		Connection *conn = *iter;
+		if (conn->getType () == DEVICE_DEVICE && conn->isName (deviceName)
+			&& conn->isConnState (CONN_AUTH_PENDING))
+			return conn;
+	}
+	return nullptr;
+}
+
 int Block::sendAll (const char *msg)
 {
 	connections_t::iterator iter;

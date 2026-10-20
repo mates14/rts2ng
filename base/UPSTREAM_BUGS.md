@@ -1844,3 +1844,24 @@ writes NaN, not NULL. 95282de7b's `-m` name prompt sets `n_tar_name` to
 the `c_str ()` of a string local to the `if` block, used after it ends.
 rts2ng stores NULL, reads with indicators and skips such fields, and keeps
 the asked name in a member.
+
+## Two devices connecting to each other: key given to the wrong connection, camera crash (`lib/rts2/device.cpp`, `lib/rts2/block.cpp`, `lib/rts2camd/clifocuser.cpp`, `lib/rts2/focusd.cpp`) [JS 2026-10-20]
+
+When two devices both connect to the other (D50 teld and dome, a camera
+with `--focdev` and a focuser with `--temperature-variable` on that
+camera), each holds two connections of the other's name: its own, and the
+other's, which `this_device` renames. `DevConnectionMaster::command ()`
+gives the `authorization_key` reply to `getOpenConnection (name)`, the
+first of the name. If that is the other's connection, `setDeviceKey ()`
+only stores the key, and the device's own connection waits for
+authorization for ever. A race at startup: the other's connection must be
+first in the list. In the camera, `ClientFocusCamera::postEvent ()`
+calls `strcmp (getName (), fm->focuserName)` after the first focuser
+client set `focuserName` to NULL, and the camera crashes in `info ()`.
+Separately, `Focusd::createTemperature ()` creates `FOC_TEMP` again for
+`--temperature-variable` in a driver that already made it (dummy), and the
+daemon does not start.
+
+rts2ng: the key goes to the device's own connection waiting for
+authorization (`Block::findKeyPending ()`), the focuser client checks for
+NULL, `FOC_TEMP` is created once.
