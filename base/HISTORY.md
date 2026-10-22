@@ -3767,3 +3767,21 @@ Tested on lascaux as non-root, with a rendered copy (`~torman/wip-rts2-start`):
 C1-C3 give the new message and keep running; with a private device file, a
 lock pointing at a `sleep` is still refused and the `sleep` lives, and our
 own process named `rts2-camd-gxccd` is stopped.
+
+## fliusb missing after a kernel update (2026-10-22) [JS]
+
+Both lascaux and lascaux50 rebooted on 2026-10-21 17:00 into kernel
+6.1.0-54 (installed 2026-10-18), and `fliusb` was built for neither: DKMS
+had it only for 6.1.0-53 (lascaux) and 6.1.0-43 (lascaux50). At D50 W0
+(`rts2-filterd-fli`) and F1 (`rts2-focusd-fli`) failed at start, "Fli::init
+No device found!" (17:01, 17:41). Every `fliusb-dkms` install after
+2026-10-18 - six on lascaux, five on lascaux50, on 2026-10-20/21 - ran `dkms remove --all`
+and then built only for `uname -r`, so the kernel waiting for its reboot
+lost its module; DKMS's AUTOINSTALL only covers kernels installed later.
+The postinst now builds and installs for every `/lib/modules/*/build`
+(all with complete headers at both sites: 4 kernels on lascaux, 6 on
+lascaux50), loads it for the running one, and reports a failed build
+without failing. Checked with `dkms`/`modprobe` stubbed on lascaux: one
+build and install per kernel, `modprobe` once. lascaux50 also had "Diff
+between built and installed module" for 6.1.0-43, a module installed by
+hand over the DKMS build.

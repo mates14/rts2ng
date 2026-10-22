@@ -1,6 +1,7 @@
 #!/bin/sh
 # postinst for fliusb-dkms: register the module source with DKMS and build
-# it for the running kernel (and, via AUTOINSTALL, every later one).
+# it for every installed kernel with headers (AUTOINSTALL then covers the
+# kernels installed later).
 set -e
 
 NAME=fliusb
@@ -11,22 +12,32 @@ if [ "$1" = configure ]; then
 	# new even though the module version is not.
 	dkms remove -m $NAME -v $VERSION --all >/dev/null 2>&1 || true
 	dkms add -m $NAME -v $VERSION
-	# A missing headers package for the running kernel should not leave
-	# the package half-configured - DKMS builds it at the next kernel
-	# install, or by hand with `dkms autoinstall`. The headers metapackage
-	# in Depends only covers the newest kernel, not one still running
-	# from before an upgrade.
-	if [ -d "/lib/modules/$(uname -r)/build" ]; then
-		# A camera plugged in before the module existed got no driver:
-		# load it now rather than at the next replug or reboot.
-		if dkms build -m $NAME -v $VERSION && dkms install -m $NAME -v $VERSION; then
-			modprobe $NAME || true
+	# Every installed kernel, not just the running one: remove --all also
+	# dropped the build for a kernel installed but not booted yet, and
+	# AUTOINSTALL only builds for kernels installed after this. Building
+	# only for uname -r left the 6.1.0-54 kernel at SBT and D50 without the
+	# module, and D50's FLI wheel and focuser without a device after the
+	# reboot (2026-10-21). A kernel without headers (a dangling build link)
+	# is skipped; a failed build is reported, not fatal.
+	running=$(uname -r)
+	for build in /lib/modules/*/build; do
+		[ -d "$build" ] || continue
+		kernel=$(basename "$(dirname "$build")")
+		if dkms build -m $NAME -v $VERSION -k "$kernel" && dkms install -m $NAME -v $VERSION -k "$kernel"; then
+			# A camera plugged in before the module existed got no driver:
+			# load it now rather than at the next replug or reboot.
+			if [ "$kernel" = "$running" ]; then
+				modprobe $NAME || true
+			fi
 		else
-			echo "fliusb-dkms: module build for $(uname -r) FAILED, see above" >&2
+			echo "fliusb-dkms: module build for $kernel FAILED, see above" >&2
 		fi
-	else
-		echo "fliusb-dkms: no headers for $(uname -r), module not built;" \
-			"install linux-headers-$(uname -r), then run dkms autoinstall" >&2
+	done
+	# The headers metapackage in Depends only covers the newest kernel, not
+	# one still running from before an upgrade.
+	if [ ! -d "/lib/modules/$running/build" ]; then
+		echo "fliusb-dkms: no headers for $running, module not built for it;" \
+			"install linux-headers-$running, then run dkms autoinstall" >&2
 	fi
 fi
 

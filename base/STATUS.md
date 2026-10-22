@@ -43,6 +43,11 @@ Or `../buildme.sh base` (uses `base/build`, `-d` builds the .debs).
   `fliusb-dkms`. There are no CMake `install()` rules; `debian/rules`
   copies binaries from the build tree, so a new binary must be added to
   `RTS2_BASE_BINARIES` (or the FLI/gxccd list) there.
+- `fliusb-dkms` is how the FLI kernel module gets built - no hand builds.
+  Its postinst builds it for every installed kernel with headers, not only
+  the running one: `dkms remove --all` drops the build of a kernel waiting
+  for its reboot too (HISTORY, "fliusb missing after a kernel update").
+  [JS 2026-10-22]
 - Tests: `kernel/tests`, `teld/tests`, `dome/tests` (with the D50 and
   BART roof benches, run by hand). Most drivers are
   verified by running them, not by ctest; there is no automated
