@@ -262,9 +262,20 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.valueCreate('guide_last_image', '', GUIDE_CAM,
                          'last kept guiding frame, relative to the images directory',
                          'string', writable=True)
+        # When the last cycle ran, and what it was doing: a script that RTS2
+        # deactivates cannot reset the values above any more, so the web page
+        # takes "guiding" from a recent guide_time, not from a number being
+        # there (as SBT's guideccd.py, 2026-10-24).
+        self.valueCreate('guide_time', nan, GUIDE_CAM,
+                         'time of the last guiding cycle [ctime]', 'double', writable=True)
+        self.valueCreate('guide_state', 'idle', GUIDE_CAM,
+                         'guiding state: acquiring, guiding, star lost, idle',
+                         'string', writable=True)
 
-    def publish(self, dx, dy, pra, pdec, nstars, fwhm, path=None):
+    def publish(self, dx, dy, pra, pdec, nstars, fwhm, path=None, state='guiding'):
         """ Push one guiding cycle onto the bus, as values of the camera """
+        self.setValue('guide_state', state, GUIDE_CAM)
+        self.setValue('guide_time', time.time() if state != 'idle' else float('nan'), GUIDE_CAM)
         self.setValue('guide_dx', dx, GUIDE_CAM)
         self.setValue('guide_dy', dy, GUIDE_CAM)
         self.setValue('guide_pulse_ra', pra, GUIDE_CAM)
@@ -277,7 +288,7 @@ class GuideScript(scriptcomm.Rts2Comm):
     def publish_idle(self):
         """ Not guiding: say so, rather than leaving the last reading up """
         nan = float('nan')
-        self.publish(nan, nan, nan, nan, nan, nan)
+        self.publish(nan, nan, nan, nan, nan, nan, state='idle')
 
     def warn(self, message):
         """ Log a frame-keeping failure once, not once a second """
@@ -405,7 +416,7 @@ class GuideScript(scriptcomm.Rts2Comm):
 
         return '/'.join([GUIDE_SUBDIR, night, name])
 
-    def keep_frame(self, stars, change, county, nstars):
+    def keep_frame(self, stars, change, county, nstars, state='guiding'):
         """ Publish one guiding cycle and keep its guide star.
 
         Called on every pass, including the ones that measured nothing -
@@ -433,7 +444,7 @@ class GuideScript(scriptcomm.Rts2Comm):
             # not stop tracking over a full disk or a missing directory.
             self.warn('guide: cannot keep guiding frame: %s' % ex)
 
-        self.publish(dx, dy, pra, pdec, nstars, fwhm, path)
+        self.publish(dx, dy, pra, pdec, nstars, fwhm, path, state)
         self.frame = None
 
     def fit_levels(self, path):
@@ -531,7 +542,7 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.refstars = self.getstars()
         # no shift to report off the frame everything else is measured
         # against, but its star - and its FWHM - are as real as any other
-        self.keep_frame(self.refstars, None, None, len(self.refstars))
+        self.keep_frame(self.refstars, None, None, len(self.refstars), 'acquiring')
 
         # here needs to be solved the possible problem of no reference stars
 
@@ -558,7 +569,7 @@ class GuideScript(scriptcomm.Rts2Comm):
 #            self.log('I', 'guide: len(stars) = %d' % len(stars))
             if len(stars) < 4:
                 self.log('I', 'guide: no stars, will try again (len(stars)=%d)' % len(stars))
-                self.keep_frame(stars, None, None, len(stars))
+                self.keep_frame(stars, None, None, len(stars), 'star lost')
                 # but I have to watch if I am to end the loop!
                 last_move_start = self.getValueFloat('move_started', 'T0')
                 continue
@@ -611,6 +622,18 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.setValue('WFshutter', ' 0', 'SHUTTER1')
         self.publish_idle()
 
+# RTS2 deactivating the script (target over, EXEC restarted) arrives as
+# Rts2NotActive from whatever call is in flight: reset the values if the
+# connection still allows it, and leave quietly. If it does not, the page
+# goes by guide_time, which stops then.
 while 1:
-    RUN = GuideScript()
-    RUN.run()
+    try:
+        RUN = GuideScript()
+        RUN.run()
+    except scriptcomm.Rts2NotActive:
+        try:
+            RUN.log('I', 'guide: script deactivated by RTS2, ending')
+            RUN.publish_idle()
+        except Exception:
+            pass
+        sys.exit(0)

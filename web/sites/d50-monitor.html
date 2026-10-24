@@ -131,12 +131,38 @@
            against each other. The frame is a 48x48 cutout - blown up to
            this size it is meant to look like pixels, not like a blurred
            photograph, hence image-rendering. */
+        /* image + readout on the left, spanning both rows; the live strip
+           and the scatter beside them, the long history right under those
+           two - no empty band under a short plot row (as SBT's page) */
         .guide-grid {
             display: grid;
             grid-template-columns: 200px minmax(0, 1fr) 200px;
-            gap: 12px;
+            grid-template-areas: "side live scatter" "side hist hist";
+            gap: 10px 12px;
             align-items: start;
         }
+        .guide-side { grid-area: side; }
+        #guide-live { grid-area: live; }
+        #guide-scatter { grid-area: scatter; }
+        #guide-history { grid-area: hist; }
+        #guide-frame-img.dim { opacity: 0.35; }
+
+        /* rts2-httpd not answering: say so above everything, and dim the
+           values that come from it - they are the last ones it sent, not
+           the current state. Camera images and webcams come from Apache
+           and stay live. */
+        .api-banner {
+            max-width: 1500px;
+            margin: 0 auto 10px auto;
+            padding: 8px 12px;
+            border-radius: 5px;
+            background: var(--error);
+            color: white;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        body.api-stale #status-info, body.api-stale #c0-status, body.api-stale #c1-status,
+        body.api-stale .guide-panel, body.api-stale .sky-panel { opacity: 0.4; }
 
         #guide-frame-img {
             width: 100%;
@@ -151,15 +177,19 @@
         #guide-live, #guide-scatter, #guide-history { display: block; width: 100%; }
         #guide-live { height: 210px; }
         #guide-scatter { aspect-ratio: 1; height: auto; }
-        #guide-history { height: 170px; margin-top: 10px; }
+        #guide-history { height: 170px; }
 
         .guide-readout { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
         .guide-readout .big { font-size: 15px; color: var(--text); }
         .guide-readout .big.warn { color: var(--warn); }
+        .guide-readout .big.good { color: var(--good); }
         #c1-status .status-value { display: inline; margin-right: 14px; }
 
         @media (max-width: 900px) {
-            .guide-grid { grid-template-columns: 1fr; }
+            .guide-grid {
+                grid-template-columns: 1fr;
+                grid-template-areas: "side" "live" "scatter" "hist";
+            }
         }
 
         body.compact .guide-grid { grid-template-columns: 150px minmax(0, 1fr) 150px; gap: 6px; }
@@ -442,6 +472,8 @@
         </div>
     </div>
 
+    <div id="api-banner" class="api-banner" style="display: none;"></div>
+
     <div class="container">
         <div class="left-panel">
             <div class="status-panel">
@@ -542,15 +574,15 @@
                     anything in it.
                 -->
                 <div class="guide-grid">
-                    <div>
+                    <div class="guide-side">
                         <img id="guide-frame-img" alt="last guiding frame"
                              title="last kept guiding frame - click to enlarge">
                         <div id="guide-readout" class="guide-readout"></div>
                     </div>
                     <canvas id="guide-live"></canvas>
                     <canvas id="guide-scatter"></canvas>
+                    <canvas id="guide-history"></canvas>
                 </div>
-                <canvas id="guide-history"></canvas>
                 <div id="guide-status" class="cloud-status"></div>
                 <div id="c1-status" class="guide-readout" style="margin-top: 6px;"></div>
             </div>
@@ -757,9 +789,15 @@
             return typeof timeVal === 'number' ? new Date(timeVal * 1000).toLocaleString() : 'N/A';
         }
 
+        // A daemon that hangs instead of refusing would otherwise leave
+        // every poll waiting, and the next ones stacking up behind it.
+        const FETCH_TIMEOUT_MS = 8000;
+
         async function fetchDeviceData(deviceName) {
+            const ctl = new AbortController();
+            const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
             try {
-                const res = await fetch(`${API_BASE}/get?d=${deviceName}`);
+                const res = await fetch(`${API_BASE}/get?d=${deviceName}`, { signal: ctl.signal, cache: 'no-store' });
                 if (!res.ok)
                     throw new Error(`${res.status}`);
                 const data = await res.json();
@@ -767,15 +805,60 @@
             } catch (e) {
                 console.error(`Failed to fetch ${deviceName}:`, e);
                 return null;
+            } finally {
+                clearTimeout(timer);
             }
         }
 
+        // Is rts2-httpd answering? Before, a failed fetch left the previous
+        // values in systemData, so with the daemon down the page went on
+        // showing the last state as if it were current. No device answering
+        // at all means the daemon (or Apache's proxy to it) is down - say
+        // so, with the time of the last good poll, and dim the left-over
+        // values; one device failing while the others answer means it is
+        // gone, and its old values are dropped (N/A). As SBT's page.
+        let apiLastOk = null;            // ms, last poll a device answered
+        let apiFailSince = null;         // ms, first poll nothing answered, null if fine
+
+        function hhmmss(ms) {
+            return new Date(ms).toLocaleTimeString();
+        }
+
+        function updateApiBanner() {
+            const el = document.getElementById('api-banner');
+            if (apiFailSince === null) {
+                el.style.display = 'none';
+                document.body.classList.remove('api-stale');
+                return;
+            }
+            el.textContent = `No response from rts2-httpd since ${hhmmss(apiFailSince)} - `
+                + (apiLastOk !== null
+                    ? `the values below are from ${hhmmss(apiLastOk)}, not current.`
+                    : 'no values received since this page was loaded.');
+            el.style.display = '';
+            document.body.classList.add('api-stale');
+        }
+
         async function updateAllDeviceData() {
+            const answered = {};
             await Promise.all(DEVICES.map(async device => {
                 const data = await fetchDeviceData(device);
+                answered[device] = !!data;
                 if (data)
                     systemData[device] = data;
             }));
+            const anyOk = DEVICES.some(d => answered[d]);
+            if (anyOk) {
+                apiLastOk = Date.now();
+                apiFailSince = null;
+                // a silent device is gone; with the daemon down, merely old
+                for (const d of DEVICES)
+                    if (!answered[d])
+                        systemData[d] = {};
+            } else if (apiFailSince === null) {
+                apiFailSince = Date.now();
+            }
+            updateApiBanner();
         }
 
         // rts2ng's /api/getall,get always send a selection value (e.g.
@@ -1399,6 +1482,23 @@
         // never "same as last time".
         const GUIDE_CAM = 'C1';
         const GUIDE_LIVE_SECONDS = 300;
+        const GUIDE_FRESH_SECONDS = 20;  // a guiding cycle is about 2 s
+
+        // What C1 is doing when it is not guiding, from its state word
+        // (base/kernel/include/status.h): exposing 0x011, reading 0x002,
+        // hardware error 0x20000.
+        function describeGuideCam(d) {
+            const st = numOrNull(d.state);
+            if (st === null)
+                return `${GUIDE_CAM}: state unknown`;
+            if (st & 0x00020000)
+                return `${GUIDE_CAM} reports a hardware error`;
+            if (st & 0x011)
+                return `${GUIDE_CAM} is exposing`;
+            if (st & 0x002)
+                return `${GUIDE_CAM} is reading out`;
+            return `${GUIDE_CAM} is idle`;
+        }
 
         let guideLive = [];              // {t, dx, dy, fwhm, n} for the last 5 min
         let guideLastImage = null;
@@ -1446,15 +1546,23 @@
 
             guideScale = numOrNull(data.guide_scale) || guideScale;
 
+            // guide.py publishes guide_time and guide_state since 2026-10-24:
+            // then guiding means a recent guide_time (a script RTS2 ends
+            // cannot reset its values any more). An older guide.py has
+            // neither, and values being there is all there is to go by.
             const now = Date.now() / 1000;
-            const sample = {
+            const hasTime = data.guide_time !== undefined;
+            const gt = numOrNull(data.guide_time);
+            const fresh = gt !== null && now - gt < GUIDE_FRESH_SECONDS;
+            const state = typeof data.guide_state === 'string' ? data.guide_state : '';
+            const sample = (hasTime && !fresh) ? { t: now, dx: null, dy: null, fwhm: null, n: null } : {
                 t: now,
                 dx: numOrNull(data.guide_dx),
                 dy: numOrNull(data.guide_dy),
                 fwhm: numOrNull(data.guide_fwhm),
                 n: numOrNull(data.guide_stars)
             };
-            guideActive = sample.dx !== null || sample.dy !== null;
+            guideActive = hasTime ? fresh : (sample.dx !== null || sample.dy !== null);
             guideLive.push(sample);
             while (guideLive.length && guideLive[0].t < now - GUIDE_LIVE_SECONDS)
                 guideLive.shift();
@@ -1475,13 +1583,21 @@
                     () => openLightbox(url, `${GUIDE_CAM} - ${path.split('/').pop()}`);
             }
 
-            status.className = 'cloud-status';
-            status.textContent = guideActive
-                ? `guiding, ${guideLive.filter(p => p.dx !== null).length} samples in the last`
-                    + ` ${Math.round(GUIDE_LIVE_SECONDS / 60)} min`
-                : 'not guiding';
+            const img = document.getElementById('guide-frame-img');
+            img.classList.toggle('dim', !guideActive);
 
-            updateGuideReadout();
+            status.className = state === 'star lost' && guideActive ? 'cloud-status warn' : 'cloud-status';
+            if (guideActive && (!hasTime || state === 'guiding' || !state))
+                status.textContent = `guiding, ${guideLive.filter(p => p.dx !== null).length} samples in the last`
+                    + ` ${Math.round(GUIDE_LIVE_SECONDS / 60)} min`;
+            else if (guideActive)
+                status.textContent = state === 'acquiring' ? 'acquiring the reference frame'
+                    : state === 'star lost' ? 'no stars in the guiding frame - retrying' : state;
+            else
+                status.textContent = `not guiding - ${describeGuideCam(data)}`
+                    + (gt !== null ? `; last guided ${hhmmss(gt * 1000)}` : '');
+
+            updateGuideReadout(data);
             drawGuideLive();
             drawGuideScatter();
         }
@@ -1525,23 +1641,38 @@
                 + ` / ${(y * guideScale).toFixed(digits)}")` : '';
         }
 
-        function updateGuideReadout() {
+        function updateGuideReadout(data) {
             const el = document.getElementById('guide-readout');
             const st = guideStats();
+            if (!guideActive) {
+                el.innerHTML = '<span class="big">not guiding</span><br>' + describeGuideCam(data || {})
+                    + (st ? `<br>last ${Math.round(GUIDE_LIVE_SECONDS / 60)} min: RMS`
+                        + ` ${st.rmsX.toFixed(2)} / ${st.rmsY.toFixed(2)} px` : '');
+                return;
+            }
+            // the guiding state first, as SBT's page shows it: guide.py's
+            // guide_state, or plain "guiding" from an older guide.py
+            const gstate = data && typeof data.guide_state === 'string' && data.guide_state
+                ? data.guide_state : 'guiding';
+            const stateLine = `<span class="big ${gstate === 'star lost' ? 'warn' : (gstate === 'guiding' ? 'good' : '')}">`
+                + `${gstate}</span><br>`;
             if (!st) {
-                el.innerHTML = '<span class="big">idle</span><br>no guiding errors measured'
-                    + ` in the last ${Math.round(GUIDE_LIVE_SECONDS / 60)} min`;
+                el.innerHTML = stateLine + 'no guiding errors measured yet';
                 return;
             }
             const stars = st.last.n === null ? 'N/A' : st.last.n.toFixed(0);
             const lost = st.last.n !== null && st.last.n < 1;
-            el.innerHTML = `
+            const pra = data ? numOrNull(data.guide_pulse_ra) : null;
+            const pdec = data ? numOrNull(data.guide_pulse_dec) : null;
+            const pulses = pra === null || pdec === null ? 'N/A' : `${pra.toFixed(0)} / ${pdec.toFixed(0)} ms`;
+            el.innerHTML = stateLine + `
                 <span class="big">${st.last.dx.toFixed(2)} / ${st.last.dy.toFixed(2)} px</span>
                 ${guideArcsecPair(st.last.dx, st.last.dy)}<br>
                 RMS ${st.rmsX.toFixed(2)} / ${st.rmsY.toFixed(2)} px over ${st.count} samples<br>
                 mean ${st.meanX.toFixed(2)} / ${st.meanY.toFixed(2)} px<br>
                 FWHM <span class="big">${st.fwhm === null ? 'N/A' : st.fwhm.toFixed(2) + ' px'}</span>
                 ${guideArcsec(st.fwhm)}<br>
+                pulses RA / Dec ${pulses}<br>
                 stars matched <span class="${lost ? 'big warn' : ''}">${stars}</span>
             `;
         }
@@ -1737,7 +1868,7 @@
                         throw new Error(data.error);
                     return data;
                 }));
-                guideHistory = { from, to, dx: series[0], dy: series[1] };
+                guideHistory = { from, to, bucket: (to - from) / points, dx: series[0], dy: series[1] };
             } catch (e) {
                 guideHistory = { from, to, error: String(e.message || e) };
             }
@@ -1814,15 +1945,21 @@
                 c.ctx.fillText(label, x, y1 + 4);
             }
 
+            // /api/db/records leaves empty buckets out, so a pause in
+            // guiding arrives as a jump in time, not as a null - break the
+            // line there instead of drawing straight across it
+            const maxGap = 3 * guideHistory.bucket;
             let any = false;
             for (const [key, colour] of [['dx', c.x], ['dy', c.y]]) {
                 const pts = guideHistory[key].points;
                 c.ctx.strokeStyle = colour;
                 c.ctx.lineWidth = 1.2;
                 c.ctx.beginPath();
-                let pen = false;
+                let pen = false, lastT = -Infinity;
                 for (const p of pts) {
                     if (p[1] === null || !isFinite(p[1])) { pen = false; continue; }
+                    if (p[0] - lastT > maxGap) pen = false;
+                    lastT = p[0];
                     any = true;
                     const px = sx(p[0]), py = sy(Math.max(-span, Math.min(span, p[1])));
                     pen ? c.ctx.lineTo(px, py) : c.ctx.moveTo(px, py);

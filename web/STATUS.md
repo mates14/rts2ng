@@ -3051,3 +3051,32 @@ At D50 it worked only because a classic copy of the module in
 `Rts2Comm`, `Rts2Exception`, `Rts2NotActive` from `scriptcomm` again;
 the other classic exports stay off, their modules are not in the
 package. Takes effect at SBT with the next `rts2-python` release.
+
+### D50 monitor: the same improvements (2026-10-24) [JS]
+
+`d50-monitor.html` got what SBT's page got the same evening: the
+rts2-httpd-down banner and dimmed left-over values (all of D50's devices
+come from its own daemon, so "down" is no device answering), N/A for a
+single silent device, the 8 s request timeout; the guiding panel's grid
+with the history beside the frame and readout; and the history line
+broken at gaps instead of drawn across a pause in guiding.
+
+`python/sites/d50/guide.py` (what `/etc/rts2/guide.py` ->
+`guidecmosdec.py` runs, the only difference being the classic
+`import rts2comm`) also publishes `guide_time` and `guide_state`
+(acquiring for the reference frame, star lost for a frame without
+stars, guiding, idle), and resets its values when RTS2 deactivates it
+(`Rts2NotActive`, which it did not catch, so its last values stayed up).
+The page counts C1 as guiding while `guide_time` is under 20 s old and
+otherwise says what C1 is doing (exposing, reading out, idle, hardware
+error) and when it last guided; the readout starts with the guiding
+state as SBT's does (green guiding, red star lost) and lists the pulses; with an older `guide.py`, which has no
+`guide_time`, it keeps the old rule (values present = guiding). The repo
+version runs on D50's Python as it is: its `rts2.scriptcomm` (the classic
+copy in `/usr/local`) has `Rts2NotActive` and `valueCreate`.
+
+Tested in headless Chromium against the mock with C1 as guide camera:
+guiding, observing with 10-minute-old guiding values, an older guide.py
+(no guide_time), and the daemon returning 502. Deployed for testing to
+`/var/www/info/index-t.html` (-> `~torman/rts2ng/web/sites/d50-monitor.html`
+on lascaux50); the live `index.html` follows MJ's checkout.
