@@ -3785,3 +3785,76 @@ without failing. Checked with `dkms`/`modprobe` stubbed on lascaux: one
 build and install per kernel, `modprobe` once. lascaux50 also had "Diff
 between built and installed module" for 6.1.0-43, a module installed by
 hand over the DKMS build.
+
+## gxccd: back to classic error handling (2026-10-22) [JS]
+
+C1 at SBT hung again at 2026-10-22 16:53:51, without a NOW: night started
+while C1 read out a frame (end exposure 16:53:41, readout about 9.4 s),
+`beforeNight ()` set the window heating, it failed on the busy camera, and
+`setWindowHeating ()` reinitialized it ("reinitialization failed" at
+16:54:51). Then every command gave "Invalid parameter".
+
+Compared with the classic driver JS ran at SBT (`~torman/rts2`, 08e9cce0b,
+2023-03-19) and upstream RTS2 (github, gxccd last changed by 879e62251,
+2023-05-24): rts2ng was ported from upstream, which has Karpov's `cta-n`
+branch for CTA-N on top of classic. That merge turned the single attempts
+into three attempts with `reinitCamera ()` after each - the temperature
+ramp, the start of cooling, the filter move and the exposure start (there
+on any error, not only -1) - added the init lock and setting the
+temperature and filter after a reinit (eda4aed56), and preflash. Its own
+comment gives the reason: "The hardware sometimes returns an INDEX error
+for no obvious reason". At SBT those retries hit a camera that is only busy
+with a readout. The window heating at night start and its reinit are the
+same in classic.
+
+Now: one attempt, as classic, in the temperature ramp, `setCoolTemp ()` and
+`startExposure ()` (a reinit only on -1); the filter move keeps the retry
+until the camera is free (149bba6). `reinitCamera ()` refuses while the
+camera reads out or within `CAMERA_BUSY_SEC` (15 s) after `stopExposure ()`
+aborted a readout ("camera busy with a readout, not reinitializing it"),
+which also covers a NOW followed by an exposure start without a filter
+change. `beforeNight ()`/`afterNight ()` set the window heating at once
+only if the camera is free and not exposing; otherwise at the next
+exposure start or in `idle ()`. Kept from upstream: the init lock, the
+temperature and filter set after a successful reinit, preflash, the
+readout size checks. Released untested on the cameras, by JS's decision
+(2026-10-24 night, cameras wedging every night): the window heating in a
+readout and a killall followed by an exposure start are still to be
+tested on an SBT camera in daylight.
+
+2026-10-24, still on e999dd1: at 16:50:16 (night start) C1 and C3 had both
+ended 2 s exposures a second earlier and were reading out; both failed
+"cannot set windowHeating", were reinitialized and stuck (each reinit
+took 2 min under the lock, C1 waited for C3's). C2, which had just started
+an exposure, took the same command. At 17:24:54 (standby, bad weather) C3,
+guiding with 2 s frames of 4096 pixels, failed the same way in a readout.
+`Camera::changeMasterState ()` (identical in classic) calls `beforeNight
+()` on every state change from evening to morning while ON or STANDBY, so
+the heating is sent again at each of them - 4 since 16:00 that night.
+`requestWindowHeating ()` therefore also skips a level the camera already
+has; that alone would have avoided both commands that night.
+
+Generalized (JS's question: does any command to a busy camera end so?):
+setting commands fail during a readout - in 30 days of `/var/log/rts2.log`
+the filter move (15 right after "end exposure", e.g. C2 2026-10-24
+16:29:13, `loadValues` mid-readout), window heating, exposure start, the
+chip temperature at cooling start - but the failure alone did no harm
+(the C2 killall test of 2026-10-20); every stuck camera had been
+reinitialized. `info ()` has always talked to the camera only when
+`isIdle ()` (classic too), which is the rule now applied to everything the
+driver sends of its own: `cameraBusy ()` is not `isIdle ()` (exposing or
+reading) or within 15 s of an aborted readout; it blocks `reinitCamera ()`,
+the window heating (sent when free, at the next exposure start or in
+`idle ()`) and the temperature-ramp step (postponed 5 s). Stopping an
+exposure stays allowed. `startExposure ()` runs before the state turns
+to exposing, so a lost camera is still reinitialized at an exposure start.
+
+A client's filter change during a plain readout is not a problem: tested
+on C2 at 17:49-17:51 (`~torman/wip-filter-readout-test.sh`, e999dd1, SBT
+in standby), `X filter = 1` 0.6 s and `X filter = 3` 5 s after "end
+exposure" were both queued and ran the moment the readout ended (20 us
+after the "readout" line), and moved in 2.2 s and 4.5 s, no error. So
+`createFilter ()` stays as classic; making the filter `CAM_WORKING` would
+only add waiting. The failing moves bypass that queue: `loadValues ()`
+after a killall or a script end, when the state no longer says reading
+although the camera still is (C2 16:29:13).

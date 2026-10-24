@@ -1894,3 +1894,18 @@ rts2ng: the address is kept and the link reconnected (10 s, up to every
 300 s) by a block that opens it by itself (`willConnect ()`);
 `delete_device` deletes the address of that registration, after which no
 reconnect is made (base/HISTORY.md, "Dropped device links reconnect").
+
+## gxccd: reinitializing retries wedge a camera that is busy with a readout (`src/camd/gxccd.cpp`, 879e62251 `cta-n`) [JS 2026-10-22]
+
+The `cta-n` merge (Karpov, for CTA-N's sporadic errors) made the
+temperature ramp, the start of cooling, the filter move and the exposure
+start try three times and call `reinitCamera ()` after each failure (the
+exposure start on any error). A command sent while the camera reads out,
+or right after a readout was aborted (killall), fails; releasing and
+initializing the camera then left Moravian G2-1600s at SBT unusable until
+power-cycled. The window heating at night start (`beforeNight ()`) can hit
+a readout the same way, also in the classic driver.
+
+rts2ng: classic's single attempts, no reinit while the camera is busy, the
+night heating deferred until the camera is free (base/HISTORY.md, "gxccd:
+back to classic error handling").

@@ -154,7 +154,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - Andor: `scriptEnds ()` does not reset `intExposure` (hidden state that
   `setTiming ()` later copies into `exposure`). [MJ 2026-10-18]
 - gxccd: a failed filter move is retried every 0.5 s for up to 15 s and
-  never answered with `reinitCamera ()` (classic did not reinit either). After a NOW's `killall`
+  never answered with `reinitCamera ()` (classic did not reinit either).
+  The driver sends nothing of its own to a busy camera (`cameraBusy ()`:
+  not `isIdle ()`, or a readout aborted under 15 s ago) - no reinit, no
+  window heating, no temperature-ramp step; only stopping an exposure.
+  A client's filter change during a readout is queued by RTS2 and runs the
+  moment the readout ends (tested on C2); keep `createFilter ()` as it is,
+  waiting longer only loses time. Commands make one attempt, as classic
+  (HISTORY, "gxccd: back to classic error handling"). [JS 2026-10-24] After a NOW's `killall`
   aborts a readout the camera is still busy, the move fails, and
   reinitializing it then wedged C1 and C2 until power-cycled (HISTORY,
   "gxccd: no reinit on a failed filter move"). [JS 2026-10-20]

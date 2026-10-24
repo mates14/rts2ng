@@ -53,6 +53,10 @@
 #define FILTER_RETRY_USEC     500000
 #define FILTER_RETRY_SEC      15
 
+// after an aborted readout the camera is taken as busy this long; C1 and C2
+// at SBT read out in about 9.4 s
+#define CAMERA_BUSY_SEC       15
+
 namespace rts2camd
 {
 
@@ -98,6 +102,7 @@ class GXCCD:public Camera
 
 		virtual void beforeNight ();
 		virtual void afterNight ();
+		virtual int idle ();
 
 		int setWindowHeating (int heatingLevel);
 
@@ -130,6 +135,20 @@ class GXCCD:public Camera
 
 		rts2core::ValueIntegerMinMax *desiredNightWindowHeating;
 		int desiredNightHeatingInitValue = 0;
+
+		// when a readout was last aborted (cameraBusy ())
+		double lastCameraBusy = 0;
+		// window heating waiting for the camera to be free, -1 none
+		int pendingWindowHeating = -1;
+
+		/**
+		 * True while the camera exposes or reads out (not isIdle (), as
+		 * info () always checked) and for CAMERA_BUSY_SEC after a readout
+		 * was aborted: the driver sends it nothing of its own then.
+		 */
+		bool cameraBusy ();
+		void requestWindowHeating (int heatingLevel);
+		void applyPendingWindowHeating ();
 
 		// buffer for error messages
 		char gx_err[200];
@@ -187,6 +206,13 @@ void GXCCD::postEvent (rts2core::Event *event)
 	switch (event->getType ())
 	{
 		case EVENT_TE_RAMP:
+			// base note: no command to a busy camera (cameraBusy ()); the
+			// step comes a few seconds later
+			if (cameraBusy ())
+			{
+				addTimer (5, event);
+				return;
+			}
 			if (tempTarget->getValueFloat () < tempSet->getValueFloat ())
 				change = tempRamp->getValueFloat ();
 			else if (tempTarget->getValueFloat () > tempSet->getValueFloat ())
@@ -198,19 +224,16 @@ void GXCCD::postEvent (rts2core::Event *event)
 					tempTarget->setValueFloat (tempSet->getValueFloat ());
 				sendValueAll (tempTarget);
 
-				for (int iter = 0; iter < 3; iter ++)
+				// base note: one attempt, as classic; the retries came with
+				// upstream's cta-n merge, see reinitCamera ()
+				res = gxccd_set_temperature (camera, tempTarget->getValueFloat ());
+				if (res)
 				{
-					res = gxccd_set_temperature (camera, tempTarget->getValueFloat ());
-					if (res)
-					{
-						gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-						logStream (MESSAGE_ERROR) << "cannot set target temperature on iter " << iter << " : " << gx_err << sendLog;
+					gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+					logStream (MESSAGE_ERROR) << "cannot set target temperature: " << gx_err << sendLog;
 
-						if (res == -1)
-							reinitCamera ();
-					}
-					else
-						break;
+					if (res == -1)
+						reinitCamera ();
 				}
 
 				addTimer (60, event);
@@ -523,22 +546,17 @@ int GXCCD::setCoolTemp (float new_temp)
 	if (hasCooling == false)
 		return -2;
 
-	for (int iter = 0; iter < 3; iter ++)
+	// base note: one attempt, as classic (see reinitCamera ())
+	int ret = gxccd_get_value (camera, GV_CHIP_TEMPERATURE, &val);
+	if (ret)
 	{
-		int ret = gxccd_get_value (camera, GV_CHIP_TEMPERATURE, &val);
-		if (ret)
-		{
-			gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-			logStream (MESSAGE_ERROR) << "cannot retrieve chip temperature, cannot start cooling: " << gx_err << sendLog;
+		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+		logStream (MESSAGE_ERROR) << "cannot retrieve chip temperature, cannot start cooling: " << gx_err << sendLog;
 
-			if (iter == 2)
-				return -1;
+		if (ret == -1)
+			reinitCamera ();
 
-			if (ret == -1 && reinitCamera ())
-				return -1;
-		}
-		else
-			break;
+		return -1;
 	}
 	deleteTimers (EVENT_TE_RAMP);
 	tempTarget->setValueFloat (val);
@@ -640,39 +658,29 @@ int GXCCD::startExposure ()
 {
 	int ret;
 
-	for (int iter = 0; iter < 3; iter ++)
+	applyPendingWindowHeating ();
+
+	// base note: one attempt each, and a reinit only on -1 (hardware error),
+	// as classic; upstream's cta-n merge retried three times and reinitialized
+	// on any error, see reinitCamera ()
+	ret = gxccd_set_read_mode (camera, mode->getValueInteger ());
+	if (ret)
 	{
-		bool reinit = false;
+		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+		logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_set_read_mode " << gx_err << sendLog;
+		if (ret == -1)
+			reinitCamera ();
+		return -1;
+	}
 
-		ret = gxccd_set_read_mode (camera, mode->getValueInteger ());
-		if (ret)
-		{
-			gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-			logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_set_read_mode on iter " << iter << " : " << ret << " " << gx_err << sendLog;
-
-			if (ret)
-				reinit = true;
-		}
-		else
-		{
-			ret = gxccd_set_binning (camera, binningHorizontal (), binningVertical ());
-			if (ret)
-			{
-				gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-				logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_set_binning on iter " << iter << " : " << ret << " " << gx_err << sendLog;
-
-				if (ret)
-					reinit = true;
-			}
-			else
-				break;
-		}
-
-		if (ret && iter == 2)
-			return -1;
-
-		if (reinit && reinitCamera ())
-			return -1;
+	ret = gxccd_set_binning (camera, binningHorizontal (), binningVertical ());
+	if (ret)
+	{
+		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+		logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_set_binning " << gx_err << sendLog;
+		if (ret == -1)
+			reinitCamera ();
+		return -1;
 	}
 
 	if (preflash->getValueFloat () > 0)
@@ -696,6 +704,10 @@ int GXCCD::startExposure ()
 int GXCCD::stopExposure ()
 {
  	int ret;
+	// a readout aborted here (killall, NOW) keeps the camera busy for a
+	// while after the state says it is not reading any more
+	if ((getState () & CAM_MASK_READING) == CAM_READING)
+		lastCameraBusy = getNow ();
 	ret = gxccd_abort_exposure (camera, false);
 	if (ret)
 	{
@@ -756,15 +768,59 @@ int GXCCD::scriptEnds ()
 void GXCCD::beforeNight ()
 {
 	if (windowHeating)
-		setWindowHeating (desiredNightWindowHeating->getValueInteger ());
+		requestWindowHeating (desiredNightWindowHeating->getValueInteger ());
 	Camera::beforeNight ();
 }
 
 void GXCCD::afterNight ()
 {
 	if (windowHeating)
-		setWindowHeating (0);
+		requestWindowHeating (0);
 	Camera::afterNight ();
+}
+
+bool GXCCD::cameraBusy ()
+{
+	return !isIdle () || getNow () - lastCameraBusy < CAMERA_BUSY_SEC;
+}
+
+// base note: night start and end come whenever they come, also in the middle
+// of a readout (C1 at SBT, 2026-10-22 16:53:51); set the heating when the
+// camera is free - at the next exposure start, or in idle ()
+void GXCCD::requestWindowHeating (int heatingLevel)
+{
+	// Camera::changeMasterState () calls beforeNight () on every state
+	// change from evening to morning (standby, bad weather), each asking for
+	// the level the camera already has; don't send it again (C3 at SBT,
+	// 2026-10-24 17:24:54, standby for bad weather in a guiding readout)
+	if (heatingLevel == windowHeating->getValueInteger ())
+	{
+		pendingWindowHeating = -1;
+		return;
+	}
+	if (!cameraBusy ())
+	{
+		setWindowHeating (heatingLevel);
+		pendingWindowHeating = -1;
+		return;
+	}
+	pendingWindowHeating = heatingLevel;
+	logStream (MESSAGE_INFO) << "camera busy, window heating " << heatingLevel << " set when it is free" << sendLog;
+}
+
+void GXCCD::applyPendingWindowHeating ()
+{
+	if (pendingWindowHeating < 0 || cameraBusy ())
+		return;
+	int level = pendingWindowHeating;
+	pendingWindowHeating = -1;
+	setWindowHeating (level);
+}
+
+int GXCCD::idle ()
+{
+	applyPendingWindowHeating ();
+	return Camera::idle ();
 }
 
 int GXCCD::clearCCD (double pref_time, int nclear)
@@ -779,6 +835,19 @@ int GXCCD::clearCCD (double pref_time, int nclear)
 
 int GXCCD::reinitCamera ()
 {
+	// base note: never while the camera is busy with a readout, or just
+	// after one was aborted (killall, NOW): a command then fails, and
+	// releasing and initializing the busy camera wedged C1 and C2 at SBT
+	// until power-cycled (2026-10-15, 2026-10-20 filter move, 2026-10-22
+	// window heating at night start). Classic reinitialized in fewer places;
+	// upstream's cta-n merge (879e62251, Karpov, for CTA-N's sporadic
+	// errors) added reinitializing retries. The failing command fails.
+	if (cameraBusy ())
+	{
+		logStream (MESSAGE_WARNING) << "camera busy with a readout, not reinitializing it" << sendLog;
+		return -1;
+	}
+
 	int ret = 0;
 	float val;
 	bool quiet = false;
