@@ -91,22 +91,27 @@ calling packaging work done.
 
 The observatories install rts2ng only from the signed apt repository,
 `https://lascaux.asu.cas.cz/m/rts2ng/<os>/<codename>/`, which both sites have
-in their apt sources. MJ publishes it, from one build host: lascaux50, MJ's
-checkout of master, all modules:
+in their apt sources. It is built and published on lascaux, the same
+machine that serves it, in MJ's account and MJ's checkout of master
+(`~mates/rts2ng`), all modules. MJ or JS (through MJ's account) runs:
 
 ```
 git pull --rebase
 ./buildme.sh -d     # signs InRelease (REPO_GPG_KEY), then offers the upload
 ```
 
-Then, at each site: `sudo apt update && sudo apt upgrade`, then
-`sudo rts2-start -r`, and check `dpkg-query -W rts2-base`. The version names
-the commit: `0.1.0-<YYYYMMDD>.<HHMM>+g<commit>~d12`.
+Then, at each site: `sudo apt update && sudo apt upgrade`. An upgrade does
+not stop the running daemons (`--no-stop-on-upgrade`, base/debian/rules);
+restart them when it suits the observation, `sudo rts2-start -r` (or only
+the daemons that changed, e.g. `sudo rts2-start -r C1 C2 C3`), and check
+`dpkg-query -W rts2-base`. The version names the commit:
+`0.1.0-<YYYYMMDD>.<HHMM>+g<commit>~d12`. Until 2026-10-24 the build host
+was lascaux50. [JS 2026-10-24]
 
 - Do not build packages anywhere else, and do not install from a build
   directory. The same commit built twice gives two different packages, and
   a side channel leaves the sites on different builds (2026-10-20: SBT on an
-  unsigned lascaux build, D50 on the repository). [JS 2026-10-22]
+  unsigned build from JS's account, D50 on the repository). [JS 2026-10-22]
 - Build all modules, so that the python and gui packages stay in step with
   base.
 - Testing a change before it is released (a dummy daemon, a private

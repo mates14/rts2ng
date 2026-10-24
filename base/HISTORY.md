@@ -3858,3 +3858,19 @@ after the "readout" line), and moved in 2.2 s and 4.5 s, no error. So
 only add waiting. The failing moves bypass that queue: `loadValues ()`
 after a killall or a script end, when the state no longer says reading
 although the camera still is (C2 16:29:13).
+
+## An upgrade stopped rts2.service (2026-10-24) [JS]
+
+Installing `rts2-base` e9c4840 at SBT (2026-10-24 19:26:59) stopped every
+daemon at 19:27:03 ("Stopping rts2.service", `rts2-stop`), and nothing
+started them again. debhelper's preinst for `rts2.service`,
+`rts2@.service` and `rts2-alertd.service` ran `deb-systemd-invoke stop` on
+every upgrade: with `--no-start`, `dh_installsystemd` cannot restart a unit
+after the upgrade, so it stops it before. Earlier installs did not show
+it because the daemons had been started by hand (`rts2-start`), so the
+unit was not active; since the 2026-10-21 17:00 reboot systemd ran RTS2
+through `rts2.service`. The `fliusb-dkms` builds in the same install (four
+kernels, after the stop) were not involved. `debian/rules` now adds
+`--no-stop-on-upgrade` to all three units; checked with a dummy package
+and debhelper 13.11.4 on lascaux: the preinst `stop` is gone, nothing else
+changes. An upgrade leaves the daemons running; restart them by hand.
