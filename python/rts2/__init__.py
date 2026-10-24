@@ -18,7 +18,13 @@
 __version__ = '3.0'
 
 # populate namescpace with handy classes
-#from .scriptcomm import Rts2Comm,Rts2Exception,Rts2NotActive
+# rts2 note: Rts2Comm & co. exported as classic did - scripts and the image
+# pipeline call rts2.Rts2Comm (asarina-imgproc reports fwhm_C<n> so, and
+# failed at SBT with "module 'rts2' has no attribute 'Rts2Comm'"; D50 only
+# worked through a classic copy in /usr/local shadowing this package).
+# The other classic exports stay off: those modules (imgprocess, centering,
+# rtsapi, queue, sextractor, ...) are not in this package.
+from .scriptcomm import Rts2Comm,Rts2Exception,Rts2NotActive
 #from .imgprocess import ImgProcess
 #from .centering import Centering
 #from .flats import Flat,FlatScript

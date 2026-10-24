@@ -17,6 +17,7 @@
             --warn: #8B0000;
             --error: #ff0000;
             --graph-line: #2563eb;
+            --graph-line2: #d97706;
             --graph-band: rgba(37, 99, 235, 0.18);
             --graph-day-bg: rgba(255, 190, 40, 0.12);
             --graph-twilight-bg: rgba(37, 99, 235, 0.08);
@@ -34,6 +35,7 @@
             --warn: #ff8a8a;
             --error: #ff5c5c;
             --graph-line: #6fb3ff;
+            --graph-line2: #ffb45c;
             --graph-band: rgba(111, 179, 255, 0.22);
             --graph-day-bg: rgba(255, 190, 40, 0.10);
             --graph-twilight-bg: rgba(111, 179, 255, 0.10);
@@ -68,7 +70,7 @@
             align-self: start;
         }
 
-        .status-panel, .image-panel, .webcam-panel, .cam-panel, .cloud-panel {
+        .status-panel, .image-panel, .webcam-panel, .cam-panel, .cloud-panel, .guide-panel {
             background: var(--panel-bg);
             border: 1px solid var(--border);
             padding: 10px;
@@ -107,6 +109,84 @@
                cameras row. */
             grid-column: 1 / -1;
         }
+
+        /* rts2-httpd not answering: say so above everything, and dim the
+           values that come from it - they are the last ones it sent, not
+           the current state. Camera images and webcams come from Apache
+           and stay live. */
+        .api-banner {
+            max-width: 1500px;
+            margin: 0 auto 10px auto;
+            padding: 8px 12px;
+            border-radius: 5px;
+            background: var(--error);
+            color: white;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        body.api-stale #status-info, body.api-stale .cam-box-body > div[id$="-status"],
+        body.api-stale .guide-panel, body.api-stale .sky-panel { opacity: 0.4; }
+
+        .right-panel {
+            /* Cameras and guiding share .container's second column,
+               stacked, as on D50's page. Same align-self reasoning as
+               .left-panel's; min-width:0 so the plots can be narrower than
+               their content wants. */
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            align-self: start;
+            min-width: 0;
+        }
+
+        /* Guiding: the last few minutes of error, where the errors sit
+           against each other, and the numbers. No frame here: C3's guide
+           frames are deleted by the script (they would fill the archive). */
+        /* image + readout on the left, spanning both rows; the live strip
+           and the scatter beside them, the long history right under those
+           two - so no empty band under a short plot row */
+        .guide-grid {
+            display: grid;
+            grid-template-columns: 200px minmax(0, 1fr) 200px;
+            grid-template-areas: "side live scatter" "side hist hist";
+            gap: 10px 12px;
+            align-items: start;
+        }
+        .guide-side { grid-area: side; }
+        #guide-live { grid-area: live; }
+        #guide-scatter { grid-area: scatter; }
+        #guide-history { grid-area: hist; }
+        /* the 64x64 guiding window, blown up: meant to look like pixels */
+        #guide-frame-img {
+            display: block;
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: contain;
+            background: #111;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            image-rendering: pixelated;
+            margin-bottom: 6px;
+        }
+        #guide-frame-img.dim { opacity: 0.35; }
+        #guide-live, #guide-scatter { display: block; width: 100%; }
+        #guide-live { height: 200px; }
+        #guide-history { display: block; width: 100%; height: 170px; }
+        #guide-scatter { aspect-ratio: 1; height: auto; }
+        .guide-readout { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+        .guide-readout .big { font-size: 15px; color: var(--text); }
+        .guide-readout .big.warn { color: var(--warn); }
+        .guide-readout .big.good { color: var(--good); }
+        @media (max-width: 900px) {
+            .guide-grid {
+                grid-template-columns: 1fr;
+                grid-template-areas: "side" "live" "scatter" "hist";
+            }
+        }
+        body.compact .guide-grid { grid-template-columns: 150px minmax(0, 1fr) 150px; gap: 6px; }
+        body.compact #guide-live { height: 130px; }
+        body.compact #guide-history { height: 110px; }
+        body.compact .guide-panel { padding: 5px; }
 
         #cloud-canvas {
             display: block;
@@ -402,6 +482,8 @@
         </div>
     </div>
 
+    <div id="api-banner" class="api-banner" style="display: none;"></div>
+
     <div class="container">
         <div class="left-panel">
             <div class="status-panel">
@@ -438,6 +520,7 @@
             </div>
         </div>
 
+        <div class="right-panel">
         <div class="cam-panel">
             <h3 style="margin-top: 0;">Cameras</h3>
             <div class="cam-grid">
@@ -484,6 +567,41 @@
                 lascaux (not the rts2ng /preview endpoint's raw,
                 uncorrected output this page used before).
             -->
+        </div>
+
+            <div class="guide-panel">
+                <h3 style="margin-top: 0;">
+                    Guiding - C3
+                    <span id="guide-ranges" class="cloud-ranges">
+                        <button data-hours="2" onclick="setGuideRange(2)">2 h</button>
+                        <button data-hours="8" onclick="setGuideRange(8)">8 h</button>
+                        <button data-hours="24" onclick="setGuideRange(24)">24 h</button>
+                    </span>
+                </h3>
+                <!--
+                    From the values the guide script (/etc/rts2/guideccd.py)
+                    publishes on C3 itself: guide_dx/guide_dy, the pulses,
+                    guide_snr, guide_state and guide_time, and the frame it
+                    writes as guide_last.jpg beside the camera previews
+                    (guide_last_image changes with each). Below them, the
+                    longer history: rts2-recordd samples C3's guide_dx/guide_dy
+                    into the database (/etc/rts2/record), read back through
+                    /api/db/records as D50's page does. C3 also takes
+                    observations, so "guiding" means a recent guide_time;
+                    otherwise the panel says what C3 is doing instead.
+                -->
+                <div class="guide-grid">
+                    <div class="guide-side">
+                        <img id="guide-frame-img" alt="last guiding frame"
+                             title="last guiding frame - click to enlarge">
+                        <div id="guide-readout" class="guide-readout"></div>
+                    </div>
+                    <canvas id="guide-live"></canvas>
+                    <canvas id="guide-scatter"></canvas>
+                    <canvas id="guide-history"></canvas>
+                </div>
+                <div id="guide-status" class="cloud-status"></div>
+            </div>
         </div>
 
         <div class="webcam-panel">
@@ -680,9 +798,15 @@
             return typeof timeVal === 'number' ? new Date(timeVal * 1000).toLocaleString() : 'N/A';
         }
 
+        // A daemon that hangs instead of refusing would otherwise leave
+        // every poll waiting, and the next ones stacking up behind it.
+        const FETCH_TIMEOUT_MS = 8000;
+
         async function fetchDeviceData(deviceName, base = API_BASE) {
+            const ctl = new AbortController();
+            const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
             try {
-                const res = await fetch(`${base}/get?d=${deviceName}`);
+                const res = await fetch(`${base}/get?d=${deviceName}`, { signal: ctl.signal, cache: 'no-store' });
                 if (!res.ok)
                     throw new Error(`${res.status}`);
                 const data = await res.json();
@@ -690,15 +814,64 @@
             } catch (e) {
                 console.error(`Failed to fetch ${deviceName}:`, e);
                 return null;
+            } finally {
+                clearTimeout(timer);
             }
         }
 
+        // Is this host's rts2-httpd answering? Before, a failed fetch just
+        // left the previous values in systemData, so with the daemon down
+        // the page went on showing the last state it had as if it were
+        // current. Now: no local device answering at all means the daemon
+        // (or Apache's proxy to it) is down - say so, with the time of the
+        // last good poll, and dim the values that are left over; one
+        // device failing while the others answer means that device is
+        // gone, and its old values are dropped (N/A) rather than kept.
+        let apiLastOk = null;            // ms, last poll a local device answered
+        let apiFailSince = null;         // ms, first poll nothing answered, null if fine
+
+        function hhmmss(ms) {
+            return new Date(ms).toLocaleTimeString();
+        }
+
+        function updateApiBanner() {
+            const el = document.getElementById('api-banner');
+            if (apiFailSince === null) {
+                el.style.display = 'none';
+                document.body.classList.remove('api-stale');
+                return;
+            }
+            el.textContent = `No response from rts2-httpd since ${hhmmss(apiFailSince)} - `
+                + (apiLastOk !== null
+                    ? `the values below are from ${hhmmss(apiLastOk)}, not current.`
+                    : 'no values received since this page was loaded.');
+            el.style.display = '';
+            document.body.classList.add('api-stale');
+        }
+
         async function updateAllDeviceData() {
+            const answered = {};
             await Promise.all(DEVICES.map(async device => {
                 const data = await fetchDeviceData(device, REMOTE_DEVICES[device]);
+                answered[device] = !!data;
                 if (data)
                     systemData[device] = data;
             }));
+            const localOk = DEVICES.some(d => !REMOTE_DEVICES[d] && answered[d]);
+            if (localOk) {
+                apiLastOk = Date.now();
+                apiFailSince = null;
+            } else if (apiFailSince === null) {
+                apiFailSince = Date.now();
+            }
+            // only while the daemon answers: then a silent device is gone,
+            // while with the daemon down everything is merely old
+            if (localOk) {
+                for (const d of DEVICES)
+                    if (!answered[d])
+                        systemData[d] = {};
+            }
+            updateApiBanner();
         }
 
         // rts2ng's /api/getall,get always send a selection value (e.g.
@@ -808,12 +981,16 @@
                 const ccdTemp = safeValue(d, 'CCD_TEMP', NaN);
                 const focName = safeValue(d, 'focuser', '');
                 const focPos = safeValue(systemData[focName] || {}, 'FOC_POS', 'N/A');
-                // IMGP's fwhm_C1/C2/C3 are only populated by the image
-                // processing pipeline when it's actually running - per
-                // the site's own report, that stopped happening at some
-                // point. No fallback beyond N/A here; fixing the pipeline
-                // itself is out of this page's scope.
-                const fwhm = safeValue(systemData.IMGP, `fwhm_${cam}`, NaN);
+                // IMGP's fwhm_C1/C2/C3 are created by the image pipeline
+                // (asarina-imgproc, through /etc/rts2/img_process) calling
+                // rts2.Rts2Comm().doubleValue() - which failed at SBT until
+                // the rts2 Python package exported Rts2Comm again
+                // (2026-10-24). Guide frames never reach the pipeline, so
+                // while C3 guides its FWHM is the guide script's own
+                // guide_fwhm, as D50's page does for its guide camera.
+                let fwhm = safeValue(systemData.IMGP, `fwhm_${cam}`, NaN);
+                if (cam === GUIDE_CAM && guideActive && typeof d.guide_fwhm === 'number')
+                    fwhm = d.guide_fwhm;
 
                 div.innerHTML = `
                     <div class="status-value">${object || '(idle)'}</div>
@@ -1279,7 +1456,12 @@
             // refetch, not just redraw: how many points are worth asking
             // for depends on the panel's width
             clearTimeout(cloudGraphResizeTimer);
-            cloudGraphResizeTimer = setTimeout(reloadCloudGraph, 300);
+            cloudGraphResizeTimer = setTimeout(() => {
+                reloadCloudGraph();
+                reloadGuideHistory();
+                drawGuideLive();
+                drawGuideScatter();
+            }, 300);
         });
 
         function toggleEqualize() {
@@ -1917,6 +2099,472 @@
                 closeLightbox();
         });
 
+        // --- Guiding (C3) --------------------------------------------------
+        // The guide script (/etc/rts2/guideccd.py) publishes its numbers on
+        // C3 itself: guide_dx/guide_dy (pixels), the pulses it sent,
+        // guide_snr, guide_scale (arcsec/pixel), guide_state and
+        // guide_time. Same shape as D50's panel, with one difference: C3
+        // also takes observations, and RTS2 can end the script before it
+        // resets its values, so guiding is "guide_time is recent", never
+        // just "there is a number". When it is not, the panel says what C3
+        // is doing instead, from the camera's own state.
+        const GUIDE_CAM = 'C3';
+        const GUIDE_LIVE_SECONDS = 300;
+        const GUIDE_FRESH_SECONDS = 20;  // 2 s frames plus pulses; a cycle is a few s
+
+        let guideLive = [];              // {t, dx, dy, snr} for the last 5 min
+        let guideScale = null;
+        let guideActive = false;
+        let guideLastImage = null;       // guide_last_image the shown JPEG belongs to
+        let guideHistory = null;         // {from, to, dx, dy} from /api/db/records
+        let guideHours = parseFloat(getCookie('guideHours')) || 8;
+
+        function numOrNull(v) {
+            return typeof v === 'number' && isFinite(v) ? v : null;
+        }
+
+        // What C3 is doing when it is not guiding - from its state word
+        // (base/kernel/include/status.h): exposing 0x011, reading 0x002,
+        // hardware error 0x20000.
+        function describeGuideCam(d) {
+            const state = numOrNull(d.state);
+            if (state === null)
+                return `${GUIDE_CAM}: state unknown`;
+            if (state & 0x00020000)
+                return `${GUIDE_CAM} reports a hardware error`;
+            const exp = numOrNull(d.exposure);
+            const obj = typeof d.OBJECT === 'string' && d.OBJECT ? ` of ${d.OBJECT}` : '';
+            if (state & 0x011)
+                return `${GUIDE_CAM} is observing - ${exp === null ? '' : exp + ' s '}exposure${obj}`;
+            if (state & 0x002)
+                return `${GUIDE_CAM} is reading out an exposure${obj}`;
+            return `${GUIDE_CAM} is idle`;
+        }
+
+        async function pollGuide() {
+            const status = document.getElementById('guide-status');
+            const data = await fetchDeviceData(GUIDE_CAM);
+            const now = Date.now() / 1000;
+            if (!data) {
+                status.className = 'cloud-status warn';
+                status.textContent = `cannot reach ${GUIDE_CAM}`;
+                guideActive = false;
+                return;
+            }
+            systemData[GUIDE_CAM] = data;
+            guideScale = numOrNull(data.guide_scale) || guideScale;
+
+            const t = numOrNull(data.guide_time);
+            const fresh = t !== null && now - t < GUIDE_FRESH_SECONDS;
+            const state = typeof data.guide_state === 'string' ? data.guide_state : '';
+            guideActive = fresh;
+
+            guideLive.push(fresh ? {
+                t: now,
+                dx: numOrNull(data.guide_dx),
+                dy: numOrNull(data.guide_dy),
+                snr: numOrNull(data.guide_snr),
+                fwhm: numOrNull(data.guide_fwhm),
+                pra: numOrNull(data.guide_pulse_ra),
+                pdec: numOrNull(data.guide_pulse_dec)
+            } : { t: now, dx: null, dy: null, snr: null, fwhm: null });
+            while (guideLive.length && guideLive[0].t < now - GUIDE_LIVE_SECONDS)
+                guideLive.shift();
+
+            if (data.guide_time === undefined) {
+                // the values appear on the script's first run and stay for
+                // the camera daemon's lifetime
+                status.className = 'cloud-status';
+                status.textContent = `not guiding - ${describeGuideCam(data)}`
+                    + ` (no guiding since ${GUIDE_CAM} started)`;
+            } else if (fresh) {
+                status.className = state === 'star lost' ? 'cloud-status warn' : 'cloud-status';
+                status.textContent = state === 'guiding'
+                    ? `guiding, ${guideLive.filter(p => p.dx !== null).length} samples in the last`
+                        + ` ${Math.round(GUIDE_LIVE_SECONDS / 60)} min`
+                    : state === 'acquiring' ? 'acquiring a guide star'
+                    : state === 'star lost' ? 'guide star lost - retrying'
+                    : state || 'guiding';
+            } else {
+                status.className = 'cloud-status';
+                status.textContent = `not guiding - ${describeGuideCam(data)}`
+                    + (t !== null ? `; last guided ${hhmmss(t * 1000)}` : '');
+            }
+
+            // The frame: guideccd.py writes guide_last.jpg here and names the
+            // FITS it came from in guide_last_image, which changes once per
+            // frame - the reload trigger. Dimmed when not guiding: it is
+            // then the last frame of an earlier run.
+            const img = document.getElementById('guide-frame-img');
+            const path = typeof data.guide_last_image === 'string' ? data.guide_last_image : '';
+            if (path && path !== guideLastImage) {
+                guideLastImage = path;
+                const url = `guide_last.jpg?t=${Date.now()}`;
+                img.src = url;
+                img.onclick = () => openLightbox(url, `${GUIDE_CAM} guiding - ${path}`, true);
+            }
+            img.style.display = path ? '' : 'none';
+            img.classList.toggle('dim', !fresh);
+            img.title = fresh ? 'last guiding frame - click to enlarge'
+                : 'last frame of an earlier guiding run' + (t !== null ? ` (${hhmmss(t * 1000)})` : '');
+
+            updateGuideReadout(fresh, state, data);
+            drawGuideLive();
+            drawGuideScatter();
+            // C3's camera box takes its FWHM from guiding while it guides
+            updateCameraStatus();
+        }
+
+        // 1 s while guiding (one cycle is a few seconds), 5 s otherwise
+        function guideLoop() {
+            pollGuide()
+                .catch(e => console.error(e))
+                .finally(() => setTimeout(guideLoop, guideActive ? 1000 : 5000));
+        }
+
+        function guideStats() {
+            const pts = guideLive.filter(p => p.dx !== null && p.dy !== null);
+            if (!pts.length)
+                return null;
+            const rms = key => Math.sqrt(pts.reduce((a, p) => a + p[key] * p[key], 0) / pts.length);
+            const mean = key => pts.reduce((a, p) => a + p[key], 0) / pts.length;
+            const snrs = pts.map(p => p.snr).filter(v => v !== null).sort((a, b) => a - b);
+            const fwhms = guideLive.map(p => p.fwhm).filter(v => v !== null && v !== undefined).sort((a, b) => a - b);
+            return {
+                fwhm: fwhms.length ? fwhms[Math.floor(fwhms.length / 2)] : null,
+                last: pts[pts.length - 1],
+                rmsX: rms('dx'), rmsY: rms('dy'),
+                meanX: mean('dx'), meanY: mean('dy'),
+                snr: snrs.length ? snrs[Math.floor(snrs.length / 2)] : null,
+                count: pts.length
+            };
+        }
+
+        function guideArcsecPair(x, y, digits = 2) {
+            return guideScale ? ` (${(x * guideScale).toFixed(digits)}"`
+                + ` / ${(y * guideScale).toFixed(digits)}")` : '';
+        }
+
+        function updateGuideReadout(fresh, state, data) {
+            const el = document.getElementById('guide-readout');
+            const st = guideStats();
+            if (!fresh) {
+                el.innerHTML = '<span class="big">not guiding</span><br>' + describeGuideCam(data)
+                    + (st ? `<br>last ${Math.round(GUIDE_LIVE_SECONDS / 60)} min: RMS`
+                        + ` ${st.rmsX.toFixed(2)} / ${st.rmsY.toFixed(2)} px` : '');
+                return;
+            }
+            if (!st) {
+                el.innerHTML = `<span class="big${state === 'star lost' ? ' warn' : ''}">${state || 'guiding'}</span>`
+                    + '<br>no guiding errors measured yet';
+                return;
+            }
+            const pulses = st.last.pra === null || st.last.pra === undefined ? 'N/A'
+                : `${st.last.pra.toFixed(0)} / ${st.last.pdec.toFixed(0)} ms`;
+            el.innerHTML = `
+                <span class="big ${state === 'star lost' ? 'warn' : 'good'}">${state || 'guiding'}</span><br>
+                <span class="big">${st.last.dx.toFixed(2)} / ${st.last.dy.toFixed(2)} px</span>
+                ${guideArcsecPair(st.last.dx, st.last.dy)}<br>
+                RMS ${st.rmsX.toFixed(2)} / ${st.rmsY.toFixed(2)} px over ${st.count} samples
+                ${guideArcsecPair(st.rmsX, st.rmsY)}<br>
+                mean ${st.meanX.toFixed(2)} / ${st.meanY.toFixed(2)} px<br>
+                FWHM <span class="big">${st.fwhm === null ? 'N/A' : st.fwhm.toFixed(2) + ' px'}</span>
+                ${st.fwhm !== null && guideScale ? `(${(st.fwhm * guideScale).toFixed(1)}")` : ''}<br>
+                pulses RA / Dec ${pulses}<br>
+                SNR ${st.snr === null ? 'N/A' : st.snr.toFixed(1)}
+            `;
+        }
+
+        // Canvas boilerplate the two plots share: backing store in device
+        // pixels, drawing in layout pixels, colours from the page's CSS
+        // variables so it follows dark mode.
+        function guideCanvas(id) {
+            const canvas = document.getElementById(id);
+            if (!canvas || !canvas.clientWidth)
+                return null;
+            const ctx = canvas.getContext('2d');
+            const ratio = window.devicePixelRatio || 1;
+            const width = canvas.clientWidth, height = canvas.clientHeight;
+            canvas.width = Math.round(width * ratio);
+            canvas.height = Math.round(height * ratio);
+            ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+            ctx.clearRect(0, 0, width, height);
+            const style = getComputedStyle(document.body);
+            return {
+                ctx, width, height,
+                fg: style.getPropertyValue('--text-muted').trim() || '#555',
+                grid: style.getPropertyValue('--border').trim() || '#ccc',
+                x: style.getPropertyValue('--graph-line').trim() || '#2563eb',
+                y: style.getPropertyValue('--graph-line2').trim() || '#d97706'
+            };
+        }
+
+        function guideNoData(c, text) {
+            c.ctx.fillStyle = c.fg;
+            c.ctx.font = '12px Arial, sans-serif';
+            c.ctx.textAlign = 'center';
+            c.ctx.textBaseline = 'middle';
+            c.ctx.fillText(text, c.width / 2, c.height / 2);
+        }
+
+        function drawGuideLive() {
+            const c = guideCanvas('guide-live');
+            if (!c)
+                return;
+            const now = Date.now() / 1000;
+            const tMin = now - GUIDE_LIVE_SECONDS, tMax = now;
+            const x0 = 34, x1 = c.width - 8, y0 = 8, y1 = c.height - 18;
+            if (x1 <= x0 || y1 <= y0)
+                return;
+            // symmetric around zero, never tighter than +-2 px
+            let span = 2;
+            for (const p of guideLive)
+                for (const v of [p.dx, p.dy])
+                    if (v !== null) span = Math.max(span, Math.abs(v) * 1.15);
+            const sx = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+            const sy = v => (y0 + y1) / 2 - v / span * (y1 - y0) / 2;
+
+            c.ctx.strokeStyle = c.grid;
+            c.ctx.fillStyle = c.fg;
+            c.ctx.lineWidth = 1;
+            c.ctx.font = '10px Arial, sans-serif';
+            c.ctx.textAlign = 'right';
+            c.ctx.textBaseline = 'middle';
+            const step = cloudNiceStep(span / 2);
+            for (let v = -Math.floor(span / step) * step; v <= span; v += step) {
+                const y = Math.round(sy(v)) + 0.5;
+                c.ctx.beginPath();
+                c.ctx.moveTo(x0, y);
+                c.ctx.lineTo(x1, y);
+                c.ctx.stroke();
+                c.ctx.fillText(v.toFixed(Math.max(0, Math.min(2, Math.ceil(-Math.log10(step))))), x0 - 5, y);
+            }
+            c.ctx.textAlign = 'center';
+            c.ctx.textBaseline = 'top';
+            for (let m = 0; m <= GUIDE_LIVE_SECONDS / 60; m++) {
+                const x = Math.round(sx(now - m * 60)) + 0.5;
+                c.ctx.beginPath();
+                c.ctx.moveTo(x, y0);
+                c.ctx.lineTo(x, y1);
+                c.ctx.stroke();
+                c.ctx.fillText(m ? `-${m}m` : 'now', x, y1 + 4);
+            }
+            if (!guideLive.some(p => p.dx !== null)) {
+                guideNoData(c, 'not guiding');
+                return;
+            }
+            // a pause is a gap, not a line drawn across it
+            for (const key of ['dx', 'dy']) {
+                c.ctx.strokeStyle = key === 'dx' ? c.x : c.y;
+                c.ctx.lineWidth = 1.2;
+                c.ctx.beginPath();
+                let pen = false, lastT = 0;
+                for (const p of guideLive) {
+                    if (p[key] === null || p.t - lastT > 10) pen = false;
+                    if (p[key] === null) continue;
+                    const px = sx(p.t), py = sy(Math.max(-span, Math.min(span, p[key])));
+                    pen ? c.ctx.lineTo(px, py) : c.ctx.moveTo(px, py);
+                    pen = true;
+                    lastT = p.t;
+                }
+                c.ctx.stroke();
+            }
+            c.ctx.textAlign = 'left';
+            c.ctx.textBaseline = 'top';
+            c.ctx.fillStyle = c.x;
+            c.ctx.fillText('dx', x0 + 4, y0 + 1);
+            c.ctx.fillStyle = c.y;
+            c.ctx.fillText('dy', x0 + 22, y0 + 1);
+        }
+
+        // where the errors sit relative to each other, oldest faintest
+        function drawGuideScatter() {
+            const c = guideCanvas('guide-scatter');
+            if (!c)
+                return;
+            const pts = guideLive.filter(p => p.dx !== null && p.dy !== null);
+            const size = Math.min(c.width, c.height);
+            const cx = c.width / 2, cy = c.height / 2;
+            let span = 2;
+            for (const p of pts)
+                span = Math.max(span, Math.abs(p.dx) * 1.15, Math.abs(p.dy) * 1.15);
+            const scale = (size / 2 - 14) / span;
+            c.ctx.strokeStyle = c.grid;
+            c.ctx.fillStyle = c.fg;
+            c.ctx.font = '10px Arial, sans-serif';
+            c.ctx.lineWidth = 1;
+            const ring = cloudNiceStep(span / 2);
+            for (let r = ring; r <= span; r += ring) {
+                c.ctx.beginPath();
+                c.ctx.arc(cx, cy, r * scale, 0, 2 * Math.PI);
+                c.ctx.stroke();
+                if (cx + r * scale + 22 < c.width) {
+                    c.ctx.textAlign = 'left';
+                    c.ctx.textBaseline = 'bottom';
+                    c.ctx.fillText(r.toFixed(1), cx + r * scale + 2, cy);
+                }
+            }
+            c.ctx.beginPath();
+            c.ctx.moveTo(cx - size / 2, cy); c.ctx.lineTo(cx + size / 2, cy);
+            c.ctx.moveTo(cx, cy - size / 2); c.ctx.lineTo(cx, cy + size / 2);
+            c.ctx.stroke();
+            if (!pts.length) {
+                guideNoData(c, 'not guiding');
+                return;
+            }
+            const now = Date.now() / 1000;
+            for (const p of pts) {
+                const age = (now - p.t) / GUIDE_LIVE_SECONDS;
+                c.ctx.globalAlpha = Math.max(0.08, 1 - age);
+                c.ctx.fillStyle = c.x;
+                c.ctx.beginPath();
+                c.ctx.arc(cx + p.dx * scale, cy - p.dy * scale, age < 0.02 ? 3.5 : 1.8, 0, 2 * Math.PI);
+                c.ctx.fill();
+            }
+            c.ctx.globalAlpha = 1;
+            c.ctx.fillStyle = c.fg;
+            c.ctx.textAlign = 'left';
+            c.ctx.textBaseline = 'top';
+            c.ctx.fillText('dx / dy [px], newest brightest', 4, 3);
+        }
+
+        // The night behind the live view, as on D50's page: guide_dx and
+        // guide_dy after rts2-recordd has sampled them into this site's
+        // database (/etc/rts2/record: "C3 5 guide_dx guide_dy ..."), one
+        // /api/db/records request per series, bucketed server-side to one
+        // point per pixel column. NaN (not guiding) is not recorded, so a
+        // night of observing without guiding is a gap, not a flat line.
+        function setGuideRange(hours) {
+            guideHours = hours;
+            setCookie('guideHours', String(hours));
+            reloadGuideHistory();
+        }
+
+        function updateGuideButtons() {
+            for (const b of document.querySelectorAll('#guide-ranges button'))
+                b.classList.toggle('active', parseFloat(b.dataset.hours) === guideHours);
+        }
+
+        async function reloadGuideHistory() {
+            const canvas = document.getElementById('guide-history');
+            if (!canvas)
+                return;
+            updateGuideButtons();
+            const to = Math.round(Date.now() / 1000);
+            const from = Math.round(to - guideHours * 3600);
+            const points = Math.max(200, Math.round(canvas.clientWidth || 900));
+            try {
+                const series = await Promise.all(['guide_dx', 'guide_dy'].map(async name => {
+                    const res = await fetch(`${API_BASE}/db/records?device=${GUIDE_CAM}`
+                        + `&value=${name}&from=${from}&to=${to}&points=${points}`);
+                    const data = await res.json();
+                    if (data.error)
+                        throw new Error(data.error);
+                    return data;
+                }));
+                guideHistory = { from, to, bucket: (to - from) / points, dx: series[0], dy: series[1] };
+            } catch (e) {
+                guideHistory = { from, to, error: String(e.message || e) };
+            }
+            drawGuideHistory();
+        }
+
+        function drawGuideHistory() {
+            const c = guideCanvas('guide-history');
+            if (!c)
+                return;
+            if (!guideHistory) {
+                guideNoData(c, 'loading...');
+                return;
+            }
+            if (guideHistory.error) {
+                // the daemon's answer for a value rts2-recordd has never
+                // stored is "no recorded value C3.guide_dx - see ..."
+                guideNoData(c, /no recorded value/.test(guideHistory.error)
+                    ? `no guiding history - rts2-recordd is not recording ${GUIDE_CAM}.guide_dx`
+                        + ' (/etc/rts2/record)'
+                    : `no guiding history: ${guideHistory.error}`);
+                return;
+            }
+            const x0 = 34, x1 = c.width - 8, y0 = 8, y1 = c.height - 18;
+            if (x1 <= x0 || y1 <= y0)
+                return;
+            const tMin = guideHistory.from, tMax = guideHistory.to;
+
+            let span = 2;
+            for (const s of [guideHistory.dx, guideHistory.dy])
+                for (const p of s.points)
+                    for (const v of [p[2], p[3]])
+                        if (v !== null && isFinite(v)) span = Math.max(span, Math.abs(v) * 1.1);
+            const sx = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+            const sy = v => (y0 + y1) / 2 - v / span * (y1 - y0) / 2;
+
+            const style = getComputedStyle(document.body);
+            for (const seg of dayNightBands(tMin, tMax)) {
+                if (seg.band === 'night')
+                    continue;
+                c.ctx.fillStyle = seg.band === 'day'
+                    ? (style.getPropertyValue('--graph-day-bg').trim() || 'rgba(255,190,40,0.12)')
+                    : (style.getPropertyValue('--graph-twilight-bg').trim() || 'rgba(37,99,235,0.08)');
+                c.ctx.fillRect(sx(seg.from), y0, sx(seg.to) - sx(seg.from), y1 - y0);
+            }
+
+            c.ctx.strokeStyle = c.grid;
+            c.ctx.fillStyle = c.fg;
+            c.ctx.lineWidth = 1;
+            c.ctx.font = '10px Arial, sans-serif';
+            c.ctx.textAlign = 'right';
+            c.ctx.textBaseline = 'middle';
+            const step = cloudNiceStep(span / 2);
+            for (let v = -Math.floor(span / step) * step; v <= span; v += step) {
+                const y = Math.round(sy(v)) + 0.5;
+                c.ctx.beginPath();
+                c.ctx.moveTo(x0, y);
+                c.ctx.lineTo(x1, y);
+                c.ctx.stroke();
+                c.ctx.fillText(v.toFixed(Math.max(0, Math.min(2, Math.ceil(-Math.log10(step))))), x0 - 5, y);
+            }
+            c.ctx.textBaseline = 'top';
+            const xStep = cloudNiceStep((tMax - tMin) / 6);
+            for (let t = Math.ceil(tMin / xStep) * xStep; t <= tMax; t += xStep) {
+                const x = Math.round(sx(t)) + 0.5;
+                c.ctx.beginPath();
+                c.ctx.moveTo(x, y0);
+                c.ctx.lineTo(x, y1);
+                c.ctx.stroke();
+                const d = new Date(t * 1000);
+                const label = String(d.getHours()).padStart(2, '0') + ':'
+                    + String(d.getMinutes()).padStart(2, '0');
+                const half = c.ctx.measureText(label).width / 2;
+                c.ctx.textAlign = x + half > c.width ? 'right' : (x - half < 0 ? 'left' : 'center');
+                c.ctx.fillText(label, x, y1 + 4);
+            }
+
+            // /api/db/records leaves empty buckets out, so a pause in
+            // guiding arrives as a jump in time, not as a null - break the
+            // line there instead of drawing straight across it
+            const maxGap = 3 * guideHistory.bucket;
+            let any = false;
+            for (const [key, colour] of [['dx', c.x], ['dy', c.y]]) {
+                c.ctx.strokeStyle = colour;
+                c.ctx.lineWidth = 1.2;
+                c.ctx.beginPath();
+                let pen = false, lastT = -Infinity;
+                for (const p of guideHistory[key].points) {
+                    if (p[1] === null || !isFinite(p[1])) { pen = false; continue; }
+                    if (p[0] - lastT > maxGap) pen = false;
+                    lastT = p[0];
+                    any = true;
+                    const px = sx(p[0]), py = sy(Math.max(-span, Math.min(span, p[1])));
+                    pen ? c.ctx.lineTo(px, py) : c.ctx.moveTo(px, py);
+                    pen = true;
+                }
+                c.ctx.stroke();
+            }
+            if (!any)
+                guideNoData(c, `no guiding recorded in the last ${guideHours} h`);
+        }
+
         async function init() {
             document.getElementById('equalize-btn').classList.toggle('active', equalizeWebcams);
             document.getElementById('live-btn').classList.toggle('active', liveWebcams);
@@ -1935,6 +2583,8 @@
             reloadCameraImages();
             updateImageInfo();
             reloadCloudGraph();
+            guideLoop();
+            reloadGuideHistory();
         }
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
@@ -1943,6 +2593,7 @@
         setInterval(reloadCameraImages, 15000);
         setInterval(updateImageInfo, 15000);
         setInterval(reloadCloudGraph, 60000);
+        setInterval(reloadGuideHistory, 60000);
 
         window.addEventListener('load', init);
     </script>

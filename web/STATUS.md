@@ -2965,3 +2965,89 @@ camera. Not tried through Apache itself (no `/observ` login here).
   editor's `readWhatFormParams ()` was run under `gjs` with a mocked form
   for empty, sexagesimal, decimal, one-sided and garbled input. The
   editor was not clicked through in a browser.
+
+### SBT monitor: rts2-httpd down is visible; C3 guiding panel (2026-10-24) [JS]
+
+**Daemon down.** `fetchDeviceData ()` returned null on any failure and
+`updateAllDeviceData ()` kept the previous values, so with rts2-httpd
+(or Apache's proxy to it) down the page went on showing the last state
+as if current. Now each status poll counts the answers from this host's
+devices (`REMOTE_DEVICES` excluded): none at all means the daemon is down
+- a red banner "No response from rts2-httpd since ... - the values below
+are from ..., not current" and the status values, camera status lines,
+sky chart and guiding panel dimmed (`body.api-stale`); some missing while
+others answer means those devices are gone, and their old values are
+dropped (N/A) instead of kept. Every request has an 8 s timeout
+(`AbortController`), so a hanging daemon cannot stack polls up. Camera
+images and webcams come from Apache and stay live either way.
+
+**Guiding - C3.** The same panel as D50's (frame, live dx/dy strip,
+scatter, readout, and the 2/8/24 h history from `/api/db/records`),
+under the cameras in a `.right-panel` column as there. The history needs
+`rts2-recordd` at SBT, which ran there before only as an installed binary
+(`rts2-db`): site config `/etc/rts2/record` with `C3 5 guide_dx guide_dy
+guide_pulse_ra guide_pulse_dec guide_snr guide_fwhm` and a `recordd REC ...` line
+in `/etc/rts2/services`. Until it records, the graph says "rts2-recordd
+is not recording C3.guide_dx (/etc/rts2/record)" (the daemon's answer is
+"no recorded value C3.guide_dx"). `/api/db/records` leaves empty buckets
+out, so a pause in guiding arrives as a jump in time; the line breaks
+where two points are more than three buckets apart instead of being
+drawn across (D50's page still draws across). The frame is
+D50's mechanism: the script writes `/var/www/info/guide_last.jpg` beside
+the camera previews (atomically, `os.replace`) and names the FITS in
+`guide_last_image`, which the page takes as its reload trigger. C3's
+guiding frame is the whole 64x64 window, so no cutout, and each frame is
+scaled by its own 1-99.7 % percentiles with a square-root stretch (no
+`pyrt-f2cj` fit as at D50), flipped so row 0 is at the bottom as in a
+FITS viewer; written before the script deletes the frame. A failure
+there is logged once and never stops guiding. Not guiding, the last
+frame stays, dimmed. It reads values the guide
+script publishes on C3 - `python/sites/sbt/guideccd.py` now creates
+`guide_dx`, `guide_dy`, `guide_pulse_ra`, `guide_pulse_dec`, `guide_snr`,
+`guide_scale` (3.790"/px from C3's `--wcs`), `guide_state` (acquiring,
+guiding, star lost, idle) and `guide_time`. C3 also observes, and RTS2
+can end the script before it resets its values, so the page counts C3 as
+guiding only while `guide_time` is under 20 s old; otherwise it says what
+C3 is doing from its state word - observing (exposure, object), reading
+out, idle, hardware error - and when it last guided. Polls at 1 s while
+guiding, 5 s otherwise.
+
+Tested in headless Chromium against a mock daemon (`~/snaptest-bart`,
+not committed): guiding (values, RMS, arcsec, plots, history with a
+gap), history not recorded (the message), observing with
+10-minute-old guiding values ("not guiding - C3 is observing - 120 s
+exposure of ASASSN-24fs; last guided ..."), and the daemon returning 502
+after the first poll (banner, dimmed values). Deployed to SBT's live page
+(`/var/www/info/index.html` -> `~torman/rts2ng/web/sites/bart-monitor.html`
+on lascaux, previous version kept as `.bak-20261024`). The new
+`guideccd.py` ran at SBT the same evening (JS confirmed the panel live);
+the frame rendering was checked on lascaux with a synthetic 64x64 star
+(numpy 1.24, astropy 5.2, PIL 9.4 there) and in the mock. The guiding
+values appear once the new `guideccd.py` replaces `/home/mates/guideccd.py`
+(what `/etc/rts2/guideccd.py` links to); until then the panel says "not
+guiding ... (no guiding since C3 started)".
+
+**FWHM and layout (same evening).** `guideccd.py` also measures the guide
+star's FWHM on the guiding frame, D50's way (area above half maximum
+within 15 px of the peak; on synthetic stars 1.5/2.5/4.0 px read as
+1.95/2.26/4.22 - coarse for the small C3 stars, a seeing and focus
+indicator, not photometry), published as `guide_fwhm`; the readout shows
+its 5-minute median in px and arcsec, and C3's camera box takes it while
+C3 guides (guide frames never reach the pipeline), refreshed from the
+guiding poll. The panel's grid now has the image and readout on the left
+spanning two rows, the live strip and scatter beside them and the long
+history right under those two - no empty band under the plot row.
+
+**Camera FWHM was never shown at SBT.** IMGP's `fwhm_C<n>` are created
+by the image pipeline: `/etc/rts2/img_process` runs `asarina-imgproc`
+(MJ's, `~mates/asarina`), whose `_report_fwhm ()` calls
+`rts2.Rts2Comm().doubleValue ('fwhm_C<n>', ...)`; `rts2-imgproc` runs it
+as a `ConnExe`, which creates the value on IMGP. At SBT every call failed,
+"module 'rts2' has no attribute 'Rts2Comm'" (`~mates/imgproc-<date>.log`):
+the rts2ng `rts2` package had classic's top-level exports commented out.
+At D50 it worked only because a classic copy of the module in
+`/usr/local/lib/python3.11/dist-packages/rts2` shadows the package
+(`fwhm_C0` 3.2-3.4 px that night). `python/rts2/__init__.py` exports
+`Rts2Comm`, `Rts2Exception`, `Rts2NotActive` from `scriptcomm` again;
+the other classic exports stay off, their modules are not in the
+package. Takes effect at SBT with the next `rts2-python` release.

@@ -3,6 +3,7 @@
 # Guiding script for camera C3
 # (C) 2010 Martin Jelinek & Petr Kubanek
 
+import os
 import sys
 import subprocess
 import math
@@ -10,6 +11,25 @@ from time import sleep
 import time
 
 from rts2 import scriptcomm
+
+# The guiding telemetry goes on the guide camera, named explicitly:
+# value_create is handled by the executor's ConnExe, so an unqualified
+# create would land on EXEC (same as D50's guide.py).
+GUIDE_CAM = 'C3'
+# C3's plate scale [arcsec/pixel], from its --wcs (0.0010528 deg/pixel),
+# published as guide_scale so the web page can show arcsec
+PIXEL_SCALE = 3.790
+
+# The latest guiding frame for the web page, as D50's guide.py does it: a
+# JPEG next to the camera previews, served by Apache, reloaded by the page
+# when guide_last_image changes. The frame is the whole 64x64 guiding
+# window, so no cutout; each frame is scaled by its own percentiles (the
+# star against its background), not by a fitted stretch.
+WEB_JPEG = '/var/www/info/guide_last.jpg'
+
+# FWHM of the guide star, measured on the guiding frame as D50's guide.py
+# does it: the area above half maximum within FWHM_BOX around the peak.
+FWHM_BOX = 15
 
 class GuideScript(scriptcomm.Rts2Comm):
     """Pulse guiding script for RTS2."""
@@ -66,6 +86,100 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.exp_snr = 20            # Target signal-to-noise ratio
 
         scriptcomm.Rts2Comm.__init__(self)
+
+    # --- guiding telemetry -------------------------------------------------
+    # The same values D50's guide.py publishes where they fit (guide_dx,
+    # guide_dy, guide_pulse_ra, guide_pulse_dec, guide_scale), plus what this
+    # script has instead of matched stars and FWHM (guide_snr), and two the
+    # web page needs because C3 also observes: guide_state (acquiring,
+    # guiding, star lost, idle) and guide_time, when the last cycle ran - a
+    # script that RTS2 ends cannot reset its values any more, so "guiding"
+    # means a recent guide_time, not merely a number. NaN means not
+    # measured; the JSON API sends it as null.
+
+    def createValues(self):
+        nan = float('nan')
+        for name, desc in [
+                ('guide_dx', 'guiding error, X axis [pixels]'),
+                ('guide_dy', 'guiding error, Y axis [pixels]'),
+                ('guide_pulse_ra', 'applied guiding pulse, RA [ms]'),
+                ('guide_pulse_dec', 'applied guiding pulse, DEC [ms]'),
+                ('guide_snr', 'SNR of the guiding star'),
+                ('guide_fwhm', 'FWHM of the guiding star [pixels]'),
+                ('guide_time', 'time of the last guiding cycle [ctime]')]:
+            self.valueCreate(name, nan, GUIDE_CAM, desc, 'double', writable=True)
+        self.valueCreate('guide_scale', PIXEL_SCALE, GUIDE_CAM,
+                         'guide camera plate scale [arcsec/pixel]', 'double')
+        self.valueCreate('guide_state', 'idle', GUIDE_CAM,
+                         'guiding state: acquiring, guiding, star lost, idle',
+                         'string', writable=True)
+        self.valueCreate('guide_last_image', '', GUIDE_CAM,
+                         'last guiding frame shown on the web page',
+                         'string', writable=True)
+
+    @staticmethod
+    def measureFwhm(data):
+        """FWHM of the brightest star in the frame [pixels], NaN if there
+        is none. Area above half maximum around the peak rather than a fit:
+        nothing to fail to converge (D50's guide.py, measure_fwhm)."""
+        import numpy as np
+        peak = np.unravel_index(np.argmax(data), data.shape)
+        half = FWHM_BOX // 2
+        r0, r1 = max(0, peak[0] - half), min(data.shape[0], peak[0] + half + 1)
+        c0, c1 = max(0, peak[1] - half), min(data.shape[1], peak[1] + half + 1)
+        sub = data[r0:r1, c0:c1]
+        background = float(np.median(data))
+        amplitude = float(np.max(sub)) - background
+        if amplitude <= 0:
+            return float('nan')
+        above = np.count_nonzero(sub > background + amplitude / 2.0)
+        return 2.0 * math.sqrt(above / math.pi)
+
+    def publishFrame(self, image):
+        """Write the guiding frame as WEB_JPEG for the web page, and return
+        the guide star's FWHM measured on it (NaN if that fails). Never lets
+        a failure reach guiding: logged once, then silent."""
+        fwhm = float('nan')
+        try:
+            import numpy as np
+            from astropy.io import fits
+            from PIL import Image
+            data = np.asarray(fits.getdata(image), dtype=float)
+            fwhm = self.measureFwhm(data)
+            lo, hi = np.percentile(data, [1.0, 99.7])
+            if not hi > lo:
+                hi = lo + 1.0
+            scaled = np.sqrt(np.clip((data - lo) / (hi - lo), 0.0, 1.0)) * 255.0
+            # FITS row 0 is the bottom of the frame, as FITS viewers show it
+            tmp = WEB_JPEG + '.tmp'
+            Image.fromarray(np.flipud(scaled).astype(np.uint8)).save(tmp, 'JPEG', quality=92)
+            os.replace(tmp, WEB_JPEG)
+            self.setValue('guide_last_image', os.path.basename(image), GUIDE_CAM)
+        except Exception as ex:
+            if not getattr(self, 'frameWarned', False):
+                self.frameWarned = True
+                self.log('W', 'guide: cannot publish the guiding frame: %s' % ex)
+        return fwhm
+
+    def publish(self, state, dx=float('nan'), dy=float('nan'),
+                pra=float('nan'), pdec=float('nan'), snr=float('nan'),
+                fwhm=float('nan')):
+        """One guiding cycle (or a state change) onto the bus."""
+        self.setValue('guide_fwhm', fwhm, GUIDE_CAM)
+        self.setValue('guide_dx', dx, GUIDE_CAM)
+        self.setValue('guide_dy', dy, GUIDE_CAM)
+        self.setValue('guide_pulse_ra', pra, GUIDE_CAM)
+        self.setValue('guide_pulse_dec', pdec, GUIDE_CAM)
+        self.setValue('guide_snr', snr, GUIDE_CAM)
+        self.setValue('guide_state', state, GUIDE_CAM)
+        self.setValue('guide_time', time.time(), GUIDE_CAM)
+
+    def publishIdle(self):
+        """Not guiding any more: say so, rather than leaving the last
+        reading up. guide_time becomes NaN too."""
+        nan = float('nan')
+        self.publish('idle')
+        self.setValue('guide_time', nan, GUIDE_CAM)
 
     def runProgrammeGetArray(self, command):
         """Run external program and return output as array."""
@@ -126,6 +240,7 @@ class GuideScript(scriptcomm.Rts2Comm):
             if (now - exposure_end_C1) > 20 and (now - exposure_end_C2) > 20:
                 self.log('I', 'guide: C1 inactive for %.1fs, C2 for %.1fs - ending' %
                          (now - exposure_end_C1, now - exposure_end_C2))
+                self.publishIdle()
                 sys.exit(0)
 
             # Take guide exposure
@@ -134,6 +249,7 @@ class GuideScript(scriptcomm.Rts2Comm):
 
             # Detect guide star position using sextractor
             values = self.runProgrammeGetArray([self.detect4g, image])
+            fwhm = self.publishFrame(image)
             # delete(), not toTrash(): the images row is INSERTed when the
             # camera client saves the frame, well before this script sees it,
             # and toTrash() only renames the file - the row stays. delete() is
@@ -145,6 +261,7 @@ class GuideScript(scriptcomm.Rts2Comm):
             # Handle detection failures (cosmic rays, clouds, etc.)
             if len(values) < 4:
                 self.log('I', 'guide: detection failed, retrying')
+                self.publish('star lost')
                 last_move_start = self.getValueFloat('move_started', 'T0')
                 failed_attempts += 1
                 if failed_attempts > 5:
@@ -175,6 +292,7 @@ class GuideScript(scriptcomm.Rts2Comm):
 
             self.log('I', 'guide: offset x=%.2f y=%.2f snr=%.2f pulse_ra=%.0f pulse_dec=%.0f' %
                      (change_x, change_y, float(values[3]), county, countydec))
+            self.publish('guiding', change_x, change_y, county, countydec, float(values[3]), fwhm)
 
             # Send pulse guide corrections to the mount, one axis at a time,
             # each followed by a wait long enough for THAT pulse to finish.
@@ -195,6 +313,8 @@ class GuideScript(scriptcomm.Rts2Comm):
         """Initialize and start guiding sequence."""
 
         self.log('I', 'guide: **** GUIDING STARTED ****')
+        self.createValues()
+        self.publish('acquiring')
 
         # Wait for mount to settle after slew
         sleep(5)
@@ -242,6 +362,8 @@ while True:
     except scriptcomm.Rts2NotActive:
         try:
             a.log('I', 'guide: script deactivated by RTS2, ending')
+            a.publishIdle()
         except Exception:
-            pass          # the connection is already gone - nothing to say it to
+            pass          # the connection is already gone - nothing to say it to;
+                          # the page goes by guide_time, which stops then
         sys.exit(0)
