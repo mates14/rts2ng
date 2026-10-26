@@ -262,6 +262,13 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - The run closes every fd above 2 before `exec` (`closefrom (3)`): a
   ConnFork child otherwise holds all the daemon's connections open.
 
+**Scripts**
+- `[scriptexec] script_path` is a `:`-separated search list, default
+  `/etc/rts2/scripts:/usr/share/rts2/scripts` (`ConnFork`). The first is
+  the site's own and not packaged; the second holds rts2-python's
+  site-independent scripts. Site-specific scripts are never packaged
+  (`python/STATUS.md`). [MJ 2026-10-26]
+
 **Other drivers**
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,
   `htSwitch`, `heating`, `temp`, `humidity`) and re-sends the heating mode

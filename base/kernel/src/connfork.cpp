@@ -95,12 +95,42 @@ ConnFork::ConnFork (rts2core::Block *_master, const char *_exe, bool _fillConnEn
 				// unchanged from prior behavior, so every script
 				// referenced by full path today keeps working exactly
 				// as it does now.
+				//
+				// base note: script_path is a ':'-separated search list,
+				// first match wins. The default puts the site's own
+				// /etc/rts2/scripts (not packaged: a directory, or a
+				// symlink to a checkout of the site's scripts) before the
+				// site-independent scripts rts2-python installs to
+				// /usr/share/rts2/scripts, so a site can override one by
+				// name. Found nowhere: the first entry, and execv ()
+				// reports the missing file as before.
 				if (exePath[0] != '/')
 				{
-					std::string scriptPath = Configuration::instance ()->getStringDefault ("scriptexec", "script_path", "/etc/rts2/scripts");
-					while (!scriptPath.empty () && scriptPath.back () == '/')
-						scriptPath.pop_back ();
-					std::string full = scriptPath + "/" + exePath;
+					std::string scriptPath = Configuration::instance ()->getStringDefault ("scriptexec", "script_path", "/etc/rts2/scripts:/usr/share/rts2/scripts");
+					std::string full;
+					size_t b = 0;
+					while (b <= scriptPath.length ())
+					{
+						size_t e = scriptPath.find (':', b);
+						if (e == std::string::npos)
+							e = scriptPath.length ();
+						std::string dir = scriptPath.substr (b, e - b);
+						b = e + 1;
+						while (!dir.empty () && dir.back () == '/')
+							dir.pop_back ();
+						if (dir.empty ())
+							continue;
+						std::string candidate = dir + "/" + exePath;
+						if (full.empty ())
+							full = candidate;
+						if (access (candidate.c_str (), F_OK) == 0)
+						{
+							full = candidate;
+							break;
+						}
+					}
+					if (full.empty ())
+						full = exePath;
 					delete[] exePath;
 					exePath = new char[full.length () + 1];
 					strcpy (exePath, full.c_str ());

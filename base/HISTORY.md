@@ -3874,3 +3874,29 @@ kernels, after the stop) were not involved. `debian/rules` now adds
 `--no-stop-on-upgrade` to all three units; checked with a dummy package
 and debhelper 13.11.4 on lascaux: the preinst `stop` is gone, nothing else
 changes. An upgrade leaves the daemons running; restart them by hand.
+
+## script_path is a search list; site scripts not packaged (2026-10-26) [MJ]
+
+`rts2-python-sbt` installed SBT's scripts on any host that took the whole
+repository, and `rts2-python` owned `/etc/rts2/scripts` as a symlink into
+`/usr/share/rts2/scripts`, so a site had nowhere of its own for scripts.
+Decided: only site-independent scripts are packaged (`focus.py`,
+`vaodscan.py`, in `/usr/share/rts2/scripts`); a site's scripts are its own,
+in `/etc/rts2/scripts` (a directory, or for our telescopes a symlink to
+`python/sites/<site>` in a checkout). `rts2-python-sbt` and the symlink are
+gone. To find both by bare name, `ConnFork` takes `[scriptexec]
+script_path` as a `:`-separated list, first existing file wins, default
+`/etc/rts2/scripts:/usr/share/rts2/scripts`; nothing found gives the first
+entry and execv's error as before. Checked with a private centrald, dummy
+C0 and `rts2-scriptexec -s 'exe NAME'`: a name in both directories ran the
+site's, one only in the second ran from there, a missing one failed with
+"No such file or directory" on the first.
+
+Upgrade: dpkg removes the old symlink, while the daemons keep running
+(`--no-stop-on-upgrade`) with the old one-directory lookup. The
+`rts2-python` postinst puts the symlink back (unowned) on an upgrade from
+before 0.1.0-20261027, so nothing breaks until the site replaces it. An
+installed `rts2-python-sbt` stays installed (its scripts still resolve,
+second in the list); remove it with `apt remove` once `/etc/rts2/scripts`
+holds the site's own. Replace the symlink only after the upgrade: before
+it, dpkg removes whatever is at that path as the old package's file.
