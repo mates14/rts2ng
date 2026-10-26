@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+# Up to 2026-10-26 this package shipped /etc/rts2/scripts as a symlink to
+# /usr/share/rts2/scripts, and dpkg removes it on this upgrade. Daemons
+# keep running through an upgrade, and one started before it resolves a
+# bare "exe NAME" in /etc/rts2/scripts only. Put the link back, unowned:
+# the site replaces it with its own script directory when it likes.
+if [ "$1" = configure ] && [ -n "$2" ] \
+	&& dpkg --compare-versions "$2" lt-nl 0.1.0-20261027 \
+	&& [ ! -e /etc/rts2/scripts ] && [ ! -L /etc/rts2/scripts ]; then
+	mkdir -p /etc/rts2
+	ln -s /usr/share/rts2/scripts /etc/rts2/scripts
+fi
+
+#DEBHELPER#
+
+exit 0

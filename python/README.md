@@ -5,15 +5,21 @@ running system - reading/writing device values, waiting on state, taking exposur
 filing images - over the stdin/stdout protocol the executor speaks to a forked script
 process.
 
-This directory also carries a set of ready-to-use system scripts built on it: guiding
-(`guideccd.py`), sky flats (`flats.py` + `flatC1/2/3.py`), filter-synchronized
-multi-camera sequences (`filtros.py`, `ojitos.py`), GRB follow-up (`ojitos_adaptive.py`),
-an idle-time sky survey (`make_survey.py`), an airmass/extinction-curve scan
-(`vaodscan.py`), and a worked single-target example (`cygnus.py`).
+The site-independent scripts built on it are in `scripts/`: autofocus (`focus.py`) and an
+airmass/extinction-curve scan (`vaodscan.py`). Scripts of one observatory are in
+`sites/<site>/` (SBT's guiding, flats, filter sequences and survey, D50's guiding,
+makak, ovis); they are kept here for reference and for those sites, not packaged.
 
-`pip install .` installs the `rts2` package only - the standalone scripts aren't meant
-to become `$PATH` commands, they're meant to be invoked by RTS2's executor via `exe
-<name>`, resolved against `[scriptexec] script_path` in `rts2.ini` (default
-`/etc/rts2/scripts`) when referenced by a bare filename rather than a full path. The
-Debian package (`debian/`) installs both: the library via the same `setup.py`
-(through `dh-python`'s `pybuild`), and the scripts to `/etc/rts2/scripts`.
+`pip install .` installs the `rts2` package only - the scripts aren't meant to become
+`$PATH` commands, they're meant to be invoked by RTS2's executor via `exe <name>`. A bare
+name is looked up along `[scriptexec] script_path` in `rts2.ini`, a `:`-separated list,
+default `/etc/rts2/scripts:/usr/share/rts2/scripts`, first match wins. The Debian package
+(`debian/`) installs the library via the same `setup.py` (through `dh-python`'s
+`pybuild`) and the site-independent scripts to `/usr/share/rts2/scripts`.
+
+`/etc/rts2/scripts` belongs to the site, and a script there overrides a packaged one of
+the same name. Make it a directory of your own scripts, or a symlink to a checkout, e.g.
+for SBT:
+
+    sudo rm /etc/rts2/scripts     # left by the upgrade from the old package, if there
+    sudo ln -s /home/<user>/rts2ng/python/sites/sbt /etc/rts2/scripts

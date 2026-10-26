@@ -9,7 +9,8 @@
 # Python rewrite of ~/bin/kseq-expose.sh at makak.
 #
 # Run like this:
-#   rts2-scriptexec -c C0 -s 'exe /usr/share/rts2/scripts/kseq-expose.py'
+#   rts2-scriptexec -c C0 -s 'exe kseq-expose.py'
+# with this file in /etc/rts2/scripts (site scripts are not packaged).
 #
 # The lascaux credentials are read from ~/.netrc of the user running it
 # (root under makak-acquire.service), e.g.
