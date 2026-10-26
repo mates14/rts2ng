@@ -136,7 +136,10 @@ void DevScript::postEvent (rts2core::Event * event)
 			unsetWait ();
 			waitScript = NO_WAIT;
 			if (script.get ())
+			{
 				script.get ()->notActive ();
+				clearScriptPosition ();
+			}
 			script.null ();
 			delete nextComd;
 			nextComd = NULL;
@@ -347,6 +350,19 @@ void DevScript::idle ()
 	}
 }
 
+// base note: classic left scriptPosition/scriptLen on the device when a
+// script was dropped before its end (the executor stopping at the end of
+// the night, a target killed): rts2-mon and the web monitors then showed
+// the last element of the night's last script as running all day (D50,
+// 2026-10-26). They are reset here; SCRIPT itself stays, as the FITS
+// header of an image still reading out takes it, while these two are not
+// written to FITS.
+void DevScript::clearScriptPosition ()
+{
+	queCommandFromScript (new rts2core::CommandChangeValue (script_connection->getMaster (), std::string ("scriptPosition"), '=', 0));
+	queCommandFromScript (new rts2core::CommandChangeValue (script_connection->getMaster (), std::string ("scriptLen"), '=', 0));
+}
+
 void DevScript::deleteScript ()
 {
 	unsetWait ();
@@ -400,6 +416,7 @@ void DevScript::deleteScript ()
 		if (script.get ())
 			script.get ()->notActive ();
 		script.null ();
+		clearScriptPosition ();
 		currentTarget = NULL;
 		// that can result in call to startTarget and
 		// therefore nextCommand, which will set nextComd - so we

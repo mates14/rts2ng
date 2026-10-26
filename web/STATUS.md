@@ -3080,3 +3080,34 @@ guiding, observing with 10-minute-old guiding values, an older guide.py
 (no guide_time), and the daemon returning 502. Deployed for testing to
 `/var/www/info/index-t.html` (-> `~torman/rts2ng/web/sites/d50-monitor.html`
 on lascaux50); the live `index.html` follows MJ's checkout.
+
+## Monitors: each camera's script, with the running element (2026-10-26) [JS]
+
+bart-monitor.html and d50-monitor.html show each camera's `SCRIPT` in its
+status lines, right under the target ("(idle)" when none), in their font
+and colour (it is the camera's state, not part of the image caption) (D50's guide camera C1: in the Guiding panel, under its
+values), with the element now running marked. The mark is
+`scriptPosition`/`scriptLen`, the offsets into SCRIPT that the executor
+sets on the camera as each element starts and rts2-mon highlights; the
+trailing space `scriptLen` counts is left unmarked. The line reads
+"Script: ...", in D50's Guiding panel "C1 script: ...", and "Script: -"
+when SCRIPT is empty or `scriptLen` is 0: SCRIPT stays on the camera after
+its script, and `scriptLen` says whether one runs. It is 0 after a
+script's end, and since base's `DevScript::clearScriptPosition ()` also
+after a script dropped midway (the executor stopping at the end of the
+night left D50 showing the night's last script all day). A first version
+asked EXEC for a current target instead; that hid scripts run by
+rts2-scriptexec and rts2-viewer, which set SCRIPT too. Until the script
+runners (the executor) run that build, a camera can still claim the last
+script of a night. The camera line's "(idle)" is still the empty
+`OBJECT`. Scripts with quotes (`exe "..."`, 189 of SBT's) reach the
+camera's SCRIPT only from rts2ng b5b7310; until the cameras run it they
+show the previous script or none.
+
+Tested in headless Chromium against the mock (`~/snaptest-bart/mock.py`,
+`mock50.py`, modes `script` and `stale`, both with no EXEC target): a
+loop with its inner element marked, a quoted exe marked whole, D50's C1
+guide script; "-" with SCRIPT left on the cameras and `scriptLen` 0.
+Deployed for testing to the live index.html of both sites, which link to
+JS's copies (`~torman/rts2ng/web/sites/` on lascaux and lascaux50; D50's
+followed MJ's checkout until 2026-10-26, its `index-t.html` is gone).

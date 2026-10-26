@@ -139,6 +139,7 @@ class DevScript
 		void setNextTarget (Rts2Target * in_target);
 
 		void scriptBegin ();
+		void clearScriptPosition ();
 };
 
 }

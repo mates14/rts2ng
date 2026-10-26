@@ -161,7 +161,7 @@
             font-size: 13px;
             font-weight: bold;
         }
-        body.api-stale #status-info, body.api-stale #c0-status, body.api-stale #c1-status,
+        body.api-stale #status-info, body.api-stale #c0-status, body.api-stale #c1-status, body.api-stale .cam-script,
         body.api-stale .guide-panel, body.api-stale .sky-panel { opacity: 0.4; }
 
         #guide-frame-img {
@@ -272,6 +272,21 @@
             white-space: pre-line;
             text-align: left;
             margin: 0 0 6px 0;
+        }
+
+        /* the camera's SCRIPT, with the element it runs now (scriptPosition,
+           scriptLen - the same offsets rts2-mon highlights) marked. It is
+           the camera's state, like the lines under it, so it takes their
+           font and colour rather than the image caption's. */
+        .cam-script {
+            text-align: left;
+            overflow-wrap: anywhere;
+            margin: 3px 0;
+        }
+        .cam-script .script-now {
+            background: var(--graph-band);
+            outline: 1px solid var(--graph-line);
+            font-weight: bold;
         }
 
         .webcam-grid {
@@ -585,6 +600,7 @@
                 </div>
                 <div id="guide-status" class="cloud-status"></div>
                 <div id="c1-status" class="guide-readout" style="margin-top: 6px;"></div>
+                <div id="c1-script" class="cam-script guide-readout"></div>
             </div>
         </div>
 
@@ -973,10 +989,49 @@
             `;
         }
 
+        // The camera's SCRIPT, with the element now running marked: the
+        // executor sets scriptPosition/scriptLen on the camera as each
+        // element starts (offsets into SCRIPT, as rts2-mon uses them).
+        // Scripts with quotes in them (exe "...") reach the camera only
+        // since rts2ng b5b7310; before, SCRIPT stayed empty or stale.
+        // SCRIPT stays on the camera after its script ends; scriptLen
+        // says whether one runs: it is 0 after a script's end, and since
+        // rts2ng's DevScript::clearScriptPosition () also after a script
+        // dropped midway (the executor stopping at the end of the night,
+        // which left D50 showing last night's Mrk 421 script all day,
+        // 2026-10-26). Every script runner sets it: the executor,
+        // rts2-scriptexec, rts2-viewer.
+        function escapeHtml(text) {
+            return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function scriptHtml(d, label) {
+            const head = '<span class="script-label">' + escapeHtml(label) + '</span> ';
+            const script = safeValue(d, 'SCRIPT', '');
+            const pos = safeValue(d, 'scriptPosition', 0);
+            const len = safeValue(d, 'scriptLen', 0);
+            if (typeof script !== 'string' || script === '' || typeof len !== 'number' || len <= 0)
+                return head + '<span class="script-label">-</span>';
+            if (typeof pos !== 'number' || pos < 0 || pos >= script.length)
+                return head + escapeHtml(script);
+            // scriptLen counts the space after the element; leave it unmarked
+            const now = script.slice(pos, pos + len).replace(/\s+$/, '');
+            return head + escapeHtml(script.slice(0, pos))
+                + '<span class="script-now">' + escapeHtml(now) + '</span>'
+                + escapeHtml(script.slice(pos + now.length));
+        }
+
         function updateCameraStatus() {
             for (const cam of ['C0', 'C1']) {
                 const div = document.getElementById(cam.toLowerCase() + '-status');
                 const d = systemData[cam];
+                const scriptDiv = document.getElementById(cam.toLowerCase() + '-script');
+                // in a camera box the line right under the target; a camera
+                // without one (D50's guide camera, in the Guiding panel)
+                // has its own element, and the line names the camera
+                if (scriptDiv)
+                    scriptDiv.innerHTML = scriptHtml(d, `${cam} script:`);
+                const scriptLine = scriptDiv ? '' : `<div class="status-value cam-script">${scriptHtml(d, 'Script:')}</div>`;
                 const object = safeValue(d, 'OBJECT', '');
                 const exposure = safeValue(d, 'exposure', NaN);
                 const exposureEnd = safeValue(d, 'exposure_end', NaN);
@@ -997,6 +1052,7 @@
 
                 div.innerHTML = `
                     <div class="status-value">${object || '(idle)'}</div>
+                    ${scriptLine}
                     <div class="status-value">Exp: ${fmt(exposure)} s</div>
                     <div class="status-value">Ends: ${formatTime(exposureEnd)}</div>
                     <div class="status-value">Filter: ${filter}</div>

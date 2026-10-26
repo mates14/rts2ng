@@ -3946,6 +3946,7 @@ of two centralds. Not explained: why the production httpd then exited
 (the reproduction kept running 30 s); only `--run-as rts2`, the production
 database and the real devices differ.
 
+<<<<<<< Updated upstream
 ## fliusb builds again for kernels before 5.19 (2026-10-26) [MJ]
 
 hpl (OVIS, Ubuntu noble on kernel 5.13.0-28, kept for its graphics card)
@@ -3956,3 +3957,25 @@ two-argument form without a version gate. Now `fliusb_maxpacket()` passes
 `usb_pipeout(pipe)` as the direction before 5.19 (it must match the pipe;
 5.19 takes it from the pipe the same way). Built clean against 5.13.0-28
 (on hpl, scratch dir) and 7.0.0-38; not loaded, W2 waits for the package.
+=======
+## Script position reset when a script is dropped (2026-10-26) [JS]
+
+A script that ends sets the device's `scriptPosition`/`scriptLen` to 0
+(`Script::nextCommand`), but one dropped midway kept them: the executor
+stopping at the end of the night (`stop`: `EVENT_KILL_ALL`), a target
+killed, `deleteScript ()`. D50's C0 and C1 showed the night's last script
+(Mrk 421) as running all day. `DevScript::clearScriptPosition ()` now sends
+both as 0 from the kill branch of `DevScript::postEvent` and from
+`deleteScript ()`. SCRIPT itself stays: it goes into the FITS header, and
+the last image of a target can still be reading out; the two positions are
+not written to FITS. All three script runners use DevScript (rts2-executor,
+rts2-scriptexec, rts2-viewer), so the web monitors can take `scriptLen > 0`
+for "a script runs" on any camera. A runner killed outright (rts2-scriptexec
+on SIGINT exits without the kill path, a crash) still leaves them.
+
+Checked on lascaux (`~torman/wip-pos-test.sh`: centrald, teld/camd-dummy,
+executor on rts2test with a test target near the meridian, `now`, then
+`stop` 30 s into `E 1 E 40 E 1`): the new executor sends `scriptLen 0` at
+the stop, the installed one (727f2b0) leaves `scriptLen 4`. db and gui
+build without warnings.
+>>>>>>> Stashed changes
