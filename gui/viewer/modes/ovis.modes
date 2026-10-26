@@ -16,52 +16,51 @@
 #
 # Flood: neon through the open beam (FILTA=N, FILTB=open) for Calib time,
 # saturating the chip so the next frame shows no residual (RBI) of what
-# was on it before; NCLEARS=20 then clears it for the frame after. The
-# script language cannot delete a frame, so the floods are saved like the
-# rest: they are the frames with FILTA=N, FILTB=open and NEON on in the
-# header, and can be deleted afterwards. Flood is also a mode of its own,
-# to run by hand before a single Spectrum or Lambda calib.
+# was on it before. The script language cannot delete a frame, so the
+# floods are saved like the rest: they are the frames with FILTA=N,
+# FILTB=open and NEON on in the header, and can be deleted afterwards.
+# Flood is also a mode of its own, to run by hand before a single Spectrum
+# or Lambda calib.
 #
 # The arc after the second flood is taken through the slit and grism.
 # ovis-acquire.sh took it with the beam still open from the flood (FILTA=N,
 # FILTB=open), i.e. a second flood, not an arc spectrum. [MJ 2026-10-26]
 #
-# NCLEARS is the gxccd driver's: it acts only when PREFLASH > 0 (the
-# driver passes both to gxccd_set_preflash), so with PREFLASH 0 it does
-# nothing - as in ovis-acquire.sh. A Flood leaves it at 20 for the next
-# frame; Spectrum and Lambda calib set it back to 0 after theirs, Direct
-# image before its own.
+# No NCLEARS, though ovis-acquire.sh sets 20 after each flood: the gxccd
+# driver passes it to the camera only with a PREFLASH, and C1 (G2-1600,
+# KAF-1603ME) has no preflash hardware (GBP_PREFLASH 0, asked 2026-10-26),
+# so it never did anything. [MJ 2026-10-26]
 #
 # Binning is not set (ovis-acquire.sh sets 2x2): use the viewer's panel.
 # No flat lamp at OVIS.
 
 [Direct image]
 color = cyan
-script = NCLEARS=0 FILTA=N FILTB=open W1.NEON=off E $EXPTIME
+script = FILTA=N FILTB=open W1.NEON=off E $EXPTIME
 
 [Spectral sequence]
 color = green
-script = W1.NEON=off NCLEARS=0 FILTA=N FILTB=open
+script = W1.NEON=off FILTA=N FILTB=open
   E 1 E $CALTIME
   FILTB=jogurt E 1
   W1.NEON=on FILTA=N FILTB=open E $CALTIME
-  W1.NEON=off NCLEARS=20 FILTB=jogurt FILTA=grism E $CALTIME NCLEARS=0
+  W1.NEON=off FILTB=jogurt FILTA=grism E $CALTIME
   E $EXPTIME
   FILTA=N FILTB=open W1.NEON=on E $CALTIME
-  NCLEARS=20 FILTB=jogurt FILTA=grism E $CALTIME NCLEARS=0
+  FILTB=jogurt FILTA=grism E $CALTIME
   W1.NEON=off FILTA=N FILTB=open
 
 [Flood]
 color = yellow
-script = FILTA=N FILTB=open W1.NEON=on E $CALTIME W1.NEON=off NCLEARS=20
+script = FILTA=N FILTB=open W1.NEON=on E $CALTIME W1.NEON=off
 
 [Spectrum]
 color = green
-script = FILTB=jogurt FILTA=grism W1.NEON=off E $EXPTIME NCLEARS=0
+script = FILTB=jogurt FILTA=grism W1.NEON=off E $EXPTIME
 
 [Lambda calib]
 color = purple
-script = FILTB=jogurt FILTA=grism W1.NEON=on E $CALTIME W1.NEON=off NCLEARS=0
+script = FILTB=jogurt FILTA=grism W1.NEON=on E $CALTIME W1.NEON=off
 
 [Dark]
 color = red

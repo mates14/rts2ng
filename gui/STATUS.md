@@ -1392,17 +1392,21 @@ short spectrum (Calib time), full spectrum (Exposure), flood, arc. And
   taken with the beam still open (the flood set FILTA=N/FILTB=open and the
   arc block never put slit and grism back), i.e. a second flood. Here the
   arc is through jogurt + grism. Not changed in ovis-acquire.sh itself.
-- NCLEARS=20 for the frame after each flood, as the shell script. In our
-  gxccd driver it acts only with PREFLASH > 0 (both go to
-  gxccd_set_preflash), so with PREFLASH 0 it does nothing - the same as
-  under ovis-acquire.sh. Every mode but Dark now sets NCLEARS (Flood
-  leaves it at 20, the next mode resets it), so the viewer refuses them on
-  a camera without NCLEARS. Which camera OVIS's C1 is was not checked.
+- NCLEARS (ovis-acquire.sh: 20 after each flood) is not in the modes. The
+  gxccd driver passes it only with PREFLASH > 0 (both go to
+  gxccd_set_preflash), and C1 has no preflash hardware: a probe against
+  libgxccd on hpl, C1 stopped (2026-10-26), said G2-1600, KAF-1603ME,
+  serial G2KF1600-00206, GBP_PREFLASH 0. So it never did anything there,
+  and an in-camera preflash cannot replace the floods. The library still
+  returns 0 from gxccd_set_preflash on this camera, so PREFLASH > 0 would
+  not trigger the driver's reinit-on--1 either; it would just do nothing.
+  (Not yet in the driver: reading GBP_PREFLASH and refusing PREFLASH on a
+  camera without it.)
 - Binning is left to the viewer's panel (the shell script set 2x2).
 
 **Verified** with centrald, camd-dummy C1 with two filterd-dummy wheels
 (FILTA N/grism, FILTB open/jogurt) and stand-ins (camera `readout` for
-NCLEARS, focusd-dummy W1 `FOC_TOFF` for NEON), the sequence run through
+NCLEARS, then still in the modes; focusd-dummy W1 `FOC_TOFF` for NEON), the sequence run through
 rts2-scriptexec (the viewer's engine): 8 frames, each with the expected
 FILTA/FILTB/NCLEARS stand-in in its header, the lamp stand-in on exactly
 during frames 4, 7, 8 (floods, arc). The file parsed with the viewer's
