@@ -1490,3 +1490,11 @@ Verified with the real MainWindow driven from a scratch harness against
 centrald, two camd-dummy (C2 connecting first), two filterd-dummy and a
 focusd-dummy: C1 shown with `--device C1`, the layout minimums above, the
 rounds above. Not verified: the look on hpl's screen.
+
+## ovis.modes: Simple image, Slit image, arc for Exposure time (2026-10-26) [MJ]
+
+MJ's edits on hpl's `/etc/rts2/ovis.modes` taken into the repository:
+Simple image (`E $EXPTIME`, no flood) and Slit image (`FILTB=jogurt E
+$EXPTIME`), both before Image + flood, and Lambda calib's arc for Exposure
+time instead of Calib time. The header says which modes have no flood.
+Parses with loadModes: 8 modes.
