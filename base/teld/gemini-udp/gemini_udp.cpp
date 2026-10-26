@@ -2258,7 +2258,7 @@ void GeminiUDP::runRezero (const GeminiStatus &st)
 			{
 				rezeroThenMove = false;
 				struct ln_equ_posn pos;
-				getTarget (&pos);
+				getTelTargetRaDec (&pos);	// with the astrometric corrections, see startResync ()
 				logStream (MESSAGE_WARNING) << "GeminiUDP: RE-ZERO finished, continuing with the move it was run before" << sendLog;
 				if (!doGoto (pos.ra, pos.dec, "move after re-zero"))
 					rezeroMoveFailed = true;
@@ -2783,7 +2783,7 @@ bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
 	}
 
 	struct ln_equ_posn tar;
-	getTarget (&tar);
+	getTelTargetRaDec (&tar);	// with the astrometric corrections, see startResync ()
 	recoverTargetRa = tar.ra;
 	recoverTargetDec = tar.dec;
 	moveRetries++;
@@ -2936,8 +2936,14 @@ int GeminiUDP::startResync ()
 		clearSkyEvidence ("armed re-zero could not start");
 	}
 
+	// base note: tel_target, not getTarget (): the framework adds its
+	// astrometric corrections (CORR_) only to tel_target, as gemini2ser.cpp
+	// and this driver's own flip code take it. From getTarget () every
+	// "correct" was dropped: CORR_ grew by the same error at each image
+	// while the mount stayed 0.4 deg off (SBT, 2026-10-26). The T-Point model
+	// is added on arrival (checkMoveCorrection ()), as before.
 	struct ln_equ_posn pos;
-	getTarget (&pos);
+	getTelTargetRaDec (&pos);
 	return doGoto (pos.ra, pos.dec, "framework-requested move") ? 0 : -1;
 }
 

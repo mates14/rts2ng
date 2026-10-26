@@ -237,6 +237,11 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   status must not drive anything. `gotoRaDec ()` and `startPark ()` refuse at once.
 - `carryPersistentFields()` keeps fields that do not come from the ENQ reply
   (`parking`, `trackingSecToWestLimit`). `pollStatus()` used to reset them.
+- Every goto takes `tel_target` (`getTelTargetRaDec ()`): the framework's
+  astrometric corrections (`CORR_`) are only in it. The goto, the move
+  recovery and the move after a re-zero took `getTarget ()` until
+  2026-10-26, and every `correct` was lost (HISTORY, "Gemini UDP: gotos
+  without the corrections"). [JS 2026-10-26]
 
 **Perek 2m** (`teld/perek2m`, `dome/perek2m`; `teld/perek2m/OPERATION.md`)
 - The 2m is shared with observers using Fuky's clients. Neither daemon
@@ -352,6 +357,16 @@ it, and say which classes you added.
   through the wrong filter with the old name in the header. Classic. Seen in
   the past as dark-filter frames failing astrometry, not recently; left
   alone on purpose. [MJ 2026-10-18]
+- Gemini UDP, for MJ: each reset of the mount's clock (`endPark ()` out of
+  night, and at startup when it is off) leaves Gemini's RA relation off by
+  the reset; the clock loses 3-4 s a day, so the RA offset grows until the
+  next cold start (0.362 deg on 2026-10-26, shown as "mount's own offsets"
+  in every sky sample; a cold start at CWD cleared it). Options: no clock
+  reset between cold starts; compensate the offset the driver measures;
+  reset the clock only with a cold start. Needs a daytime check first
+  (set the clock 30 s off, see the own offset move 0.125 deg).
+  `teld/gemini-udp/OPERATION.md` 5, "The mount's own RA offset".
+  [JS 2026-10-26]
 - `LTM1_1`/`LTM2_2` ignore binning.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on

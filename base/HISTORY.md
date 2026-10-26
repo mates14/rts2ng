@@ -3977,3 +3977,27 @@ executor on rts2test with a test target near the meridian, `now`, then
 `stop` 30 s into `E 1 E 40 E 1`): the new executor sends `scriptLen 0` at
 the stop, the installed one (727f2b0) leaves `scriptLen 4`. db and gui
 build without warnings.
+
+## Gemini UDP: gotos without the corrections; the mount's own RA offset (2026-10-26) [JS]
+
+SBT's T0 had a growing RA correction (`CORR_` 1.2 deg). Within one target
+each image was solved 0.40 deg off, the executor sent `correct`, and the
+framework added it again ("correcting ... distances 24' -> 48' -> 1d12'
+-> 1d36'"), while the goto stayed at RA 262.976 deg. `startResync ()`, the
+move recovery and the move after a re-zero took `getTarget ()`, which the
+framework leaves without the astrometric corrections; they are only in
+`tel_target` (`getTelTargetRaDec ()`), which `gemini2ser.cpp` sent and the
+driver's own flip code takes. All three now take `tel_target` (both
+`gemini_udp.cpp` and `gemini_udp_imu.cpp`); the T-Point model is still
+added on arrival. Since d2c730f (2026-08-04); MJ's driver. Built without
+warnings; no simulator in the tree, so it is first checked on the mount:
+after the first `correct` of a target the next image should be on, and
+`CORR_` should stop growing. A driver started on the new build begins with
+`CORR_` 0.
+
+The 0.40 deg itself: the axis counters were right (sky -0.03 deg, IMU
+0.2 deg). It was the "mount's own offsets" every sky sample logs, +0.362
+deg in RA, which grew at each reset of the mount's clock (OPERATION.md 5,
+"The mount's own RA offset"). JS cold-started the mount at CWD (park,
+`position cwd`) at 18:22: own offset +0.000, pointing error 0.07 deg.
+Stopping it from growing is open (STATUS, Open items).

@@ -321,6 +321,33 @@ corrections are off by the same factor. Check which one `/etc/rts2/img_process` 
 
 ---
 
+### The mount's own RA offset, and Gemini's clock [JS 2026-10-26]
+
+Every sky sample also logs the **mount's own offsets**: how far the position Gemini reports is from
+what its counters mean (the same firmware relation, Gemini's own LST). It is not part of the counter
+error and a re-zero does not touch it, but it is pointing error all the same: astrometry measures the
+sum of the two.
+
+On SBT it grew in RA only, 0.268 → 0.304 → 0.331 → 0.362 deg between 2026-10-22 and 10-26 (Dec
+0.000), in steps, each at a reset of the mount's clock to system UTC: `endPark ()` resets it at every
+park exit out of night (as `gemini2ser.cpp` did), and startup does when it is off ("the mount clock
+was 5 s off system UTC - reset it"). The clock loses about 3-4 s a day; each step matched the time lost
+since the previous reset (0.027 deg after 40 h, 0.031 deg for three resets over 45 h). Gemini evidently
+keeps its RA when its time is set, so each correction of the clock stays in the relation. The total,
+0.362 deg = 87 s, is about 25 days of clock drift since the start of October. The model terms in
+Gemini's web interface were zero.
+
+A cold start at CWD clears it: park (`:hC#`, CWD), then `position cwd`. On 2026-10-26 18:22 the own
+offset went from +0.362 to +0.000 and the pointing error of the next image from 0.32-0.39 to 0.07 deg.
+The astrometric corrections hide it within a target as long as they reach the mount (see "Every goto
+takes tel_target" in `base/STATUS.md`); before 2026-10-26 they did not.
+
+Open (MJ): stop it growing - no clock reset between cold starts, compensating the measured offset in
+the gotos, or a clock reset only together with a cold start. Not verified that a time set alone moves
+it: set the clock 30 s off by daylight and check that the own offset moves by 0.125 deg.
+
+---
+
 ## 6. Options and values at a glance
 
 | option | default | |
