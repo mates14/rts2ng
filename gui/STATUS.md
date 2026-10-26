@@ -1430,7 +1430,9 @@ Checked with an offscreen harness running the same updateModeStyle() code
 hpl (OVIS) runs the modes from a copy, `/etc/rts2/ovis.modes`
 (`[viewer] modes` in its rts2.ini, added 2026-10-26; the old rts2.ini is
 `rts2.ini.bak-20261026`): a change to `gui/viewer/modes/ovis.modes` has to
-be copied there as well.
+be copied there as well. The same for `/etc/rts2/ovis-guider.modes`;
+mates' `~/.bash_aliases` there has `ovis` and `guider`, which start
+rts2-viewer on C1 and C2 with those two files.
 
 ## ovis.modes: a flood before every C1 frame; ovis-guider.modes for C2 (2026-10-26) [MJ]
 
