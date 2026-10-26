@@ -3111,3 +3111,38 @@ guide script; "-" with SCRIPT left on the cameras and `scriptLen` 0.
 Deployed for testing to the live index.html of both sites, which link to
 JS's copies (`~torman/rts2ng/web/sites/` on lascaux and lascaux50; D50's
 followed MJ's checkout until 2026-10-26, its `index-t.html` is gone).
+
+## Monitors: camera state and progress; httpd sends progress times (2026-10-26) [JS]
+
+Each camera's block on bart-monitor.html and d50-monitor.html starts with
+its state, in bold, as rts2-mon's header gives it: "Exposing 23 / 60 s",
+"Reading out", "Waiting for mount", "Waiting (exposure blocked)", "Idle",
+plus " - hardware error" in red for DEVICE_ERROR_HW (not for
+DEVICE_ERROR_KILL, which every aborted exposure sets). A thin bar under it
+while exposing or reading out; D50's guide camera C1, whose values are one
+line in the Guiding panel, shows a percentage instead, on a row of its own
+above them (inline, its changing length moved the values after it). Redrawn every
+second from the last poll, so the bar moves between the 10 s polls.
+
+- The state is the device's bitmask /api/get always sent (`state`):
+  chip 0 exposing (0x011) or reading (0x006).
+- "Waiting" is the camera's own `wait_for_notbop`: an exposure it was
+  asked for waits until block_exposure (BOP_EXPOSURE), a moving filter or
+  a moving focuser clears (`Camera::camStartExposure`). "for mount" when T0
+  reports TEL_MOVING. The camera itself stays idle meanwhile, so the state
+  bits alone cannot say it.
+- Exposure progress: `exposure`/`exposure_end`. Readout progress:
+  `progress_start`/`progress_end`, which rts2-httpd now adds to every
+  device's JSON next to `state`: the start and expected end the device
+  sent with its last state change (`Connection::getProgressStart ()`/
+  `getProgressEnd ()`; a camera's readout: now + pixels / pixels per
+  second), null when none - the pair rts2-mon draws its bar from. Until
+  the sites run that rts2-httpd, "Reading out" has no bar.
+
+Tested: the pages in headless Chromium against the mock (mode `states`:
+exposing, reading out, waiting while T0 slews, a hardware error); the new
+rts2-httpd on lascaux against a private centrald and camd-dummy, 5 s
+exposure: progress_start 2.1 s before and progress_end 2.9 s after the
+query, as `exposure_end`; null after the image. camd-dummy sends no
+readout end (no pixels per second yet), so the readout bar was seen only
+against the mock.

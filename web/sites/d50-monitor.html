@@ -184,6 +184,9 @@
         .guide-readout .big.warn { color: var(--warn); }
         .guide-readout .big.good { color: var(--good); }
         #c1-status .status-value { display: inline; margin-right: 14px; }
+        /* C1's state gets a row of its own: its text changes length, and
+           inline it would shift the values after it */
+        #c1-status .cam-state { display: block; margin-bottom: 2px; }
 
         @media (max-width: 900px) {
             .guide-grid {
@@ -282,6 +285,19 @@
             text-align: left;
             overflow-wrap: anywhere;
             margin: 3px 0;
+        }
+        /* the camera's own state, as rts2-mon's header shows it, and the
+           progress of an exposure or readout */
+        .cam-state { font-weight: bold; }
+        .cam-state .error { color: var(--error); }
+        .cam-bar {
+            height: 4px;
+            background: var(--border);
+            margin: 1px 0 4px 0;
+        }
+        .cam-bar > div {
+            height: 100%;
+            background: var(--graph-line);
         }
         .cam-script .script-now {
             background: var(--graph-band);
@@ -1021,6 +1037,52 @@
                 + escapeHtml(script.slice(pos + now.length));
         }
 
+        // The camera's state as rts2-mon's header gives it, from the state
+        // bitmask /api/get sends with every device (status.h): chip 0
+        // exposing (CAM_EXPOSING 0x001, CAM_EXPOSING_NOIM 0x010) or reading
+        // (CAM_READING 0x002, CAM_FT 0x004), DEVICE_ERROR_HW 0x20000.
+        // wait_for_notbop is the camera's own value: an exposure it was
+        // asked for waits for block_exposure (BOP_EXPOSURE, a slewing
+        // mount) or a moving filter/focuser to clear. The bar: an
+        // exposure from exposure/exposure_end, a readout from the
+        // progress_start/progress_end rts2-httpd sends since 2026-10-26
+        // (the start and expected end the camera sent with "readout
+        // started", the pair rts2-mon draws its bar from).
+        function cameraState(d) {
+            const state = safeValue(d, 'state', null);
+            if (typeof state !== 'number')
+                return { text: 'N/A', pct: null, error: '' };
+            const now = Date.now() / 1000;
+            const chip = state & 0x0f;
+            const pStart = safeValue(d, 'progress_start', null);
+            const pEnd = safeValue(d, 'progress_end', null);
+            const span = (s, e) => (typeof s === 'number' && typeof e === 'number' && e > s)
+                ? Math.min(100, Math.max(0, 100 * (now - s) / (e - s))) : null;
+            let text, pct = null;
+            if (state & 0x011) {
+                const exposure = safeValue(d, 'exposure', NaN);
+                const end = safeValue(d, 'exposure_end', NaN);
+                if (typeof exposure === 'number' && exposure > 0 && typeof end === 'number') {
+                    const elapsed = Math.min(exposure, Math.max(0, exposure - (end - now)));
+                    pct = 100 * elapsed / exposure;
+                    text = `Exposing ${fmt(elapsed, 0)} / ${fmt(exposure, 0)} s`;
+                } else {
+                    text = 'Exposing';
+                    pct = span(pStart, pEnd);
+                }
+            } else if (chip & 0x006) {
+                text = 'Reading out';
+                pct = span(pStart, pEnd);
+            } else if (safeValue(d, 'wait_for_notbop', false) == 1) {
+                const tel = safeValue(systemData.T0, 'state', null);
+                text = (typeof tel === 'number' && (tel & 0x007) === 0x001) ? 'Waiting for mount' : 'Waiting (exposure blocked)';
+            } else {
+                text = 'Idle';
+            }
+            const error = (state & 0x20000) ? ' <span class="error">- hardware error</span>' : '';
+            return { text, pct, error };
+        }
+
         function updateCameraStatus() {
             for (const cam of ['C0', 'C1']) {
                 const div = document.getElementById(cam.toLowerCase() + '-status');
@@ -1032,6 +1094,13 @@
                 if (scriptDiv)
                     scriptDiv.innerHTML = scriptHtml(d, `${cam} script:`);
                 const scriptLine = scriptDiv ? '' : `<div class="status-value cam-script">${scriptHtml(d, 'Script:')}</div>`;
+                // the state leads the block, with its bar; in a one-line
+                // status (D50's guide camera) the percentage instead
+                const st = cameraState(d);
+                const stateLine = scriptDiv
+                    ? `<div class="status-value cam-state">${st.text}${st.pct === null ? '' : ` ${fmt(st.pct, 0)} %`}${st.error}</div>`
+                    : `<div class="status-value cam-state">${st.text}${st.error}</div>`
+                        + (st.pct === null ? '' : `<div class="cam-bar"><div style="width: ${st.pct.toFixed(1)}%"></div></div>`);
                 const object = safeValue(d, 'OBJECT', '');
                 const exposure = safeValue(d, 'exposure', NaN);
                 const exposureEnd = safeValue(d, 'exposure_end', NaN);
@@ -1051,6 +1120,7 @@
                 const fwhm = safeValue(d, 'guide_fwhm', safeValue(systemData.IMGP, `fwhm_${cam}`, NaN));
 
                 div.innerHTML = `
+                    ${stateLine}
                     <div class="status-value">${object || '(idle)'}</div>
                     ${scriptLine}
                     <div class="status-value">Exp: ${fmt(exposure)} s</div>
@@ -2644,6 +2714,8 @@
         }
 
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
+        // exposure and readout bars move between polls
+        setInterval(updateCameraStatus, 1000);
         setInterval(reloadWebcams, 15000);
         setInterval(updateSentinelLed, 60000);
         setInterval(reloadCameraImages, 15000);

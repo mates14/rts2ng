@@ -229,5 +229,15 @@ void rts2web::sendConnectionValues (Connection *conn, std::ostringstream &os)
 	if (!first)
 		os << ",";
 	os << "\"state\":" << conn->getState ();
+	// The start and expected end the device sent with its last state
+	// change (a camera's exposure, its readout: now + pixels / pixels per
+	// second), as ctime, null when it sent none. rts2-mon draws its
+	// progress bar from the same pair (Connection::getProgress ()); not
+	// Values either, so without these a page cannot show a readout's
+	// progress. [JS 2026-10-26]
+	os << ",\"progress_start\":";
+	jsonTime (conn->getProgressStart (), os);
+	os << ",\"progress_end\":";
+	jsonTime (conn->getProgressEnd (), os);
 	os << "}";
 }
