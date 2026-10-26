@@ -97,6 +97,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   it; `getOpenConnection(nullptr)` used to crash `rts2-focusc`.
 - `Client::Client()` takes the user name from `getpwuid(geteuid())`, so
   clients started without a login session (cron, systemd) can log in.
+- A string value is sent as `"..."` without escaping, and
+  `ValueString::setValue` takes the text up to the last quote on the
+  line, so SCRIPT can contain quotes (`exe "..."`, 189 of SBT's
+  scripts). Keep the wire format as classic's. [JS 2026-10-26]
 
 - Every drop of a `Connection` goes through `dropConnection (size, reason)`,
   which logs who and why; do not call `connectionError ()` directly from

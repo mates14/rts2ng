@@ -41,7 +41,7 @@ ScriptDevice::ScriptDevice (int in_argc, char **in_argv, int in_device_type, con
 	scriptPosition->setValueInteger (0);
 
 	createValue (scriptLen, "scriptLen", "length of the current script element", false, RTS2_VALUE_WRITABLE, 0);
-	scriptPosition->setValueInteger (0);
+	scriptLen->setValueInteger (0);
 
 	createValue (elementPosition, "elementPosition", "position of element within the script", false, RTS2_VALUE_WRITABLE);
 }

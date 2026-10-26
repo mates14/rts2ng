@@ -17,8 +17,10 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 
 #include "libnova_cpp.h"
@@ -112,7 +114,23 @@ const char * ValueString::getValue ()
 
 int ValueString::setValue (Connection * connection)
 {
-	char *new_value;
+	// base note: a string is sent as "..." with no escaping, so a value that
+	// itself contains quotes (a script with exe "/path/x.py -n 8") was cut at
+	// the inner quote and refused, and SCRIPT never reached the camera or
+	// rts2-mon. The string is always the last parameter: take everything
+	// between the opening quote and the last quote on the line.
+	char *new_value = connection->paramNextWholeString ();
+	if (*new_value == '"')
+	{
+		char *end = new_value + strlen (new_value);
+		while (end > new_value + 1 && isspace (end[-1]))
+			end--;
+		if (end == new_value + 1 || end[-1] != '"')
+			return -2;
+		end[-1] = '\0';
+		setValueCharArr (new_value + 1);
+		return 0;
+	}
 	if (connection->paramNextString (&new_value) || !connection->paramEnd ())
 		return -2;
 	setValueCharArr (new_value);

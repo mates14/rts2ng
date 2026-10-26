@@ -3900,3 +3900,26 @@ installed `rts2-python-sbt` stays installed (its scripts still resolve,
 second in the list); remove it with `apt remove` once `/etc/rts2/scripts`
 holds the site's own. Replace the symlink only after the upgrade: before
 it, dpkg removes whatever is at that path as the old package's file.
+
+## Script values with quotes; script position (2026-10-26) [JS]
+
+rts2-mon and the API showed no script, or the previous target's, for SBT's
+cameras, and the highlight of the running element was off. The executor's
+`X SCRIPT = "exe "/home/mates/filtros.py -n 20 -e 120""` was refused with
+-2 by the camera (C1-C3 logs, 2026-10-24/25): the quoted string ends at the
+inner quote (UPSTREAM_BUGS.md). `ValueString::setValue` now takes the text
+up to the last quote on the line; the same function parses `V SCRIPT` in
+rts2-mon and rts2-httpd. Checked on lascaux with centrald, camd-dummy and
+rts2-scriptexec on private ports (`~torman/wip-script-test.sh`): the camera
+takes `E 1 exe "/bin/sleep 1" E 1` and sends it back whole.
+
+The highlight offsets were checked in the same run: `E 1 for 2 { E 1 D 1 }
+E 1` reports 0/4, 12/4, 16/4, 22/3, and the quoted script 0/4, 4/18, 23/3,
+all matching the text. Classic adds each element's length to `lineOffset`
+as well (`lineOffset += cmdBufTop - commandStart` in
+`Script::parseScript`), which counts the elements before twice; the import
+dropped that line, so rts2ng's offsets are right for one-line scripts,
+which all database scripts are. For a script file of several lines
+(rts2-scriptexec `-f`), or one with `#` comments, the offset of the lines
+after the first is still wrong (known-bugs.md). `ScriptDevice` initialized
+`scriptPosition` twice instead of `scriptLen` (harmless: it starts at 0).

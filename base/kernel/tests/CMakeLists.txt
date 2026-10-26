@@ -12,6 +12,7 @@ set(RTS2_KERNEL_TESTS
 	test_block_connection
 	test_image_histogram
 	test_value_que
+	test_value_string
 )
 
 add_executable(test_hoststring test_hoststring.cpp)
@@ -49,6 +50,10 @@ add_test(NAME block_connection COMMAND test_block_connection)
 add_executable(test_value_que test_value_que.cpp)
 target_link_libraries(test_value_que PRIVATE base_kernel)
 add_test(NAME value_que COMMAND test_value_que)
+
+add_executable(test_value_string test_value_string.cpp)
+target_link_libraries(test_value_string PRIVATE base_kernel)
+add_test(NAME value_string COMMAND test_value_string)
 
 foreach(_rts2_test ${RTS2_KERNEL_TESTS})
 	target_compile_options(${_rts2_test} PRIVATE -UNDEBUG)

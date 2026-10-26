@@ -1909,3 +1909,22 @@ a readout the same way, also in the classic driver.
 rts2ng: classic's single attempts, no reinit while the camera is busy, the
 night heating deferred until the camera is free (base/HISTORY.md, "gxccd:
 back to classic error handling").
+
+## A string value that contains quotes is refused (`lib/rts2/value.cpp`, `ValueString::setValue`) [JS 2026-10-26]
+
+A string value goes over the wire as `X SCRIPT = "..."` or `V SCRIPT "..."`
+(`CommandChangeValue`, `Connection::sendValue`), with no escaping, and
+`Connection::paramNextString` ends a quoted string at the next `"`. A value
+with quotes in it, such as the script `exe "/home/mates/filtros.py -n 8"`,
+is cut at the inner quote; text remains, and `ValueString::setValue`
+returns -2 ("invalid parameters"). The executor's `DevScript::scriptBegin`
+then cannot set the camera's SCRIPT: the camera keeps the previous
+target's script or `""`, and rts2-mon and the httpd API show that, with
+`scriptPosition`/`scriptLen` highlighting the wrong text. 189 of SBT's 459
+scripts contain quotes.
+
+rts2ng: a string is always the last parameter, so `ValueString::setValue`
+takes everything between the opening quote and the last quote on the line.
+The wire format is unchanged, so classic senders work as they are; a
+classic receiver still refuses such a value
+(`kernel/tests/test_value_string.cpp`).

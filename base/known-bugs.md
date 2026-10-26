@@ -115,3 +115,17 @@ so any Python script under rts2-scriptexec hits it.
 **Fix (proposed):** `dynamic_cast<rts2core::Device *> (master)` and answer
 `None` when it is not a device. Until then `python/sites/makak/
 kseq-expose.py` overrides `getExecDevice ()`.
+
+## Script highlight offsets after the first line of a script file [JS 2026-10-26]
+
+**File:** `script/src/script.cpp` (`Script::parseScript`)
+**Severity:** low - rts2-mon highlights the wrong part of the script
+
+`lineOffset` is the start of the current line within `SCRIPT`, but it only
+grows by the separating space and by 3 for a `#` comment, not by the
+length of the earlier lines. Elements on the second and later lines of a
+script read from a file by rts2-scriptexec, and those after a comment,
+get `scriptPosition` values too small. Database scripts are one line
+with no comments (none at SBT or D50, 2026-10-26), so the observatories
+are not affected. Fix: set `lineOffset = wholeScript.length ()` just
+before each line is appended.
