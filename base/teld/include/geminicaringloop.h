@@ -449,12 +449,25 @@ class GeminiCaringLoop
 		};
 
 		/**
+		 * How long a goto waits for the loop. A loop command takes up to
+		 * 1 s x 5 attempts (geminicaringloop.cpp); a goto can queue behind
+		 * the command in flight and a stop (the framework stops a moving
+		 * mount before every new goto), and its slew is a third. base
+		 * note: it was 3 s, and on 2026-10-26 at SBT a stop sent in the
+		 * middle of a meridian-flip slew took the loop 3.6 s: the goto was
+		 * refused, the target lost and the mount left stopped, not
+		 * tracking, although it was ready half a second later. Normally a
+		 * goto still returns in a fraction of a second.
+		 */
+		static constexpr double GOTO_WAIT_SEC = 15.0;
+
+		/**
 		 * Send a goto and wait (bounded, real OS wait) for the mount to
 		 * accept or reject it - satisfies Telescope::startResync()'s
 		 * synchronous contract. See base note at top of file for why this
 		 * is safe where the previous design's fake-blocking wasn't.
 		 */
-		bool gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec = 3.0,
+		bool gotoRaDec (double raDeg, double decDeg, std::string &errorMessage, double waitTimeoutSec = GOTO_WAIT_SEC,
 			GotoSideMode sideMode = GOTO_ANY_SIDE, GeminiSidePrediction *prediction = nullptr);
 
 		/** degrees; below this a side prediction counts as too close to call - see GeminiSidePrediction::ambiguous() */

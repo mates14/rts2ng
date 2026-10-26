@@ -242,6 +242,11 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   recovery and the move after a re-zero took `getTarget ()` until
   2026-10-26, and every `correct` was lost (HISTORY, "Gemini UDP: gotos
   without the corrections"). [JS 2026-10-26]
+- A Gemini goto waits `GeminiCaringLoop::GOTO_WAIT_SEC` (15 s) for the
+  mount loop: three loop commands at their worst (1 s x 5 attempts), the
+  one in flight, the stop the framework sends before every goto, and the
+  slew. 3 s refused a goto behind a slow mid-slew stop (HISTORY, "Gemini
+  goto wait"). [JS 2026-10-26]
 - A `correct` is taken only for a move that reached its target
   (`move_completed`, set when `endMove ()` succeeds, cleared when a move or
   a park starts). The error is measured against the target (asarina,
@@ -363,12 +368,6 @@ it, and say which classes you added.
   through the wrong filter with the old name in the header. Classic. Seen in
   the past as dark-filter frames failing astrometry, not recently; left
   alone on purpose. [MJ 2026-10-18]
-- Gemini UDP, for MJ: `gotoRaDec ()` waits 3 s for the mount loop, but a
-  stop sent mid-slew can take the loop longer (3.6 s on 2026-10-26: slow
-  answer, up to 5 retries of 1 s); the goto is then refused although the
-  mount is ready a moment later, and the target is lost. Wait for the
-  loop's worst case, or let a goto queued behind a stop count as accepted.
-  (HISTORY, "Corrections only from completed moves") [JS 2026-10-26]
 - Gemini UDP, for MJ: each reset of the mount's clock (`endPark ()` out of
   night, and at startup when it is off) leaves Gemini's RA relation off by
   the reset; the clock loses 3-4 s a day, so the RA offset grows until the

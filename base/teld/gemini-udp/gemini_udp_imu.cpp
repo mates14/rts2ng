@@ -3400,7 +3400,7 @@ bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label, GeminiCa
 
 	std::string err;
 	GeminiSidePrediction prediction;
-	bool ok = caring->gotoRaDec (raDeg, decDeg, err, 3.0, sideMode, &prediction);
+	bool ok = caring->gotoRaDec (raDeg, decDeg, err, GeminiCaringLoop::GOTO_WAIT_SEC, sideMode, &prediction);
 	if (!ok)
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: " << label << " refused: " << err << sendLog;
@@ -3513,7 +3513,7 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 		<< " -> corrected RA=" << corrRa << " Dec=" << corrDec << sendLog;
 
 	std::string err;
-	if (!caring->gotoRaDec (corrRa, corrDec, err, 3.0, GeminiCaringLoop::GOTO_KEEP_SIDE))
+	if (!caring->gotoRaDec (corrRa, corrDec, err, GeminiCaringLoop::GOTO_WAIT_SEC, GeminiCaringLoop::GOTO_KEEP_SIDE))
 		logStream (MESSAGE_WARNING) << "GeminiUDP: model-corrected retarget skipped, pointing stays uncorrected: " << err << sendLog;
 }
 

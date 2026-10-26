@@ -4040,3 +4040,26 @@ arrival reaches `endMove ()`.
 
 Still open: the 3 s goto wait in the Gemini driver against a stop that can
 take longer (STATUS, Open items).
+
+## Gemini goto wait (2026-10-26) [JS]
+
+The goto refused at SBT at 18:28:29 ("Corrections only from completed
+moves"): `gotoRaDec ()` waited 3 s for the caring loop, which was still
+sending the stop the framework had asked for 31 s into a meridian-flip
+slew (no poll from 18:28:26.3 to 18:28:29.9; a loop command may take
+1 s x 5 attempts). The goto was cancelled half a second before the loop
+was free, with the mount stopped and ready. All four waits (the goto in
+`doGoto ()` and the near-arrival model retarget, in both drivers) now
+take `GeminiCaringLoop::GOTO_WAIT_SEC`, 15 s: the command in flight, the
+stop and the slew, each at its worst. A goto still returns as soon as the
+loop has sent it, normally well under a second; a goto not sent within
+the wait is still cancelled and never sent later. While it waits the
+daemon's main loop, and with it the driver's watchdog in `idle ()`, is
+held, up to 15 s instead of 3 in that rare case; the caring loop keeps
+talking to the mount.
+
+Built without warnings. Not tested: there is no Gemini simulator in the
+tree and the mount was observing. To see on the mount: a target change
+during a long slew ("stop (:Q#) sent while a move was in flight") should
+be followed by "framework-requested move accepted", not "timed out
+waiting for the caring loop". MJ's driver.
