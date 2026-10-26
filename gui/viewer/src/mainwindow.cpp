@@ -18,6 +18,8 @@
 #include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include <QApplication>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -38,6 +40,43 @@ namespace
 			.arg (m, 2, 10, QChar ('0'))
 			.arg (s, 2, 10, QChar ('0'));
 	}
+
+	/**
+	 * A panel that scrolls vertically when the screen is too low for it -
+	 * at its full height the window's minimum height exceeded hpl's
+	 * screen, which left the log off screen and the window manager
+	 * refusing to maximise it. Never scrolls sideways: as wide as the
+	 * panel needs (which grows when, e.g., the modes file brings longer
+	 * mode names), plus the scroll bar.
+	 */
+	class SidePanel: public QScrollArea
+	{
+		public:
+			SidePanel (QWidget *content, QWidget *parent): QScrollArea (parent)
+			{
+				setWidget (content);
+				setWidgetResizable (true);
+				setFrameShape (QFrame::NoFrame);
+				setHorizontalScrollBarPolicy (Qt::ScrollBarAlwaysOff);
+			}
+
+			virtual QSize minimumSizeHint () const override
+			{
+				QSize s = QScrollArea::minimumSizeHint ();
+				if (widget ())
+					s.setWidth (widget ()->minimumSizeHint ().width () + verticalScrollBar ()->sizeHint ().width ());
+				return s;
+			}
+
+		protected:
+			virtual bool eventFilter (QObject *o, QEvent *e) override
+			{
+				// setWidget() filters the content's events already
+				if (o == widget () && e->type () == QEvent::LayoutRequest)
+					updateGeometry ();
+				return QScrollArea::eventFilter (o, e);
+			}
+	};
 }
 
 MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
@@ -292,9 +331,9 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	controlLayout->addWidget (windowBox);
 	controlLayout->addStretch ();
 
-	topSplitter->addWidget (focusPanel);
+	topSplitter->addWidget (new SidePanel (focusPanel, topSplitter));
 	topSplitter->addWidget (canvas);
-	topSplitter->addWidget (controlWidget);
+	topSplitter->addWidget (new SidePanel (controlWidget, topSplitter));
 	topSplitter->setStretchFactor (0, 0);
 	topSplitter->setStretchFactor (1, 1);
 	topSplitter->setStretchFactor (2, 0);
@@ -340,8 +379,11 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 
 	logView = new QPlainTextEdit (bottomSplitter);
 	logView->setReadOnly (true);
+	// at least three lines of the log stay visible, whatever the screen
+	logView->setMinimumHeight (3 * logView->fontMetrics ().lineSpacing ()
+		+ 2 * (logView->frameWidth () + (int) logView->document ()->documentMargin ()));
 
-	bottomSplitter->addWidget (statusWidget);
+	bottomSplitter->addWidget (new SidePanel (statusWidget, bottomSplitter));
 	bottomSplitter->addWidget (logView);
 	bottomSplitter->setStretchFactor (0, 0);
 	bottomSplitter->setStretchFactor (1, 1);
@@ -350,6 +392,9 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	mainSplitter->addWidget (bottomSplitter);
 	mainSplitter->setStretchFactor (0, 3);
 	mainSplitter->setStretchFactor (1, 1);
+	// dragging the divider down must not hide the log
+	mainSplitter->setCollapsible (0, false);
+	mainSplitter->setCollapsible (1, false);
 
 	connect (cameraCombo, QOverload<int>::of (&QComboBox::currentIndexChanged), this, &MainWindow::onCameraComboChanged);
 	connect (exposeButton, &QPushButton::clicked, this, &MainWindow::onExposeClicked);
@@ -365,6 +410,7 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	connect (nightCheck, &QCheckBox::toggled, this, &MainWindow::onNightModeToggled);
 	connect (new QShortcut (QKeySequence ("Ctrl+N"), this), &QShortcut::activated, nightCheck, &QCheckBox::toggle);
 	nightCheck->setChecked (QSettings ("rts2", "rts2-viewer").value ("nightMode", false).toBool ());
+	connect (new QShortcut (QKeySequence (Qt::Key_F11), this), &QShortcut::activated, this, [this] () { isFullScreen () ? showNormal () : showFullScreen (); });
 
 	// --- RTS2 connection, on its own thread (see viewerclient.h) --------
 	clientThread = new ClientThread (argc, argv, this);
@@ -394,7 +440,7 @@ MainWindow::~MainWindow ()
 	clientThread->wait (5000);
 }
 
-void MainWindow::onCameraCreated (QString name, ViewerCamera *camera)
+void MainWindow::onCameraCreated (QString name, ViewerCamera *camera, bool selected)
 {
 	cameras[name] = camera;
 
@@ -437,8 +483,24 @@ void MainWindow::onCameraCreated (QString name, ViewerCamera *camera)
 
 	log ("camera '" + name + "' ready");
 
-	if (cameraCombo->count () == 1)
-		onCameraComboChanged (0);
+	// The client thread picks the camera to show first (--device, else
+	// the first to connect); whichever connects first is not necessarily
+	// it - at OVIS C2 came before the C1 asked for.
+	if (selected)
+	{
+		cameraCombo->blockSignals (true);
+		cameraCombo->setCurrentIndex (cameraCombo->count () - 1);
+		cameraCombo->blockSignals (false);
+		onCameraComboChanged (cameraCombo->count () - 1);
+	}
+	else if (activeCamera.isEmpty ())
+	{
+		// no camera shown yet - leave the selector empty, so picking this
+		// one is a change that selects it
+		cameraCombo->blockSignals (true);
+		cameraCombo->setCurrentIndex (-1);
+		cameraCombo->blockSignals (false);
+	}
 }
 
 void MainWindow::onCameraComboChanged (int index)

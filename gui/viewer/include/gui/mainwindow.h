@@ -116,7 +116,7 @@ class MainWindow : public QMainWindow
 		~MainWindow () override;
 
 	private slots:
-		void onCameraCreated (QString name, gui::ViewerCamera *camera);
+		void onCameraCreated (QString name, gui::ViewerCamera *camera, bool selected);
 		void onExposeClicked ();
 		void onRunStopClicked ();
 		void onSaveToggled (bool checked);

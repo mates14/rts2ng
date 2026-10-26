@@ -97,7 +97,11 @@ class ViewerClient : public QObject, public rts2core::Client, public rts2script:
 		void requestQuit ();
 
 	signals:
-		void cameraCreated (QString name, ViewerCamera *camera);
+		/**
+		 * selected: this is the camera to show first (--device, else the
+		 * first one to connect).
+		 */
+		void cameraCreated (QString name, ViewerCamera *camera, bool selected);
 
 		/**
 		 * The exposure-modes file to use (--modes, else rts2.ini's [viewer]
@@ -215,7 +219,7 @@ class ClientThread : public QThread
 		void requestQuit ();
 
 	signals:
-		void cameraCreated (QString name, ViewerCamera *camera);
+		void cameraCreated (QString name, ViewerCamera *camera, bool selected);
 		void modesFileResolved (QString path);
 		void progressUpdated (QString cameraName, double start, double end);
 

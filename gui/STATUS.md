@@ -1455,3 +1455,38 @@ focusd-dummy value standing in for NEON), each changed mode through
 rts2-scriptexec: frames with the expected FILTA/FILTB/IMAGETYP, the lamp
 stand-in on only during floods and the arc. Both files parse with
 loadModes.
+
+## Viewer fits a low screen, opens on --device (2026-10-26) [MJ]
+
+Reported by MJ from OVIS (hpl, a laptop screen):
+
+- **Too tall**: the control column alone needs 905 px, so the window's
+  minimum height was over 1000 px. On hpl the log was below the screen,
+  and the window manager refused to maximise or full-screen a window
+  that does not fit. Both side panels and the status corner are now
+  `SidePanel`s (mainwindow.cpp): they scroll vertically, never sideways,
+  and are as wide as their content, following it when, e.g., the modes
+  file brings longer mode names. The log keeps at least three lines, and
+  neither row of the main splitter can be collapsed. Minimum window is now
+  673x154. F11 toggles full screen.
+- **`--device C1` opened on C2**: ViewerClient made the right camera the
+  active one, but MainWindow showed whichever camera connected first and
+  switched the client to it. `cameraCreated` now says whether the camera
+  is the selected one; until it connects, the selector stays empty.
+- **A script that did not start** after a Simple image (twice, the same
+  evening): not reproduced. 12 rounds of Simple image then Spectral
+  sequence on dummies (C1 with a 1 s readout, hpl's own modes file,
+  0-1500 ms between the end of one and Expose) all ran. The likely cause
+  is that the viewer refused it with a log line nobody could see (log off
+  screen): it refuses when a device the script sets is not connected, and
+  hpl's USB bus dropped the Pico (W1) and both cameras at 20:31-20:33 and
+  21:30-21:32. With the log on screen, the reason will show next time.
+  Also seen in the tests: a script is reported ended at its last
+  exposure's end, before that frame is read out, so the next script's
+  first commands arrive during readout. camd queues them and it works,
+  but the late frame arrives under the next script.
+
+Verified with the real MainWindow driven from a scratch harness against
+centrald, two camd-dummy (C2 connecting first), two filterd-dummy and a
+focusd-dummy: C1 shown with `--device C1`, the layout minimums above, the
+rounds above. Not verified: the look on hpl's screen.

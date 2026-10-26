@@ -136,15 +136,19 @@ rts2core::DevClient *ViewerClient::createOtherType (rts2core::Connection *conn, 
 		cam->setSaveImage (1);
 		cam->setArchivePath (imageExpandPath);
 
+		bool selected = false;
 		{
 			std::lock_guard<std::mutex> lock (camerasMutex);
 			cameras[devName] = cam;
 			cameraNames[conn] = devName;
 			if (activeCamera.empty () && (initialDevice.empty () || initialDevice == devName))
+			{
 				activeCamera = devName;
+				selected = true;
+			}
 		}
 
-		emit cameraCreated (QString::fromStdString (devName), cam);
+		emit cameraCreated (QString::fromStdString (devName), cam, selected);
 		return cam;
 	}
 	// The other devices' values go into the FITS headers, as with
