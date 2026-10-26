@@ -97,8 +97,15 @@ machine that serves it, in MJ's account and MJ's checkout of master
 
 ```
 git pull --rebase
-./buildme.sh -d     # signs InRelease (REPO_GPG_KEY), then offers the upload
+./buildme.sh -d     # signs InRelease (REPO_GPG_KEY), then offers to publish
 ```
+
+Publishing copies `dist/<os>/<codename>/` into the served directory,
+`~mates/public_html/rts2ng/<os>/<codename>/`; until then the sites still get
+the previous build. On lascaux the copy is local. Through `su` MJ's account
+has no GitHub key: pull with
+`git pull --rebase https://github.com/mates14/rts2ng.git master`.
+[JS 2026-10-26]
 
 Then, at each site: `sudo apt update && sudo apt upgrade`. An upgrade does
 not stop the running daemons (`--no-stop-on-upgrade`, base/debian/rules);

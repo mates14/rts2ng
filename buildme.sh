@@ -15,7 +15,8 @@ usage: $0 [-c] [-r] [-d] [-s] [module ...]
   -r      start over: ask for the SDK paths again (previous answers
           prefilled) and wipe the build dirs
   -d      build .deb packages, then offer to rsync dist/<os>/<codename>/
-          to \$RTS2NG_UPLOAD (default lascaux.asu.cas.cz:public_html/rts2ng)
+          to \$RTS2NG_UPLOAD (default lascaux.asu.cas.cz:public_html/rts2ng;
+          a local copy when run on that host)
   -s      build source packages
 modules: base db web gui python (default: all)
 USAGE
@@ -332,16 +333,39 @@ fi
 # $RTS2NG_UPLOAD/<os>/<codename>/ (--delete, so packages dropped here
 # vanish there too). Asked only on a terminal - an unattended build never
 # publishes. The remote mkdir lets a new distribution go up without
-# preparing its directory by hand first.
+# preparing its directory by hand first. On the upload host itself (the
+# release build on lascaux) the copy is local: a user who got there by su
+# has no ssh key, and ssh to the same machine is not needed anyway.
 RTS2NG_UPLOAD="${RTS2NG_UPLOAD:-lascaux.asu.cas.cz:public_html/rts2ng}"
 if [ $build_deb == 1 ] && [ -t 0 ]; then
     up_host="${RTS2NG_UPLOAD%%:*}"
     up_dir="${RTS2NG_UPLOAD#*:}/$ID/$VERSION_CODENAME"
-    read -p "Upload the packages to $up_host:$up_dir/? [Y/n]: " ans
+    up_name="${up_host#*@}"
+    up_local=0
+    case "$up_name" in
+        localhost|"$(hostname)"|"$(hostname -f)") up_local=1 ;;
+    esac
+    # someone else's account on this host still goes through ssh
+    case "$up_host" in
+        *@*) [ "${up_host%%@*}" == "$(id -un)" ] || up_local=0 ;;
+    esac
+    if [ $up_local == 1 ]; then
+        case "$up_dir" in
+            /*) ;;
+            *)  up_dir="$HOME/$up_dir" ;;
+        esac
+        read -p "Publish the packages to $up_dir/ (local)? [Y/n]: " ans
+    else
+        read -p "Upload the packages to $up_host:$up_dir/? [Y/n]: " ans
+    fi
     case "$ans" in
         ""|[Yy]*)
-            rsync -av --delete --rsync-path="mkdir -p '$up_dir' && rsync" \
-                "$DIST_DIR/" "$up_host:$up_dir/"
+            if [ $up_local == 1 ]; then
+                mkdir -p "$up_dir" && rsync -av --delete "$DIST_DIR/" "$up_dir/"
+            else
+                rsync -av --delete --rsync-path="mkdir -p '$up_dir' && rsync" \
+                    "$DIST_DIR/" "$up_host:$up_dir/"
+            fi
             ;;
         *)  echo "==> Not uploaded" ;;
     esac
