@@ -909,7 +909,24 @@ int Device::processOption (int in_opt)
 			strcpy (device_host, optarg);
 			break;
 		case OPT_SERVER:
-			centraldHosts.insert (centraldHosts.begin (), HostString (optarg));
+			{
+				// base note: classic registered once per --server, so the
+				// same centrald given twice (rts2-start adds --server to the
+				// options in /etc/rts2/services, which can name it already)
+				// was refused the second register ("name already
+				// registered"), and the device lost that link (SBT httpd,
+				// 2026-10-26). The same host and port are now used once.
+				HostString hs (optarg);
+				for (const HostString &h : centraldHosts)
+				{
+					if (strcasecmp (h.getHostname (), hs.getHostname ()) == 0 && h.getPort () == hs.getPort ())
+					{
+						logStream (MESSAGE_WARNING) << "--server " << optarg << " given more than once, used once" << sendLog;
+						return 0;
+					}
+				}
+				centraldHosts.insert (centraldHosts.begin (), hs);
+			}
 			break;
 		case OPT_NOTCHECKNULL:
 			doCheck = false;

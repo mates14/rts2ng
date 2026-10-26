@@ -3923,3 +3923,25 @@ which all database scripts are. For a script file of several lines
 (rts2-scriptexec `-f`), or one with `#` comments, the offset of the lines
 after the first is still wrong (known-bugs.md). `ScriptDevice` initialized
 `scriptPosition` twice instead of `scriptLen` (harmless: it starts at 0).
+
+## Duplicate --server; httpd under rts2-start (2026-10-26) [JS]
+
+`sudo rts2-start -r HTTPD` at SBT (14:25:27) started the packaged
+rts2-httpd, which registered with centrald twice 50 ms apart: centrald
+refused the second ("name HTTPD already registered with id 52"), httpd
+logged "connection to centrald lost", and it was gone 3 s later. Its line
+in `/etc/rts2/services` has `--server localhost`, and rts2-start appends
+the options of `/etc/rts2/centrald` (`--server localhost`) to every daemon,
+so the device had the same centrald twice and opened a link to each.
+Until then httpd ran from MJ's build through `~mates/bin/httpd`, with one
+`--server`. A private centrald on lascaux reproduced the refusal with
+`--server localhost:16901` given twice.
+
+`Device::processOption` now keeps one entry per host and port (host
+compared without case) and warns about the repeat; different servers still
+each get a link (`RAIN_BART`, `WEATHER_BART`, `SCH` name D50's centrald
+and rely on rts2-start's local one). Checked with camd-dummy: one
+registration with the duplicate, an image taken through it; a link to each
+of two centralds. Not explained: why the production httpd then exited
+(the reproduction kept running 30 s); only `--run-as rts2`, the production
+database and the real devices differ.
