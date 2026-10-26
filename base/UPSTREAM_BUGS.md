@@ -1928,3 +1928,20 @@ takes everything between the opening quote and the last quote on the line.
 The wire format is unchanged, so classic senders work as they are; a
 classic receiver still refuses such a value
 (`kernel/tests/test_value_string.cpp`).
+
+## A correction is taken from a move that failed (`lib/rts2tel/teld.cpp`, `correct`) [JS 2026-10-26]
+
+The astrometric error is measured against the target (`rts2-astrometry.net`
+takes `CRVAL1/2`, which `startResyncMove ()` sets to the target;
+`astrometry.getOffset ()` takes `OBJRA`), and `correct` adds it to the
+correction for the next goto. That is the mount's pointing error only when
+the mount is where the move sent it. `correct` checks `MOVE_NUM`, which
+`incMoveNum ()` raises before the move is tried and keeps when the move
+fails; images from wherever the mount stopped then pass, and their
+"correction" is the miss. Only `correction_limit` stood in the way: at
+SBT a 12.8 deg correction under the 15 deg limit, after a goto refused in
+the middle of a meridian-flip slew (2026-10-26).
+
+rts2ng: `move_completed`, set when a move ends without error and cleared
+when a move or a park starts; `correct` for a move that did not complete
+is refused (base/HISTORY.md, "Corrections only from completed moves").

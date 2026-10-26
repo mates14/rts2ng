@@ -4001,3 +4001,42 @@ deg in RA, which grew at each reset of the mount's clock (OPERATION.md 5,
 "The mount's own RA offset"). JS cold-started the mount at CWD (park,
 `position cwd`) at 18:22: own offset +0.000, pointing error 0.07 deg.
 Stopping it from growing is open (STATUS, Open items).
+
+## Corrections only from completed moves (2026-10-26) [JS]
+
+At SBT (18:27-18:39) the queue daemon sent a new target 31 s into a
+meridian-flip slew. The framework stopped the mount first; the stop took
+the Gemini driver's loop 3.6 s (a slow answer and retries) and
+`gotoRaDec ()` waits 3 s, so the goto was refused ("timed out waiting for
+the caring loop") although the mount was ready half a second later. The
+failed move left tracking off and the mount 51 deg from the target; the
+cameras exposed there, astrometry measured 12.8 deg against the target, and
+`correct` took it (same `MOVE_NUM`, under the 15 deg limit). The old
+driver dropped it - the correction bug fixed in 478fe49 - but the
+correction move ended without tracking (`endMove ()` re-asserts `TRACKING`,
+which the failed move had set to 0; only a client `move` turns it back
+on) and the mount stood still for 11 minutes until JS set `TRACKING`.
+
+The error is measured against the target by design (asarina's `OBJRA -
+solved`, classic `rts2-astrometry.net`'s `CRVAL - solved`), and the
+framework adds it to the correction: right only when the mount is where
+the move sent it. JS's idea of measuring against the mount's reported
+position would also work but is a different design: `TELRA` is
+instrumental (precession, the pointing model, the applied correction;
+`teld.h`), and the solved position arrives late, so the J2000 position
+derived from `TELRA` would have to be kept per image. Instead `correct` is
+now taken only for a move that reached its target: `move_completed` is
+set when `endMove ()` succeeds and cleared when a move (any
+`startResyncMove ()`, before its checks) or a park starts.
+`correction_limit` stays the last barrier. Same bug in classic
+(UPSTREAM_BUGS.md).
+
+Checked with teld-dummy on a private centrald: `correct` during a slow
+move refused; after a completed move (`move_fast`) accepted and the
+correction move made; after a move below the hard horizon refused; after a
+park refused (by `MOVE_NUM`, which a park raises). The Gemini driver
+reports a stopped or failed move as -1 from `isMoving ()`, so only an
+arrival reaches `endMove ()`.
+
+Still open: the 3 s goto wait in the Gemini driver against a stop that can
+take longer (STATUS, Open items).

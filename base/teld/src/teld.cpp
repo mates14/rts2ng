@@ -346,6 +346,9 @@ Telescope::Telescope (int in_argc, char **in_argv, bool diffTrack, bool hasTrack
 	createValue (moveNum, "MOVE_NUM", "number of movements performed by the driver; used in corrections for synchronization", true);
 	moveNum->setValueInteger (0);
 
+	createValue (moveCompleted, "move_completed", "the last move reached its target; astrometric corrections are taken only then", false);
+	moveCompleted->setValueBool (false);
+
 	createValue (corrImgId, "CORR_IMG", "ID of last image used for correction", true, RTS2_VALUE_WRITABLE);
 	corrImgId->setValueInteger (0);
 	createValue (corrObsId, "CORR_OBS", "ID of last observation used for correction", true, RTS2_VALUE_WRITABLE);
@@ -1459,6 +1462,11 @@ void Telescope::checkMoves ()
 		{
 			infoAll ();
 			ret = endMove ();
+			if (ret == 0)
+			{
+				moveCompleted->setValueBool (true);
+				sendValueAll (moveCompleted);
+			}
 			if (ret)
 			{
 				failedMove ();
@@ -2068,6 +2076,14 @@ int Telescope::startResyncMove (rts2core::Connection * conn, int correction, boo
 {
 	int ret;
 
+	// until it arrives the mount is not where this move sends it, and
+	// corrections from its images would measure the miss
+	if (moveCompleted->getValueBool ())
+	{
+		moveCompleted->setValueBool (false);
+		sendValueAll (moveCompleted);
+	}
+
 	struct ln_equ_posn pos;
 
 	// apply computed corrections (precession, aberation, refraction)
@@ -2428,6 +2444,12 @@ int Telescope::startPark (rts2core::Connection * conn)
 	if (tarTelAltAz && parkPos)
 		tarTelAltAz->setFromValue (parkPos);
 	stopTracking ("parking telescope");
+	// a parked mount is not at the target of MOVE_NUM any more
+	if (moveCompleted->getValueBool ())
+	{
+		moveCompleted->setValueBool (false);
+		sendValueAll (moveCompleted);
+	}
 	changeIdleMovingTracking ();
 	ret = startPark ();
 	if (ret < 0)
@@ -2717,6 +2739,17 @@ int Telescope::commandAuthorized (rts2core::Connection * conn)
 
 		if (applyCorrectionsFixed (total_cor_ra, total_cor_dec) == 0)
 			return DEVDEM_OK;
+		// base note: classic took a correction for MOVE_NUM even when that
+		// move had failed. The error is measured against the target, so
+		// images from wherever the mount stopped gave the miss as a
+		// "correction": 12.8 deg at SBT on 2026-10-26, under the 15 deg
+		// limit, after a goto refused mid-flip. Only a move that reached
+		// its target gives a pointing error.
+		if (cor_mark == moveNum->getValueInteger () && !moveCompleted->getValueBool ())
+		{
+			conn->sendCommandEnd (DEVDEM_E_IGNORE, "ignoring correction - the move did not reach its target");
+			return -1;
+		}
 		if (cor_mark == moveNum->getValueInteger () &&
 			corr_img == corrImgId->getValueInteger () && corr_obs == corrObsId->getValueInteger () &&
 			(obs_id > wCorrObsId->getValueInteger () || img_id > wCorrImgId->getValueInteger ()))

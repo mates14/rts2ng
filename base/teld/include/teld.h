@@ -1391,6 +1391,9 @@ class Telescope:public rts2core::Device
 		rts2core::ValueTime *mountParkTime;
 
 		rts2core::ValueInteger *moveNum;
+		// base note: whether the move of MOVE_NUM reached its target, see
+		// the "correct" command
+		rts2core::ValueBool *moveCompleted;
 		rts2core::ValueInteger *corrImgId;
 		rts2core::ValueInteger *corrObsId;
 		rts2core::ValueInteger *failedMoveNum;
