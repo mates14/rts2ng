@@ -16,6 +16,8 @@
 #include <QSettings>
 #include <QShortcut>
 #include <QStandardItemModel>
+#include <QStyledItemDelegate>
+#include <QApplication>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -179,6 +181,10 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	// darks behind a separate shutter combo, it was easy to leave it on
 	// DARK and lose a night's light.
 	modeCombo = new QComboBox (exposeBox);
+	// the default delegate paints the popup list with the combo's own
+	// palette, i.e. the mode's text colour on the list's background; this
+	// one follows the list's stylesheet (updateModeStyle())
+	modeCombo->setItemDelegate (new QStyledItemDelegate (modeCombo));
 	exposeForm->addRow ("Mode:", modeCombo);
 
 	exptimeSpin = new QDoubleSpinBox (exposeBox);
@@ -936,10 +942,18 @@ void MainWindow::updateModeStyle ()
 	}
 	else if (mode.color.isValid ())
 	{
-		QColor text = mode.color.lightnessF () > 0.5 ? Qt::black : Qt::white;
-		style = QString ("background-color: %1; color: %2;").arg (mode.color.name (), text.name ());
+		// by perceived brightness: HSL lightness is 0.5 for pure cyan,
+		// yellow and red alike, and gave white text on cyan and yellow
+		const QColor &c = mode.color;
+		QColor text = 0.299 * c.redF () + 0.587 * c.greenF () + 0.114 * c.blueF () > 0.5 ? Qt::black : Qt::white;
+		style = QString ("background-color: %1; color: %2;").arg (c.name (), text.name ());
 	}
-	modeCombo->setStyleSheet (style.isEmpty () ? QString () : "QComboBox { " + style + " }");
+	// The popup list gets the window's colours: the combo's "color" would
+	// reach it without the background, white text on light grey.
+	QPalette p = QApplication::palette ();
+	QString list = QString ("QComboBox QAbstractItemView { background-color: %1; color: %2; selection-background-color: %3; selection-color: %4; }")
+		.arg (p.color (QPalette::Base).name (), p.color (QPalette::Text).name (), p.color (QPalette::Highlight).name (), p.color (QPalette::HighlightedText).name ());
+	modeCombo->setStyleSheet (style.isEmpty () ? QString () : "QComboBox { " + style + " } " + list);
 	exposeButton->setStyleSheet (style);
 	runButton->setStyleSheet (style);
 }

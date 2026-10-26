@@ -1412,3 +1412,22 @@ FILTA/FILTB/NCLEARS stand-in in its header, the lamp stand-in on exactly
 during frames 4, 7, 8 (floods, arc). The file parsed with the viewer's
 loadModes (6 modes, Calib time used by sequence, flood, lambda calib).
 Not run in the viewer GUI, nor at OVIS.
+
+## Mode colours: readable popup list and text colour (2026-10-26) [MJ]
+
+Reported from OVIS: white text on light grey "at some moments". It was the
+mode selector's open list: the combo's stylesheet `color` reached the list
+items (QComboBox's default popup delegate paints them with the combo's own
+palette) but its background did not. Now the combo has a
+QStyledItemDelegate, and the stylesheet gives the list the application
+palette's Base/Text/Highlight colours, so it looks like any list, by day
+and in night mode. Also, the text on a mode colour is now chosen by
+perceived brightness (0.299 R + 0.587 G + 0.114 B): HSL lightness is 0.5
+for pure cyan, yellow and red alike, and gave white text on cyan and yellow.
+Checked with an offscreen harness running the same updateModeStyle() code
+(green/cyan by day, Dark at night, popup open), not in the running viewer.
+
+hpl (OVIS) runs the modes from a copy, `/etc/rts2/ovis.modes`
+(`[viewer] modes` in its rts2.ini, added 2026-10-26; the old rts2.ini is
+`rts2.ini.bak-20261026`): a change to `gui/viewer/modes/ovis.modes` has to
+be copied there as well.
