@@ -3,6 +3,9 @@ set -e
 
 GPG_CONF=~/.gnupg-repo.conf
 test -e $GPG_CONF && source $GPG_CONF
+# gpg reads GNUPGHOME from the environment: sourced, it was only a shell
+# variable, and the signing used ~/.gnupg (morpheus 2026-10-26: "No secret key")
+[ -n "$GNUPGHOME" ] && export GNUPGHOME
 # GNUPGHOME=~/.gnupg-repo
 # REPO_GPG_KEY=something
 

@@ -1498,3 +1498,16 @@ Simple image (`E $EXPTIME`, no flood) and Slit image (`FILTB=jogurt E
 $EXPTIME`), both before Image + flood, and Lambda calib's arc for Exposure
 time instead of Calib time. The header says which modes have no flood.
 Parses with loadModes: 8 modes.
+
+## Viewer released for noble alone (2026-10-26) [MJ]
+
+At MJ's request, to get the fixed viewer to OVIS that night without a full
+rebuild: `./buildme.sh -d gui` on morpheus at f87fa0f, published to
+ubuntu/noble next to base etc. from 75d34dd (rts2-viewer links base
+statically and has no versioned dependency on rts2-base). Installed on hpl
+with `apt-get install --only-upgrade rts2-viewer rts2-stacker`. The next
+full noble build puts all modules back in step.
+
+The signing failed: buildme.sh sourced GNUPGHOME from ~/.gnupg-repo.conf
+without exporting it, so gpg looked in ~/.gnupg. InRelease was signed by
+hand with the repo keyring; buildme.sh now exports GNUPGHOME.
