@@ -3945,3 +3945,14 @@ registration with the duplicate, an image taken through it; a link to each
 of two centralds. Not explained: why the production httpd then exited
 (the reproduction kept running 30 s); only `--run-as rts2`, the production
 database and the real devices differ.
+
+## fliusb builds again for kernels before 5.19 (2026-10-26) [MJ]
+
+hpl (OVIS, Ubuntu noble on kernel 5.13.0-28, kept for its graphics card)
+lost its FLI wheel W2 ("Fli::init No device found!") with today's
+fliusb-dkms: the postinst removed the old module from DKMS and the new
+source did not build, `usb_maxpacket()` having been changed to the 5.19
+two-argument form without a version gate. Now `fliusb_maxpacket()` passes
+`usb_pipeout(pipe)` as the direction before 5.19 (it must match the pipe;
+5.19 takes it from the pipe the same way). Built clean against 5.13.0-28
+(on hpl, scratch dir) and 7.0.0-38; not loaded, W2 waits for the package.

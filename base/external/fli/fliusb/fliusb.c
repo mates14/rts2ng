@@ -73,6 +73,15 @@ MODULE_VERSION("1.5");
 #define init_MUTEX(sem)	sema_init(sem, 1)
 #endif 
 
+/* usb_maxpacket() lost its direction argument in 5.19, which takes it from
+   the pipe; before, it had to match the pipe (a mismatch warns) */
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
+#define fliusb_maxpacket(udev, pipe) usb_maxpacket(udev, pipe)
+#else
+#define fliusb_maxpacket(udev, pipe) usb_maxpacket(udev, pipe, usb_pipeout(pipe))
+#endif
+
 struct mutex fliusb_mutex;
 
 /* Module parameters */
@@ -318,9 +327,9 @@ static int fliusb_sg_bulk_read(fliusb_t *dev, unsigned int pipe,
   /* userbuffer must be aligned to a multiple of the endpoint's
      maximum packet size
   */
-  if ((size_t)userbuffer % usb_maxpacket(dev->usbdev, pipe))
+  if ((size_t)userbuffer % fliusb_maxpacket(dev->usbdev, pipe))
   {
-    FLIUSB_ERR("user buffer is not properly aligned: 0x%p %% 0x%04x", userbuffer, usb_maxpacket(dev->usbdev, pipe));
+    FLIUSB_ERR("user buffer is not properly aligned: 0x%p %% 0x%04x", userbuffer, fliusb_maxpacket(dev->usbdev, pipe));
     return -EINVAL;
   }
 
@@ -699,7 +708,7 @@ static int fliusb_ioctl(struct inode *inode, struct file *file,
     if (__get_user(tmp.uint8, (u_int8_t __user *)arg))
       return -EFAULT;
     tmppipe = usb_rcvbulkpipe(dev->usbdev, tmp.uint8);
-    if (usb_maxpacket(dev->usbdev, tmppipe) == 0)
+    if (fliusb_maxpacket(dev->usbdev, tmppipe) == 0)
     {
       FLIUSB_ERR("invalid read USB bulk transfer endpoint address: 0x%02x",
 		 tmp.uint8);
@@ -713,7 +722,7 @@ static int fliusb_ioctl(struct inode *inode, struct file *file,
     if (__get_user(tmp.uint8, (u_int8_t __user *)arg))
       return -EFAULT;
     tmppipe = usb_sndbulkpipe(dev->usbdev, tmp.uint8);
-    if (usb_maxpacket(dev->usbdev, tmppipe) == 0)
+    if (fliusb_maxpacket(dev->usbdev, tmppipe) == 0)
     {
       FLIUSB_ERR("invalid write USB bulk transfer endpoint address: 0x%02x",
 		 tmp.uint8);
@@ -871,14 +880,14 @@ static int fliusb_initdev(fliusb_t **dev, struct usb_interface *interface,
   }
 
   /* Check that the endpoints exist */
-  if (usb_maxpacket(tmpdev->usbdev, tmpdev->rdbulkpipe) == 0)
+  if (fliusb_maxpacket(tmpdev->usbdev, tmpdev->rdbulkpipe) == 0)
   {
     FLIUSB_ERR("invalid read USB bulk transfer endpoint address: 0x%02x",
 	       usb_pipeendpoint(tmpdev->rdbulkpipe) | USB_DIR_IN);
     err = -ENXIO;
     goto fail;
   }
-  if (usb_maxpacket(tmpdev->usbdev, tmpdev->wrbulkpipe) == 0)
+  if (fliusb_maxpacket(tmpdev->usbdev, tmpdev->wrbulkpipe) == 0)
   {
     FLIUSB_ERR("invalid write USB bulk transfer endpoint address: 0x%02x",
 	       usb_pipeendpoint(tmpdev->wrbulkpipe) | USB_DIR_OUT);

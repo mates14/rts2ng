@@ -29,10 +29,12 @@ Licence: BSD-style, FLI's copyright notice at the top of each file
 
 ## Kernel API changes fixed in fliusb.c
 
-All version-gated except the first:
+All version-gated:
 
-- 5.19: `usb_maxpacket()` lost its direction argument (not gated - the
-  module no longer builds before 5.19)
+- 5.19: `usb_maxpacket()` lost its direction argument (`fliusb_maxpacket()`
+  passes `usb_pipeout(pipe)` before 5.19). Ungated until 2026-10-26, which
+  left OVIS's hpl (kernel 5.13) without the module after the upgrade, and
+  its FLI wheel W2 without a device. [MJ]
 - 6.2 (old name removed in 6.15): `del_timer_sync()` → `timer_delete_sync()`
 - 6.5: `get_user_pages()` lost its `vmas` argument (EDIT3)
 
