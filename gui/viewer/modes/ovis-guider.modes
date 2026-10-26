@@ -1,0 +1,14 @@
+# rts2-viewer exposure modes for the OVIS guider, C2 (see
+# viewer-scripting.md next to this file). C2 (G2-3200 MkII, KAF-3200ME)
+# has preflash in the camera, so no flood frames as on C1 (ovis.modes):
+# its PREFLASH/NCLEARS are set on the camera and stay (autosaved). Run as
+#   rts2-viewer --device C2 --modes /etc/rts2/ovis-guider.modes
+# (the command line wins over rts2.ini's [viewer] modes, which is C1's).
+
+[Image]
+color = cyan
+script = E $EXPTIME
+
+[Dark]
+color = red
+script = D $EXPTIME

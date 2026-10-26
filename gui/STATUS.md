@@ -1431,3 +1431,25 @@ hpl (OVIS) runs the modes from a copy, `/etc/rts2/ovis.modes`
 (`[viewer] modes` in its rts2.ini, added 2026-10-26; the old rts2.ini is
 `rts2.ini.bak-20261026`): a change to `gui/viewer/modes/ovis.modes` has to
 be copied there as well.
+
+## ovis.modes: a flood before every C1 frame; ovis-guider.modes for C2 (2026-10-26) [MJ]
+
+At MJ's request every C1 mode now matches the spectral sequence: Image +
+flood (was Direct image), Spectrum (flood, short spectrum at Calib time,
+full spectrum - exactly the sequence's part, so a Run of Spectrum repeats
+all three), Lambda calib (flood, arc), Dark (flood, then the dark), and
+Flood alone. The Spectral sequence itself is unchanged: its identification
+images and slit shot come before its first flood, as in ovis-acquire.sh.
+Every mode that floods now uses Calib time, Dark included.
+
+New `ovis-guider.modes` for the guider C2 (G2-3200 MkII, which has preflash
+in the camera): Image and Dark only, no floods. Its PREFLASH/NCLEARS are
+the camera's own (autosaved); C2's frames from 2026-09-19 have PREFLASH 0.
+The two viewers are started with the mode file on the command line, which
+wins over rts2.ini's `[viewer] modes`.
+
+Verified on dummies (camd-dummy C1 with two filterd-dummy wheels, a
+focusd-dummy value standing in for NEON), each changed mode through
+rts2-scriptexec: frames with the expected FILTA/FILTB/IMAGETYP, the lamp
+stand-in on only during floods and the arc. Both files parse with
+loadModes.
