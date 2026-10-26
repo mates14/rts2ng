@@ -1256,7 +1256,8 @@ SHUTTER to light and `D` to dark for every frame (`ElementImage`,
   loading, the first mode is selected, never a remembered one.
 - **Instrument files** in `viewer/modes/`, installed to
   `/usr/share/rts2/viewer-modes/`: `ovis.modes` (direct image,
-  spectrum, lambda calib, dark - from `python/sites/ovis/ovis-acquire.sh`)
+  the whole spectral sequence, flood, spectrum, lambda calib, dark - from
+  `python/sites/ovis/ovis-acquire.sh`)
   and `flores.modes` (plain, spectrum + interleaved lambda, spectral flat,
   lambda calib, dark). **FLORES's fiber slider is a placeholder**
   (`FIBER.POSITION=fiber2|thar|flat`) until its device and positions are
@@ -1375,3 +1376,35 @@ on flores itself.
 flores still runs the 2026-10-12 rts2-viewer without modes: it needs the
 new package and `modes = /usr/share/rts2/viewer-modes/flores.modes` (or a
 copy in /etc/rts2) under `[viewer]`.
+
+## ovis.modes: the whole OVIS spectral sequence, floods included (2026-10-26) [MJ]
+
+New mode **Spectral sequence**, the site's current ovis-acquire.sh in one
+script: identification images (1 s and Calib time), slit shot, flood,
+short spectrum (Calib time), full spectrum (Exposure), flood, arc. And
+**Flood** on its own, for before a single Spectrum or Lambda calib.
+
+- The floods (neon through the open beam, saturating the chip against
+  RBI residuals) are taken and saved: the script cannot delete a frame,
+  and keeping them is better than not taking them. They are recognised by
+  FILTA=N, FILTB=open, NEON on in the header.
+- **Deviation from ovis-acquire.sh** (a bug there, confirmed by MJ): its arc after the second flood was
+  taken with the beam still open (the flood set FILTA=N/FILTB=open and the
+  arc block never put slit and grism back), i.e. a second flood. Here the
+  arc is through jogurt + grism. Not changed in ovis-acquire.sh itself.
+- NCLEARS=20 for the frame after each flood, as the shell script. In our
+  gxccd driver it acts only with PREFLASH > 0 (both go to
+  gxccd_set_preflash), so with PREFLASH 0 it does nothing - the same as
+  under ovis-acquire.sh. Every mode but Dark now sets NCLEARS (Flood
+  leaves it at 20, the next mode resets it), so the viewer refuses them on
+  a camera without NCLEARS. Which camera OVIS's C1 is was not checked.
+- Binning is left to the viewer's panel (the shell script set 2x2).
+
+**Verified** with centrald, camd-dummy C1 with two filterd-dummy wheels
+(FILTA N/grism, FILTB open/jogurt) and stand-ins (camera `readout` for
+NCLEARS, focusd-dummy W1 `FOC_TOFF` for NEON), the sequence run through
+rts2-scriptexec (the viewer's engine): 8 frames, each with the expected
+FILTA/FILTB/NCLEARS stand-in in its header, the lamp stand-in on exactly
+during frames 4, 7, 8 (floods, arc). The file parsed with the viewer's
+loadModes (6 modes, Calib time used by sequence, flood, lambda calib).
+Not run in the viewer GUI, nor at OVIS.
