@@ -1440,8 +1440,8 @@ At MJ's request every C1 mode now matches the spectral sequence: Image +
 flood (was Direct image), Spectrum (flood, short spectrum at Calib time,
 full spectrum - exactly the sequence's part, so a Run of Spectrum repeats
 all three), Lambda calib (flood, arc), Dark (flood, then the dark), and
-Flood alone. The Spectral sequence itself is unchanged: its identification
-images and slit shot come before its first flood, as in ovis-acquire.sh.
+Flood alone. The Spectral sequence starts with a flood too (MJ, the same
+day), before its identification images; ovis-acquire.sh had none there.
 Every mode that floods now uses Calib time, Dark included.
 
 New `ovis-guider.modes` for the guider C2 (G2-3200 MkII, which has preflash

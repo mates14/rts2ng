@@ -20,7 +20,8 @@
 # they are the frames with FILTA=N, FILTB=open and NEON on in the header,
 # and can be deleted afterwards. [MJ 2026-10-26]
 #
-# Spectral sequence is the whole of ovis-acquire.sh in one mode:
+# Spectral sequence is ovis-acquire.sh in one mode, with a flood at its
+# start as well (ovis-acquire.sh began with the identification images):
 # Exposure is the full spectrum, Calib time (usually 20 s) the second
 # identification image, the short spectrum, the arc and the floods.
 # Spectrum and Lambda calib are its two parts, each with its flood, and do
@@ -48,8 +49,8 @@ script = W1.NEON=on FILTA=N FILTB=open E $CALTIME
 
 [Spectral sequence]
 color = green
-script = W1.NEON=off FILTA=N FILTB=open
-  E 1 E $CALTIME
+script = W1.NEON=on FILTA=N FILTB=open E $CALTIME
+  W1.NEON=off E 1 E $CALTIME
   FILTB=jogurt E 1
   W1.NEON=on FILTA=N FILTB=open E $CALTIME
   W1.NEON=off FILTB=jogurt FILTA=grism E $CALTIME
