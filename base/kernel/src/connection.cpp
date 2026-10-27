@@ -235,6 +235,12 @@ std::string Connection::getCameraChipState (int chipN)
 			_os << chipN << " FT";
 		}
 	}
+	// base note: classic printed nothing for a chip whose only bits are
+	// not activities (CAM_HAS_IMAGE after a readout), so rts2-mon's line
+	// started " | 5 s LIGHT"; such a chip is idle (IMAGE_READY is printed
+	// by getStateString ()). [JS 2026-10-27]
+	if (_os.str ().empty ())
+		_os << chipN << " idle";
 	return _os.str ();
 }
 

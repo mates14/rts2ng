@@ -1945,3 +1945,15 @@ the middle of a meridian-flip slew (2026-10-26).
 rts2ng: `move_completed`, set when a move ends without error and cleared
 when a move or a park starts; `correct` for a move that did not complete
 is refused (base/HISTORY.md, "Corrections only from completed moves").
+
+## A camera holding an image has no chip state (`lib/rts2/connection.cpp`, `getCameraChipState`) [JS 2026-10-27]
+
+`getCameraChipState ()` prints "idle" only when the chip's bits are all
+0, and otherwise only the activities it knows (EXPOSING, EXPOSING NOIMG,
+SHIFTSTORE, READING, FT). After a readout the chip has `CAM_HAS_IMAGE`
+(0x008) set and nothing else, so it prints nothing: rts2-mon's line for
+the camera starts " | 5 s LIGHT 1x1 | ... | IMAGE_READY", with no chip
+state at all.
+
+rts2ng: a chip with no activity printed is "idle"; `IMAGE_READY` stays
+where `getStateString ()` prints it.

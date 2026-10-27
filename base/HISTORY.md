@@ -4112,3 +4112,17 @@ stopping the client to the queued exposure starting (0.1 s to the next
 loop pass, 0.33 s C3's normal exposure setup), no retries, no reinit. Test
 scripts were `~torman/wipgx/testc.sh` and `teste.sh` on lascaux (deleted
 after the tests).
+
+## A camera holding an image is "idle" in its state text (2026-10-27) [JS]
+
+Found while writing web's status page, which shows the text
+`Connection::getStateString (true)` makes, as rts2-mon does. After a
+readout a camera's chip state is `CAM_HAS_IMAGE` alone, and
+`getCameraChipState ()` printed nothing for it, so the line started
+" | 5 s LIGHT 1x1". Classic has the same code (UPSTREAM_BUGS.md, "A camera
+holding an image has no chip state"). Now a chip with no activity printed
+is "0 idle"; `IMAGE_READY` still follows.
+
+Tested against camd-dummy: "0 idle | 2 s LIGHT 1x1 | 32.8 | IMAGE_READY |
+SHUTTER_CLEARED" after a readout, "0 EXPOSING | ..." during the exposure
+as before; kernel tests pass. rts2-mon gets the same text (same function).
