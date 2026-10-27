@@ -157,10 +157,18 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   `environment`) is read with the quiet lookups. Missing keys must not warn.
 - Andor: `scriptEnds ()` does not reset `intExposure` (hidden state that
   `setTiming ()` later copies into `exposure`). [MJ 2026-10-18]
+- An exposure whose client disconnects ends at once
+  (`Camera::deleteConnection ()`), aborted mid-exposure: aborted at its
+  end it ran into the camera's own readout, and an exposure waiting behind
+  it was refused for the whole readout (2.6 s on C3) or, with the reinit,
+  wedged the camera (HISTORY, "An exposure whose client left ends at
+  once"). [JS 2026-10-27]
 - gxccd: a failed filter move is retried every 0.5 s for up to 15 s and
   never answered with `reinitCamera ()` (classic did not reinit either).
   The driver sends nothing of its own to a busy camera (`cameraBusy ()`:
-  not `isIdle ()`, or a readout aborted under 15 s ago) - no reinit, no
+  not `isIdle ()`, or an exposure or readout aborted under 15 s ago - an
+  aborted exposure too since 2026-10-27 [JS]; a refused exposure start is
+  retried every 50 ms for 3 s after an abort) - no reinit, no
   window heating, no temperature-ramp step; only stopping an exposure.
   A client's filter change during a readout is queued by RTS2 and runs the
   moment the readout ends (tested on C2); keep `createFilter ()` as it is,

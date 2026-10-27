@@ -42,10 +42,12 @@
 #include "camd.h"
 #include "gxccd.h"
 #include "utilsfunc.h"
+#include <functional>
 #include <iomanip>
 #include <sstream>
 
 #include <sys/file.h>
+#include <unistd.h>
 
 #define EVENT_TE_RAMP	      RTS2_LOCAL_EVENT + 678
 
@@ -53,9 +55,12 @@
 #define FILTER_RETRY_USEC     500000
 #define FILTER_RETRY_SEC      15
 
-// after an aborted readout the camera is taken as busy this long; C1 and C2
-// at SBT read out in about 9.4 s
+// after an aborted exposure or readout the camera is taken as busy this
+// long; C1 and C2 at SBT read out in about 9.4 s
 #define CAMERA_BUSY_SEC       15
+// how long, and how often, an exposure start is retried right after an abort
+#define ABORT_RETRY_SEC       3
+#define ABORT_RETRY_STEP_USEC 50000
 
 namespace rts2camd
 {
@@ -136,15 +141,16 @@ class GXCCD:public Camera
 		rts2core::ValueIntegerMinMax *desiredNightWindowHeating;
 		int desiredNightHeatingInitValue = 0;
 
-		// when a readout was last aborted (cameraBusy ())
+		// when an exposure or readout was last aborted (cameraBusy ())
 		double lastCameraBusy = 0;
 		// window heating waiting for the camera to be free, -1 none
 		int pendingWindowHeating = -1;
 
 		/**
 		 * True while the camera exposes or reads out (not isIdle (), as
-		 * info () always checked) and for CAMERA_BUSY_SEC after a readout
-		 * was aborted: the driver sends it nothing of its own then.
+		 * info () always checked) and for CAMERA_BUSY_SEC after an exposure
+		 * or readout was aborted: the driver sends it nothing of its own
+		 * then, and does not reinitialize it.
 		 */
 		bool cameraBusy ();
 		void requestWindowHeating (int heatingLevel);
@@ -662,52 +668,69 @@ int GXCCD::startExposure ()
 
 	// base note: one attempt each, and a reinit only on -1 (hardware error),
 	// as classic; upstream's cta-n merge retried three times and reinitialized
-	// on any error, see reinitCamera ()
-	ret = gxccd_set_read_mode (camera, mode->getValueInteger ());
-	if (ret)
+	// on any error, see reinitCamera (). Except right after an aborted
+	// exposure or readout: an exposure a client queued during an exposure
+	// whose own client had gone is started the moment that exposure ends
+	// and is aborted, and the camera refuses it (C3 at SBT, 2026-10-26
+	// 23:07:18 and the 2026-10-27 test: 0.9 ms after the abort). It is
+	// retried every ABORT_RETRY_STEP_USEC for up to ABORT_RETRY_SEC after
+	// the abort, so it starts as soon as the camera takes it.
+	auto attempt = [this] (const char *what, const std::function<int ()> &call) -> int
 	{
-		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-		logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_set_read_mode " << gx_err << sendLog;
-		if (ret == -1)
-			reinitCamera ();
-		return -1;
-	}
+		double started = getNow ();
+		int tries = 0;
+		int r;
+		while ((r = call ()) != 0 && getNow () - lastCameraBusy < ABORT_RETRY_SEC)
+		{
+			tries++;
+			usleep (ABORT_RETRY_STEP_USEC);
+		}
+		if (r == 0 && tries > 0)
+			logStream (MESSAGE_INFO) << "GXCCD::startExposure " << what << " accepted after " << tries << " retries, "
+				<< std::fixed << std::setprecision (3) << getNow () - started << " s, "
+				<< getNow () - lastCameraBusy << " s after the abort" << sendLog;
+		if (r)
+		{
+			gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+			logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling " << what << " " << gx_err
+				<< (tries ? " (also after " + std::to_string (tries) + " retries)" : std::string ()) << sendLog;
+			if (r == -1)
+				reinitCamera ();
+		}
+		return r;
+	};
 
-	ret = gxccd_set_binning (camera, binningHorizontal (), binningVertical ());
+	ret = attempt ("gxccd_set_read_mode", [this] { return gxccd_set_read_mode (camera, mode->getValueInteger ()); });
 	if (ret)
-	{
-		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-		logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_set_binning " << gx_err << sendLog;
-		if (ret == -1)
-			reinitCamera ();
 		return -1;
-	}
+
+	ret = attempt ("gxccd_set_binning", [this] { return gxccd_set_binning (camera, binningHorizontal (), binningVertical ()); });
+	if (ret)
+		return -1;
 
 	if (preflash->getValueFloat () > 0)
 		clearCCD (preflash->getValueFloat (), preflash_nclears->getValueInteger ());
 
 	// The GXCCD library expects pre-binned region coordinates and size
-	ret = gxccd_start_exposure (camera, getExposure (), getExpType () == 0,
+	ret = attempt ("gxccd_start_exposure", [this] { return gxccd_start_exposure (camera, getExposure (), getExpType () == 0,
 								getUsedXBinned (), getUsedYBinned (),
-								getUsedWidthBinned (), getUsedHeightBinned ());
+								getUsedWidthBinned (), getUsedHeightBinned ()); });
 	if (ret)
-	{
-		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-		logStream (MESSAGE_ERROR) << "GXCCD::startExposure error calling gxccd_start_exposure " << gx_err << sendLog;
-		if (ret == -1)
-			reinitCamera ();
 		return -1;
-	}
 	return 0;
 }
 
 int GXCCD::stopExposure ()
 {
  	int ret;
-	// a readout aborted here (killall, NOW) keeps the camera busy for a
-	// while after the state says it is not reading any more
-	if ((getState () & CAM_MASK_READING) == CAM_READING)
-		lastCameraBusy = getNow ();
+	// an exposure or readout aborted here (killall, NOW, an exposure that
+	// ends after its client left) keeps the camera busy for a while after
+	// the state says it is idle. base note: it was only a readout; on
+	// 2026-10-27 at SBT rts2-xfocusc was stopped in the middle of an
+	// exposure on C3, the exposure was aborted as it ended, the next start
+	// failed a second later and its reinitialization wedged C3 until
+	// power-cycled
+	lastCameraBusy = getNow ();
 	ret = gxccd_abort_exposure (camera, false);
 	if (ret)
 	{
@@ -836,15 +859,17 @@ int GXCCD::clearCCD (double pref_time, int nclear)
 int GXCCD::reinitCamera ()
 {
 	// base note: never while the camera is busy with a readout, or just
-	// after one was aborted (killall, NOW): a command then fails, and
-	// releasing and initializing the busy camera wedged C1 and C2 at SBT
-	// until power-cycled (2026-10-15, 2026-10-20 filter move, 2026-10-22
-	// window heating at night start). Classic reinitialized in fewer places;
-	// upstream's cta-n merge (879e62251, Karpov, for CTA-N's sporadic
-	// errors) added reinitializing retries. The failing command fails.
+	// after an exposure or readout was aborted (killall, NOW, a client gone
+	// mid-exposure): a command then fails, and releasing and initializing
+	// the busy camera wedged C1, C2 and C3 at SBT until power-cycled
+	// (2026-10-15, 2026-10-20 filter move, 2026-10-22 window heating at
+	// night start, 2026-10-27 xfocusc stopped). Classic reinitialized in
+	// fewer places; upstream's cta-n merge (879e62251, Karpov, for CTA-N's
+	// sporadic errors) added reinitializing retries. The failing command
+	// fails.
 	if (cameraBusy ())
 	{
-		logStream (MESSAGE_WARNING) << "camera busy with a readout, not reinitializing it" << sendLog;
+		logStream (MESSAGE_WARNING) << "camera busy (exposure, readout or just aborted), not reinitializing it" << sendLog;
 		return -1;
 	}
 

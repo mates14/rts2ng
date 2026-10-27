@@ -221,6 +221,20 @@ int Camera::deleteConnection (rts2core::Connection * conn)
 	if (conn == exposureConn)
 	{
 		exposureConn = nullptr;
+		// base note: classic exposed on until the exposure time ran out,
+		// then aborted the image nobody would take - just as the camera
+		// starts its readout, which an abort does not stop: a G2-1600 (C3
+		// at SBT) refused the next start for its whole readout, 2.6 s
+		// (2026-10-27 test), while an abort in the middle of an exposure
+		// cost nothing. End it now; checkExposures () aborts it and starts
+		// whatever exposure waits. Drivers with their own isExposing () that
+		// ask the hardware (FLI, Andor) see no change.
+		if ((getStateChip (0) & (CAM_EXPOSING | CAM_EXPOSING_NOIM)) && exposureEnd->getValueDouble () > getNow ())
+		{
+			logStream (MESSAGE_INFO) << "the client of the exposure left, ending it now" << sendLog;
+			exposureEnd->setValueDouble (getNow ());
+			sendValueAll (exposureEnd);
+		}
 	}
 	// delete connection in shared data
 	if (sharedData)

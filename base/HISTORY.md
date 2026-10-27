@@ -4063,3 +4063,52 @@ tree and the mount was observing. To see on the mount: a target change
 during a long slew ("stop (:Q#) sent while a move was in flight") should
 be followed by "framework-requested move accepted", not "timed out
 waiting for the caring loop". MJ's driver.
+
+## An exposure whose client left ends at once; gxccd after an abort (2026-10-27) [JS]
+
+C3 at SBT wedged until power-cycled (2026-10-26 23:07 UT). JS stopped the
+classic rts2-xfocusc (Ctrl+C) in the middle of an exposure and started a
+new one at once. The exposure exposed on to its end with nobody to take
+it ("end exposure without exposure connection"), and `Camera::endExposure
+()` aborted it (`gxccd_abort_exposure`); the new client's exposure, waiting
+meanwhile, was started 1 s later (0.9 ms in the test), failed in
+`gxccd_set_read_mode`, and `reinitCamera ()` hung 60 s, failed, and left
+the camera dead.
+
+Tested on C3 by daylight on 2026-10-27, with rts2-scriptexec as the
+client and a test build run in place of the production C3:
+- a client stopped mid-exposure, the next exposure 25 s later: fine; the
+  orphaned exposure is aborted at its end and the camera works on;
+- a new client's exposure waiting when the orphaned one ends (the
+  production driver): refused, reinit, wedged - last night exactly;
+- the same with retries: `set_read_mode` refused for 2.508 s and accepted
+  2.612 s after the abort, twice, to the millisecond. That is the G2-1600's
+  readout (2.59 s): an abort as the exposure time runs out comes after the
+  camera has started reading out, and does not stop it;
+- `killall` in the middle of an exposure, then a new exposure: accepted at
+  once - an abort mid-exposure costs nothing.
+
+Pre-Karpov classic (aa097bad2, 2017) reinitialized in none of these
+places: a failed start just failed. The library has a single abort
+(`gxccd_abort_exposure`; the `gxusb_*` clears are unsupported low-level
+calls).
+
+Changes:
+- `Camera::deleteConnection ()`: when the client of an exposure
+  disconnects, the exposure end is brought to now, so `checkExposures ()`
+  aborts it mid-exposure and starts any waiting exposure. Classic exposed
+  on to the end for nobody. Drivers whose own `isExposing ()` asks the
+  hardware (FLI, Andor) see no change.
+- gxccd: any aborted exposure or readout counts for `cameraBusy ()` (it
+  was only an aborted readout, e9c4840), so no reinit within 15 s of an
+  abort; and within `ABORT_RETRY_SEC` (3 s) of an abort a refused call of
+  the exposure start is retried every 50 ms. A safety net: with the first
+  change it was not needed in the tests. C1/C2 (G4, ~9 s readout) would
+  still fail a start refused during a readout after 3 s, without reinit.
+
+Result, test E three times (a second client's exposure queued during the
+first client's exposure, then the first client stopped): 0.43 s from
+stopping the client to the queued exposure starting (0.1 s to the next
+loop pass, 0.33 s C3's normal exposure setup), no retries, no reinit. Test
+scripts were `~torman/wipgx/testc.sh` and `teste.sh` on lascaux (deleted
+after the tests).
