@@ -3146,3 +3146,95 @@ exposure: progress_start 2.1 s before and progress_end 2.9 s after the
 query, as `exposure_end`; null after the image. camd-dummy sends no
 readout end (no pixels per second yet), so the readout bar was seen only
 against the mock.
+
+## Monitors: live webcam streams end after 10 min (2026-10-27) [JS]
+
+The "live" button on bart-monitor.html and d50-monitor.html is no longer
+a lasting preference: the streams switch back to the 15 s snapshots after
+10 minutes (`LIVE_MS`), so a page left open does not pull the MJPEG
+streams all night. A live stream open in the lightbox closes then. The
+cookie is now `liveWebcamsUntil`, the end time in ms: a reload keeps
+only the time that is left. The old `liveWebcams` cookie is ignored. The
+button's tooltip says when live mode ends. Clicking it again ends live
+mode early, as before.
+
+Tested: copies of both pages with `LIVE_MS` at 3 s in headless Chromium
+(virtual time), no daemon behind them: live on, lightbox opened on a
+stream, then back to snapshots with the lightbox closed and the cookie
+at 0. Switching off by hand works, and a reload keeps the time that is left.
+
+## Monitors: the camera's progress bar is always there (2026-10-27) [JS]
+
+The thin progress bar under each camera's state (bart-monitor.html,
+d50-monitor.html) was added only while exposing or reading out, so the
+lines under it jumped up and down as exposures started and ended. It is
+now always drawn, an empty track when the camera is idle or waiting.
+D50's guide camera C1 keeps its percentage in the state line, no bar.
+
+Tested: bart-monitor.html in headless Chromium with C1's data set by hand
+(idle, exposing, reading out): the line under the bar stays at the same
+height. d50-monitor.html has the same code.
+
+## Monitors: camera bars on time and smooth (2026-10-27) [JS]
+
+The camera bars on bart-monitor.html and d50-monitor.html showed up late
+(D50's C0 at "8 s" already) and moved unevenly on some PCs. Three causes:
+
+- The page learnt a camera's state only at the 10 s poll, so an exposure
+  appeared up to 10 s after it started, and a short one could be missed.
+  The cameras (BART's C1-C3, D50's C0; D50's guide camera C1 has its own
+  1 s loop) are now polled every 2 s on their own (`cameraLoop`), each
+  round after the last has answered, so a slow link does not pile up
+  requests. A hidden tab skips these rounds. One camera's /api/get is
+  about 2 KB.
+- The bar compared the camera's times (`exposure_end`,
+  `progress_start`/`progress_end`, the observatory's clock) with the
+  visitor's clock, so a PC whose clock is off drew it ahead or behind.
+  The page now estimates the offset from the `Date` header of the
+  /api/get answers (`noteServerDate`, `serverNow`). The header has 1 s
+  resolution, but each answer bounds the offset to [Date - received,
+  Date + 1 s - sent], and the bounds of a few answers narrow to about the
+  round trip. On BART only its own API_BASE answers count (RAIN_D50 comes
+  from D50's clock).
+- The bar moved in 1 s steps (the whole status block is redrawn once a
+  second). It now carries its start and end (`data-from`/`data-to`) and
+  `animateBars` moves it every frame.
+
+The next step, if 2 s is still too slow: rts2-httpd already pushes every
+value and state change over `/ws` (verified on lascaux: 101 and events,
+directly on localhost:8889). Through Apache the sites' plain
+`ProxyPass /images http://localhost:8889` likely needs `upgrade=websocket`,
+not tested (the Basic auth). The state event carries no
+progress_start/progress_end, so a page would fetch /api/get on a camera's
+state change.
+
+Tested: both pages in headless Chromium against a mock httpd whose clock
+(Date header and camera times) runs 30 s ahead. A 10 s exposure and a
+2 s readout show within one 2 s poll, the offset comes out at 30.0 +/-
+0.15 s, and the bar follows the camera's own times. Smoothness can only be
+seen in a real browser.
+
+## Monitors: the sky chart follows the telescope (2026-10-27) [JS]
+
+The sky charts on bart-monitor.html and d50-monitor.html moved the
+telescope's cross only with the 10 s poll. Now `telLoop` polls only T0's
+`TEL_` (`/api/get?d=T0&n=TEL_`, about 60 B; the whole T0 is 6 KB): every
+2 s, and every 0.5 s once the position has moved by more than 0.02 deg on
+the sky (tracking moves it far less in 2 s), until 5 s after it stops.
+The fast rounds also fetch `TAR`, so a new target's circle shows during
+the slew. A move redraws only the markers, and the telescope panel's
+coordinates follow.
+
+`renderSkyChart` draws everything else (sky, horizon, grid, stars, Sun,
+Moon) into an offscreen copy kept with the canvas (`canvas.skyBg`) and
+leaves `canvas.skyMarkers()`, which copies it to the canvas and draws
+the cross and the target circle on top. The full chart is still redrawn
+with the 10 s poll, on a resize and on the dark/light switch. A marker
+redraw is one image copy and two strokes. The enlarged chart in the
+lightbox keeps its own copy and gets the same marker updates.
+
+Tested: both pages in headless Chromium against a mock T0 that stands
+for 4 s, slews 30/0 -> 60/90 deg (alt/az) in 6 s, then stands. Polls ran
+2 s / 0.5 s / 2 s as intended, the cross moved with each fast round, the
+full chart was drawn only at load and at the 10 s poll, and the cross
+ended at the right place. The lightbox was not tested.
