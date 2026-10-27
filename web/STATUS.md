@@ -3238,3 +3238,31 @@ for 4 s, slews 30/0 -> 60/90 deg (alt/az) in 6 s, then stands. Polls ran
 2 s / 0.5 s / 2 s as intended, the cross moved with each fast round, the
 full chart was drawn only at load and at the 10 s poll, and the cross
 ended at the right place. The lightbox was not tested.
+
+## Monitors: zoom and pan in the enlarged image (2026-10-27) [JS]
+
+The enlarged image on bart-monitor.html and d50-monitor.html (camera
+images, guide frames, webcams) zooms with the mouse wheel, or with two
+fingers or a pinch on a touchpad, from the fitted size up to 8 screen
+pixels per image pixel. A small image, which fitting enlarges, zooms out
+down to its own size (100 %). The image follows the mouse with no button held,
+so a click still closes it. The mouse at the view's left edge shows the
+image's left edge, the outer 10 % already counting as the edge. As a
+result the point under the mouse stays put while zooming. The info line
+gives the zoom in the camera's own pixels (100 % = one image pixel per
+screen pixel); from 200 % up the pixels are drawn sharp
+(`image-rendering: pixelated`). A click anywhere, the image included,
+or Esc closes it (before, only a click outside the image did, besides
+the x). Each opening starts unzoomed, and the 15 s refresh keeps the zoom.
+The enlarged sky chart is not zoomed: it is drawn at the size shown.
+
+Done with a CSS transform on #lightbox-img (`applyLightboxZoom`). The
+wheel's default is always prevented over the lightbox, so the page under
+it does not scroll and a touchpad pinch (a wheel event with ctrlKey) does
+not zoom the browser.
+
+Tested: d50-monitor.html in headless Chromium with a 1600x1200 test
+image, and a 200x150 one zoomed out to 100 % and no further: wheel zoom about the mouse, panning to both corners, the 8x
+limit, zooming back out to the fitted size, closing by a click on the
+image and by Esc, and a screenshot of the zoomed view. bart-monitor.html
+has the same code. Not tried with a real mouse or touchpad.

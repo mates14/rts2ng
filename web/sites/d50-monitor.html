@@ -421,6 +421,12 @@
            normally showing #lightbox-img instead. */
         #lightbox-sky-canvas { display: none; border-radius: 50%; }
 
+        /* zoomed: the image is scaled and moved with a transform, about
+           its centre; its border would scale with it */
+        #lightbox-img { transform-origin: center; }
+        #lightbox-img.zoomed { border-color: transparent; box-shadow: none; }
+        #lightbox-img.pixels { image-rendering: pixelated; }
+
         .lightbox-title { color: white; font-size: 18px; font-weight: bold; margin-bottom: 10px; text-align: center; }
         .lightbox-close { position: absolute; top: 10px; right: 25px; color: white; font-size: 35px; font-weight: bold; cursor: pointer; user-select: none; }
         .lightbox-close:hover { color: #ccc; }
@@ -2700,7 +2706,95 @@
             img.style.width = Math.round(img.naturalWidth * scale) + 'px';
             img.style.height = Math.round(img.naturalHeight * scale) + 'px';
         }
-        document.getElementById('lightbox-img').addEventListener('load', fitLightboxImage);
+        document.getElementById('lightbox-img').addEventListener('load', () => {
+            fitLightboxImage();
+            applyLightboxZoom();
+        });
+
+        // Zoom and pan in the enlarged image. The wheel (two fingers or a
+        // pinch on a touchpad) zooms; the image follows the mouse, with
+        // no button held, so that a click still closes it: the mouse at
+        // the wrap's left edge shows the image's left edge, at its right
+        // edge the right edge (with a margin, LIGHTBOX_PAN_EDGE, which
+        // already counts as the edge). That also keeps the point under
+        // the mouse where it is while zooming. lightboxZoom is relative
+        // to the fitted size; the info line gives it in the camera's own
+        // pixels (100 % = one image pixel per screen pixel), and from
+        // 200 % up the pixels are drawn sharp, not smoothed. A small
+        // image, which fitting enlarges, zooms out down to 100 %.
+        const LIGHTBOX_MAX_PIXEL = 8;    // screen pixels per image pixel, at most
+        const LIGHTBOX_PAN_EDGE = 0.1;
+        let lightboxZoom = 1;
+        let lightboxMouse = { x: 0.5, y: 0.5 };   // in the wrap, 0-1
+        let lightboxInfoText = '';
+
+        function applyLightboxZoom() {
+            const wrap = document.querySelector('.lightbox-img-wrap');
+            const img = document.getElementById('lightbox-img');
+            const w0 = img.offsetWidth, h0 = img.offsetHeight;
+            const info = document.getElementById('lightbox-info');
+            if (!img.naturalWidth || !w0) {
+                info.textContent = lightboxInfoText;
+                return;
+            }
+            const maxZoom = Math.max(1, LIGHTBOX_MAX_PIXEL * img.naturalWidth / w0);
+            const minZoom = Math.min(1, img.naturalWidth / w0);
+            lightboxZoom = Math.min(maxZoom, Math.max(minZoom, lightboxZoom));
+            const W = wrap.clientWidth, H = wrap.clientHeight;
+            // the image's shift from the centre, per axis
+            const shift = (size, view, mouse) => {
+                if (size <= view)
+                    return 0;
+                const u = Math.min(1, Math.max(0, (mouse - LIGHTBOX_PAN_EDGE) / (1 - 2 * LIGHTBOX_PAN_EDGE)));
+                return (view - size) * u + (size - view) / 2;
+            };
+            const dx = shift(w0 * lightboxZoom, W, lightboxMouse.x);
+            const dy = shift(h0 * lightboxZoom, H, lightboxMouse.y);
+            img.style.transform = lightboxZoom !== 1 ? `translate(${dx}px, ${dy}px) scale(${lightboxZoom})` : '';
+            img.classList.toggle('zoomed', lightboxZoom > 1);
+            const pixel = w0 * lightboxZoom / img.naturalWidth;
+            img.classList.toggle('pixels', pixel >= 2);
+            info.textContent = `${lightboxInfoText} - ${Math.round(100 * pixel)} %`;
+        }
+
+        function lightboxShowsImage() {
+            return document.getElementById('lightbox').style.display === 'block'
+                && document.getElementById('lightbox-img').style.display !== 'none';
+        }
+
+        function noteLightboxMouse(e) {
+            const rect = document.querySelector('.lightbox-img-wrap').getBoundingClientRect();
+            lightboxMouse = {
+                x: rect.width ? (e.clientX - rect.left) / rect.width : 0.5,
+                y: rect.height ? (e.clientY - rect.top) / rect.height : 0.5,
+            };
+        }
+
+        document.getElementById('lightbox').addEventListener('wheel', e => {
+            // never scroll the page under it, nor zoom the browser (a
+            // touchpad pinch comes as a wheel event with ctrlKey)
+            e.preventDefault();
+            if (!lightboxShowsImage())
+                return;
+            noteLightboxMouse(e);
+            const dy = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+            lightboxZoom *= Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.002));
+            applyLightboxZoom();
+        }, { passive: false });
+
+        document.getElementById('lightbox').addEventListener('mousemove', e => {
+            if (!lightboxShowsImage() || lightboxZoom <= 1)
+                return;
+            noteLightboxMouse(e);
+            applyLightboxZoom();
+        });
+
+        window.addEventListener('resize', () => {
+            if (!lightboxShowsImage())
+                return;
+            fitLightboxImage();
+            applyLightboxZoom();
+        });
 
         // noRefresh: for a live MJPEG stream URL, the periodic cache-
         // busting below would force it to drop and reconnect every 15s -
@@ -2710,11 +2804,14 @@
             const img = document.getElementById('lightbox-img');
             document.getElementById('lightbox-sky-canvas').style.display = 'none';
             img.style.display = '';
+            lightboxZoom = 1;
+            img.style.transform = '';
+            img.classList.remove('zoomed', 'pixels');
             img.src = noRefresh ? imageSrc : `${imageSrc}${imageSrc.includes('?') ? '&' : '?'}t=${new Date().getTime()}`;
             document.getElementById('lightbox-title').textContent = title;
-            document.getElementById('lightbox-info').textContent = noRefresh
-                ? 'Click anywhere to close'
-                : 'Click anywhere to close - auto-refreshing every 15s';
+            lightboxInfoText = 'Scroll to zoom, move the mouse to look around, click or Esc to close'
+                + (noRefresh ? '' : ' - auto-refreshing every 15s');
+            document.getElementById('lightbox-info').textContent = lightboxInfoText;
             lightbox.style.display = 'block';
 
             if (!noRefresh) {
@@ -2764,11 +2861,8 @@
             lightboxInterval = setInterval(() => renderSkyChart(canvas, params), 10000);
         }
 
-        document.getElementById('lightbox').addEventListener('click', function (e) {
-            if (e.target === this)
-                closeLightbox();
-        });
-        document.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+        // a click anywhere closes it, on the image too
+        document.getElementById('lightbox').addEventListener('click', closeLightbox);
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape')
                 closeLightbox();
