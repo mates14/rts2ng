@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Monitor</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body class="monitor-page">
+	<header>
+		<h1>RTS2 Monitor</h1>
+		<nav class="header-links">
+			<a href="index.html" class="back-link">image archive</a>
+			<a href="targets.html" class="back-link">target list</a>
+			<a href="target.html" class="back-link">target editor</a>
+			<a href="records.html" class="back-link">telemetry</a>
+			<a href="devices.html" class="back-link">devices</a>
+			<a href="status.html" class="back-link">status</a>
+			<a href="monitor.html" class="back-link current" aria-current="page">monitor</a>
+		</nav>
+		<div id="mon-conn" class="conn-status conn-unknown">loading&hellip;</div>
+	</header>
+
+	<div class="mon">
+		<nav id="mon-devlist" class="mon-devlist" aria-label="devices"></nav>
+
+		<section class="mon-device">
+			<div class="mon-devhead">
+				<div id="mon-statestring" class="mon-statestring"></div>
+				<div id="mon-progress" class="mon-progress" hidden><div></div><span></span></div>
+			</div>
+			<div id="mon-filters" class="mon-filters">
+				<span class="mon-filter-group" role="group" aria-label="show">
+					<button type="button" data-filter="all" class="active">all</button>
+					<button type="button" data-filter="fits">FITS</button>
+					<button type="button" data-filter="writable">writable</button>
+				</span>
+				<label><input type="checkbox" id="mon-debug"> debug values</label>
+				<input type="search" id="mon-search" placeholder="search value">
+			</div>
+			<div id="mon-values-wrap" class="mon-values-wrap">
+				<table id="mon-values" class="mon-values"><tbody></tbody></table>
+				<table id="mon-status" class="status-table mon-status" hidden>
+					<thead><tr><th>Device</th><th>State</th><th>Blocking</th><th class="state-hex">State bits</th></tr></thead>
+					<tbody></tbody>
+				</table>
+			</div>
+			<div id="mon-desc" class="mon-desc">&nbsp;</div>
+		</section>
+
+		<section class="mon-messages">
+			<ul id="mon-messages"></ul>
+		</section>
+
+		<form id="mon-cmdline" class="mon-cmdline" autocomplete="off">
+			<label for="mon-cmd" id="mon-cmd-dev">&gt;</label>
+			<input id="mon-cmd" type="text" placeholder="command for the selected device (stop, info, ...)">
+			<span id="mon-cmd-result"></span>
+		</form>
+
+		<div class="mon-statusbar">
+			<span id="mon-master"></span>
+			<span id="mon-clock"></span>
+		</div>
+	</div>
+
+	<script src="rts2status.js"></script>
+	<script src="monitor.js"></script>
+</body>
+</html>

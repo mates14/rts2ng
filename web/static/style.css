@@ -290,36 +290,36 @@ header h1 {
 	font-size: 12px;
 }
 
-#messages li {
+#messages li, #mon-messages li {
 	padding: 4px 0;
 	border-top: 1px solid #f0f1f3;
 	display: flex;
 	gap: 10px;
 }
 
-#messages li:first-child {
+#messages li:first-child, #mon-messages li:first-child {
 	border-top: none;
 }
 
-#messages .msg-time {
+#messages .msg-time, #mon-messages .msg-time {
 	color: var(--text-muted);
 	white-space: nowrap;
 }
 
-#messages .msg-device {
+#messages .msg-device, #mon-messages .msg-device {
 	font-weight: 600;
 	white-space: nowrap;
 }
 
-#messages .msg-text {
+#messages .msg-text, #mon-messages .msg-text {
 	word-break: break-word;
 }
 
-#messages li.level-error .msg-text {
+#messages li.level-error .msg-text, #mon-messages li.level-error .msg-text {
 	color: var(--bad);
 }
 
-#messages li.level-warning .msg-text {
+#messages li.level-warning .msg-text, #mon-messages li.level-warning .msg-text {
 	color: var(--warn);
 }
 
@@ -1158,5 +1158,328 @@ body.status-stale .status-table tbody {
 	}
 	.status-table th:nth-child(3) {
 		width: auto;
+	}
+}
+
+/* monitor.html - rts2-mon as a page: it fills the window under the header,
+ * the device list and the values on top, messages, the command line and
+ * the status bar under them */
+
+body.monitor-page {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	box-sizing: border-box;
+	margin: 0;
+	padding: 12px 16px;
+}
+
+body.monitor-page header {
+	margin-bottom: 10px;
+}
+
+.mon {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: grid;
+	grid-template-columns: 160px minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr) 170px auto auto;
+	gap: 6px;
+	font-family: var(--mono);
+	font-size: 12px;
+}
+
+.mon > * {
+	background: var(--panel-bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+
+.mon-devlist {
+	overflow-y: auto;
+	padding: 4px 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.mon-dev {
+	padding: 3px 10px;
+	border-left: 4px solid transparent;
+	text-decoration: none;
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* rts2-mon's list colours */
+.mon-dev.level-ok { color: var(--good); }
+.mon-dev.level-priority { color: var(--accent); }
+.mon-dev.level-warning { color: var(--warn); }
+.mon-dev.level-failure { color: var(--bad); }
+.mon-dev.mon-status-item { color: var(--text-muted); margin-top: 6px; }
+
+.mon-dev:hover {
+	background: var(--bg);
+}
+
+.mon-dev.selected {
+	background: var(--bg);
+	border-left-color: var(--accent);
+}
+
+.mon-device {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.mon-devhead {
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--border);
+}
+
+.mon-statestring {
+	font-weight: 600;
+	white-space: pre-wrap;
+}
+
+.mon-statestring.level-failure { color: var(--bad); }
+
+.mon-progress {
+	position: relative;
+	height: 14px;
+	margin-top: 4px;
+	background: var(--border);
+	border-radius: 3px;
+}
+
+.mon-progress > div {
+	height: 100%;
+	background: var(--accent);
+	border-radius: 3px;
+}
+
+.mon-progress > span {
+	position: absolute;
+	right: 6px;
+	top: 0;
+	font-size: 11px;
+	line-height: 14px;
+}
+
+.mon-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+	padding: 5px 10px;
+	border-bottom: 1px solid var(--border);
+	font-family: system-ui, sans-serif;
+}
+
+.mon-filter-group button {
+	font-size: 12px;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	background: var(--panel-bg);
+	cursor: pointer;
+}
+
+.mon-filter-group button:first-child { border-radius: 4px 0 0 4px; }
+.mon-filter-group button:last-child { border-radius: 0 4px 4px 0; }
+
+.mon-filter-group button.active {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: white;
+}
+
+.mon-filters input[type="search"] {
+	font-size: 12px;
+	padding: 2px 6px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+}
+
+/* only the values shrink to fit the panel: with flex-basis auto their
+ * full height counted, and the description line under them was squeezed
+ * along with them for a device with many values */
+.mon-values-wrap {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow: auto;
+}
+
+.mon-devhead, .mon-filters, .mon-desc {
+	flex: 0 0 auto;
+}
+
+.mon-values {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.mon-values td {
+	padding: 1px 8px;
+	white-space: pre;
+	vertical-align: top;
+}
+
+.mon-values td.mon-w {
+	width: 1ch;
+	color: var(--text-muted);
+	padding-right: 0;
+}
+
+.mon-values td.mon-name {
+	width: 1%;
+}
+
+.mon-values td.mon-val {
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.mon-values tr:hover td {
+	background: var(--bg);
+}
+
+.mon-values tr.writable {
+	cursor: pointer;
+}
+
+/* rts2-mon's value colours: FITS values, warnings, errors */
+.mon-values tr.fits td.mon-name { color: #0e7490; }
+.mon-values tr.lvl-warning td { color: var(--warn); }
+.mon-values tr.lvl-error td { color: var(--bad); font-weight: 600; }
+
+.mon-values tr.changed td.mon-val {
+	animation: flash 1s ease-out;
+}
+
+.mon-values tr.editing td {
+	background: #e0e7ff;
+}
+
+.mon-values .script-now {
+	background: #fde68a;
+	font-weight: 600;
+}
+
+.mon-editor td {
+	background: #eef2ff;
+	padding: 4px 8px;
+}
+
+.mon-edit-form {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+
+.mon-edit-form input, .mon-edit-form select {
+	font-family: var(--mono);
+	font-size: 12px;
+	padding: 3px 6px;
+	min-width: 260px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+}
+
+.mon-edit-form button {
+	font-size: 12px;
+	padding: 3px 10px;
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: white;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.mon-edit-form button.mon-edit-cancel {
+	background: var(--panel-bg);
+	color: var(--accent);
+}
+
+.mon-edit-result.err { color: var(--bad); }
+
+.mon-status {
+	font-family: var(--mono);
+}
+
+.mon-desc {
+	padding: 4px 10px;
+	border-top: 1px solid var(--border);
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.mon-messages {
+	grid-column: 1 / -1;
+	overflow-y: auto;
+	padding: 0 10px;
+}
+
+#mon-messages {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.mon-cmdline {
+	grid-column: 1 / -1;
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	padding: 4px 10px;
+}
+
+.mon-cmdline label {
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.mon-cmdline input {
+	flex: 1 1 auto;
+	font-family: var(--mono);
+	font-size: 12px;
+	padding: 3px 6px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+}
+
+#mon-cmd-result.ok { color: var(--good); }
+#mon-cmd-result.err { color: var(--bad); }
+
+.mon-statusbar {
+	grid-column: 1 / -1;
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 3px 10px;
+	background: var(--text);
+	color: white;
+	border-color: var(--text);
+}
+
+body.monitor-page.status-stale .mon-devlist,
+body.monitor-page.status-stale .mon-device,
+body.monitor-page.status-stale .mon-statusbar {
+	opacity: 0.5;
+}
+
+@media (max-width: 700px) {
+	body.monitor-page {
+		height: auto;
+	}
+	.mon {
+		grid-template-columns: 1fr;
+		grid-template-rows: auto 60vh 200px auto auto;
+	}
+	.mon-devlist {
+		flex-direction: row;
+		flex-wrap: wrap;
 	}
 }

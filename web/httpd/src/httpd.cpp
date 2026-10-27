@@ -23,6 +23,8 @@
 #include "command.h"
 #include "option.h"
 #include "configuration.h"
+#include "displayvalue.h"
+#include "libnova_cpp.h"
 #include "objectcheck.h"
 
 #include "jsonvalue.h"
@@ -55,6 +57,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <vector>
 #include <list>
 #include <mutex>
@@ -627,6 +630,52 @@ static void statusEntry (const char *name, Connection *conn, std::ostringstream 
 	else
 		os << progress;
 	os << ",\"level\":\"" << statusLevel (conn, progress) << "\"}";
+}
+
+// /api/monitor: a value as rts2-mon prints it in a device's window
+// (NDeviceWindow::printValue, base/monitor/src/ndevicewindow.cpp): RA/Dec
+// and Alt/Az through libnova's formatting by display type, azimuth as the
+// [observatory] config shows it, a selection as its index and name,
+// anything else through getDisplayValue (). [JS 2026-10-27]
+static std::string monitorValueText (Value *value)
+{
+	std::ostringstream _os;
+	switch (value->getValueType ())
+	{
+		case RTS2_VALUE_RADEC:
+			{
+				ValueRaDec *rd = (ValueRaDec *) value;
+				if (value->getValueDisplayType () == RTS2_DT_DEGREES)
+					_os << LibnovaDeg (rd->getRa ()) << " " << LibnovaDeg (rd->getDec ());
+				else if (value->getValueDisplayType () == RTS2_DT_DEG_DIST_180)
+					_os << LibnovaDeg180 (rd->getRa ()) << " " << LibnovaDeg90 (rd->getDec ());
+				else if (value->getValueDisplayType () == RTS2_DT_ARCSEC)
+					_os << std::fixed << std::setprecision (3) << rd->getRa () * 3600 << "\" " << rd->getDec () * 3600 << "\"";
+				else
+					_os << LibnovaRaDec (rd->getRa (), rd->getDec ());
+			}
+			break;
+		case RTS2_VALUE_ALTAZ:
+			{
+				ValueAltAz *aa = (ValueAltAz *) value;
+				double az = aa->getAz ();
+				if (Configuration::instance ()->getShowAzimuth () == Configuration::AZ_NORTH_ZERO)
+					az = ln_range_degrees (180 + az);
+				if (value->getValueDisplayType () == RTS2_DT_DEGREES)
+					_os << LibnovaDeg (aa->getAlt ()) << " " << LibnovaDeg (az);
+				else if (value->getValueDisplayType () == RTS2_DT_DEG_DIST_180)
+					_os << LibnovaDeg90 (aa->getAlt ()) << " " << LibnovaDeg180 (az);
+				else
+					_os << LibnovaHrz (aa->getAlt (), az);
+			}
+			break;
+		case RTS2_VALUE_SELECTION:
+			_os << value->getValueInteger () << " " << ((ValueSelection *) value)->getSelName ();
+			break;
+		default:
+			return getDisplayValue (value);
+	}
+	return _os.str ();
 }
 
 HttpD::HttpD (int argc, char **argv):HttpDBase (argc, argv, DEVICE_TYPE_HTTPD, "HTTPD")
@@ -2296,6 +2345,73 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 				statusEntry ((*iter)->getName (), *iter, os);
 			}
 			os << "]";
+		}
+		else if (!strcmp (url, "/api/monitor"))
+		{
+			// What rts2-mon's window for a device shows: its state line
+			// and progress, then every value with rts2-mon's text, "W"
+			// (writable), its error/warning level, FITS and debug flags,
+			// the raw value (what an edit starts from) and the type (how
+			// to edit it). SCRIPT carries the running part (rts2-mon's
+			// highlight). Descriptions only with desc=1: they do not
+			// change, and would double every poll.
+			const char *device = getParam (connection, "d", "");
+			bool wantDesc = getParam (connection, "desc", "")[0] == '1';
+			if (device[0] == '\0')
+				throw ApiError ("missing d parameter");
+			Connection *conn = findDeviceConnection (device);
+			if (conn == nullptr)
+				throw ApiError ("cannot find device with given name");
+
+			double progress = conn->getProgress (getNow ());
+			os << "{\"name\":";
+			jsonString (device, os);
+			os << ",\"state\":" << conn->getState () << ",\"statestring\":";
+			jsonString (conn->getStateString (true).c_str (), os);
+			os << ",\"progress\":";
+			if (std::isnan (progress))
+				os << "null";
+			else
+				os << progress;
+			os << ",\"level\":\"" << statusLevel (conn, progress) << "\",\"values\":[";
+			for (ValueVector::iterator iter = conn->valueBegin (); iter != conn->valueEnd (); iter++)
+			{
+				Value *v = *iter;
+				if (iter != conn->valueBegin ())
+					os << ",";
+				os << "{\"n\":";
+				jsonString (v->getName ().c_str (), os);
+				os << ",\"v\":";
+				jsonString (monitorValueText (v).c_str (), os);
+				const char *raw = v->getValue ();
+				os << ",\"raw\":";
+				jsonString (raw ? raw : "", os);
+				os << ",\"t\":" << v->getValueType ();
+				if (v->isWritable ())
+					os << ",\"w\":1";
+				if (v->getWriteToFits ())
+					os << ",\"f\":1";
+				if (v->getDebugFlag ())
+					os << ",\"dbg\":1";
+				switch (v->getFlags () & RTS2_VALUE_ERRORMASK)
+				{
+					case RTS2_VALUE_WARNING:
+						os << ",\"lvl\":\"warning\"";
+						break;
+					case RTS2_VALUE_ERROR:
+						os << ",\"lvl\":\"error\"";
+						break;
+				}
+				if (v->getValueDisplayType () == RTS2_DT_SCRIPT)
+					os << ",\"sp\":" << conn->getValueInteger ("scriptPosition") << ",\"sl\":" << conn->getValueInteger ("scriptLen");
+				if (wantDesc)
+				{
+					os << ",\"desc\":";
+					jsonString (v->getDescription ().c_str (), os);
+				}
+				os << "}";
+			}
+			os << "]}";
 		}
 		else if (!strcmp (url, "/api/get"))
 		{

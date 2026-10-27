@@ -3401,3 +3401,54 @@ rts2-httpd has no /api/status until the next release.
 Tested here against the private centrald + camd-dummy: an exposure
 started after the page loaded; its pushed messages have the right times
 and the list is in order, newest first, with the panels in the new order.
+
+## monitor.html: rts2-mon as a web page; /api/monitor (2026-10-27) [JS]
+
+A first version, to see whether it is worth having. Laid out as
+rts2-mon: the device list on the left (centrald, the devices, "status"),
+coloured as /api/status's level; the selected device on the right, with
+its state line and a progress bar, its values, and the description of
+the value under the mouse (rts2-mon's "D:" line); the messages under
+them, oldest at the top and the newest at the bottom, as rts2-mon has
+them; a command line for the selected device (/api/cmd); a status bar
+with centrald's state, LST (longitude from /api/horizon) and UTC.
+"status" shows status.html's table. The page fills the window.
+
+- Values: rts2-mon's texts with its W (writable), FITS (name in
+  colour), warning and error colours, SCRIPT with the running part
+  marked, and a flash when a value changes. Filters as rts2-mon's: all /
+  FITS / writable, debug values hidden by default (rts2-mon without
+  --show-debug), and a name search.
+- Editing: click a W value. A selection gets its options (/api/selval),
+  a bool true/false, anything else a text field with the raw value
+  (doubles shortened to 15 digits, a min/max value only its value). Set
+  goes through /api/set; Esc or Cancel closes the editor.
+- Up/Down walk the device list (not while typing). The selected device
+  is in the URL (`monitor.html#C0`).
+- Polled over plain HTTP, every second (the selected device and
+  /api/status) and every 2 s (/api/messages), 10 s in a hidden tab.
+- The blocking flags and their helpers moved from status.js into
+  `rts2status.js`, shared by status.html and monitor.html.
+
+rts2-httpd: `/api/monitor?d=DEVICE[&desc=1]` gives the device's state
+text, progress and level, and per value `n`, `v` (rts2-mon's text:
+`monitorValueText ()`, a port of `NDeviceWindow::printValue`: RA/Dec and
+Alt/Az through libnova by display type, azimuth as the config shows it,
+a selection as index and name, else `getDisplayValue ()`), `raw`, `t`
+(type), `w`, `f`, `dbg`, `lvl`, for SCRIPT `sp`/`sl`, and with desc=1
+`desc`. C0's answer is 6.7 KB, 9.1 KB with the descriptions, which the
+page asks for once per device.
+
+Tested here, against the private centrald, camd-dummy C0 and
+teld-dummy T0 (headless Chromium): screenshots of C0, T0 (RA/Dec,
+offsets, PM in arcsec, as rts2-mon shows them) and the status item;
+exposure edited 2 -> 3 through the editor; IMAGETYP's options; `expose`
+from the command line, OK, with the state line exposing and the messages
+in order; the search. Not tried: a real site's devices (SBT's rts2-httpd
+has no /api/monitor until the next release), the keyboard.
+
+Fixed the same day: for a device with many values, the description
+line was squeezed half under the panel's border. The values area had
+flex-basis auto (its full height), so everything shrank with it; now
+only it shrinks (`flex: 1 1 0`), and the head, filters and description
+keep their height.
