@@ -3266,3 +3266,138 @@ image, and a 200x150 one zoomed out to 100 % and no further: wheel zoom about th
 limit, zooming back out to the fitted size, closing by a click on the
 image and by Esc, and a screenshot of the zoomed view. bart-monitor.html
 has the same code. Not tried with a real mouse or touchpad.
+
+## Dashboard split: index.html is the image archive, status.html the rest (2026-10-27) [JS]
+
+The page rts2-httpd serves at its root (`/images` on the sites, the
+"image archive" link of the monitors) mixed the device values, Send
+command, Recent messages and the night/image browser. Now:
+
+- `index.html` + `app.js`: only the images (the night browser, landing
+  on tonight). Titled "RTS2 Image Archive". Schematics and more functions
+  will go here later.
+- `status.html` + `status.js`: Send command, the device values and
+  Recent messages, with the live `/ws` push, as before.
+
+The page headers (index, status, targets, target, records) are the same
+on every page: the title left, the links to all five pages centred, in
+the same order (image archive, target list, target editor, telemetry,
+status), and the page's badge (status: live, telemetry: values) right.
+The current page's link stays, marked (`.back-link.current`,
+`aria-current="page"`). The header is a three-column grid so that the
+links are centred whatever is beside them; under 700 px they go to a
+row of their own. "device monitor" became "image archive".
+
+Deployment: on both sites rts2-httpd runs with `--static-dir
+/home/mates/rts2ng/web/static`, MJ's checkout, not the packaged
+`/usr/share/rts2-web/static`. It reads the files on each request, so a
+pull there brings this live without a restart or a release.
+
+Tested: both pages in headless Chromium against a mock of /api/getall,
+/api/messages and /api/db/{current-night,night,images}: each shows only
+its own parts, with no errors. Header screenshots of all five pages (1200 px
+and 400 px wide) against SBT's real rts2-httpd.
+Not run against a real rts2-httpd.
+
+## status.html: send a command, as in rts2-mon; /api/cmd (2026-10-27) [JS]
+
+The Send command panel of status.html has a new first row: device
+(centrald too), command line, Send. It sends a raw command ("stop",
+"killall", "on", ...), as rts2-mon's command line does, and shows
+"OK", or "failed (status): <the device's error text>". The set-value
+row is below it, as before. Both device lists now keep their selection
+when a device turns up (renderAll rebuilt them).
+
+rts2-httpd: `/api/cmd?d=DEVICE&c=COMMAND`, ported from classic api.cpp's
+`cmd`. The same write check as set (`--auth-file`, per device;
+`centrald` for centrald). A command with a newline is refused (it would
+be a second command). The request is held until the device answers, as
+classic does by default, and returns
+`{"device","command","ok","status","error"}`; `error` is the rest of
+the device's `-N <text>` line. Not ported: `async=1` and the commands
+to HTTPD itself (`autosave`).
+
+- `CommandHttp` holds the suspended request. Its answer goes through
+  `commandAnswered()` and the wakeup eventfd to `pollSuccess()`, never
+  out of the kernel's callback.
+- A device that drops keeps the command: the kernel sends it again after
+  the reconnect (`Connection::reconnectSocket`), and only the link to
+  centrald fails it (`failSentCommand`). So `HttpD::idle ()` answers a
+  request after 30 s (`CMD_TIMEOUT`) with status -7, "no answer from the
+  device within 30 s". The command itself stays queued: if the device
+  comes back, it still gets it, as with any other client.
+- A command deleted unanswered answers from its destructor. `~HttpD`
+  detaches the pending ones first, because the kernel deletes them with
+  their connections after the HTTP server is gone.
+
+Also fixed: value and state pushes over `/ws` carried an empty device
+name for centrald (its connection has none), so status.html showed
+centrald's changing values as an extra card with no name. They now say
+"centrald", as /api/getall does (`pushName`).
+
+Tested here, against a private centrald and camd-dummy C0, with
+rts2-httpd built without DB: `info` OK; `nonsense` failed (-1) "unknow
+command nonsense"; centrald `standby` and `on` OK; missing parameter,
+unknown device and a newline all give 400. A camera stopped with SIGSTOP
+and then killed: answered after 33 s with -7, and httpd carried on. The
+page in headless Chromium: the four commands through the form with the
+right results, and the device cards named C0 and centrald (no nameless
+card). Built clean with GCC 15 here and GCC 12 on lascaux.
+
+## status.html: rts2-mon's status list; the old status page is devices.html (2026-10-27) [JS]
+
+The page with the device values, Send command and Recent messages is
+now `devices.html` + `devices.js` ("devices" in the headers). The new
+`status.html` + `status.js` is rts2-mon's "status" item: centrald and
+every device, one row each, with its state text, its blocking and the
+state bits in hex, coloured as rts2-mon colours them. It is refreshed
+every second (every 10 s in a hidden tab) from the new `/api/status`.
+That is plain HTTP, because the sites' Apache passes no WebSocket. If
+rts2-httpd stops answering, the rows dim and the badge says since when.
+Header links on all six pages: image archive, target list, target
+editor, telemetry, devices, status.
+
+rts2-httpd: `/api/status` lists centrald, then every device, with
+`name`, `type`, `state`, `bop` (the full BOP state), `statestring`
+(`Connection::getStateString (true)`, the very text rts2-mon prints),
+`progress` (%, null) and `level`. `level` is rts2-mon's colour
+(`NCentraldWindow::printState`, ported as `statusLevel ()`): failure,
+warning (bad weather), priority (moving, exposing, ...), ok.
+
+The page takes the blocking out of the state text and shows it as
+badges: solid when the device blocks it itself (state bits, rts2-mon's
+`| BLOCK EXPOSURE`), outlined when another device does (full BOP state,
+rts2-mon's `# BLOCK EXPOSING`). It also shows the dome's
+BLOCK_OPEN/BLOCK_CLOSE and STOP.
+
+A camera that had read out its image (chip state `CAM_HAS_IMAGE` alone)
+got no chip text from `Connection::getCameraChipState`, so its line
+started " | 5 s LIGHT"; fixed in base the same day, it is "0 idle" now
+(base/HISTORY.md, "A camera holding an image is idle").
+
+Tested here, against the private centrald + camd-dummy C0: a 5 s
+exposure shows C0 blue (priority), "0 EXPOSING ... 51%" and its own
+BLOCK TELESCOPE MOVEMENT, and centrald the same block from another
+device; after the readout the rows go back to green with no badges.
+Screenshots at 1200 and 420 px. Not tested: the stale display. SBT's
+rts2-httpd has no /api/status until the next release.
+
+## devices.html: Recent messages under Send command, newest first; pushed message times (2026-10-27) [JS]
+
+- Recent messages is now the second panel, right under Send command.
+- The list was in two orders at once: the initial load (/api/messages,
+  oldest first) was appended, oldest at the top, while pushed messages
+  went on top; trimming to 50 cut the bottom, which were then the newest
+  loaded ones. Now every message goes on top, so the list is newest first
+  throughout.
+- rts2-httpd's `/ws` message push wrote its time with a plain `<<`
+  (`1.79313e+09`), minutes off, so pushed messages got wrong times and
+  stood out of order. Now `jsonTime ()`, as base/STATUS.md requires for
+  every time in rts2-httpd's JSON.
+- The made-up "state -> ..." lines (from `/ws` state events, task 8's
+  first pass) are gone: they were not messages, vanished at every reload,
+  and status.html shows the states.
+
+Tested here against the private centrald + camd-dummy: an exposure
+started after the page loaded; its pushed messages have the right times
+and the list is in order, newest first, with the panels in the new order.

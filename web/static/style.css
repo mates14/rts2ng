@@ -67,11 +67,46 @@ body {
 	line-height: 1.4;
 }
 
+/* Every page: title left, the links to all pages centred, and the page's
+ * status badge (if any) right. A grid with equal outer columns, so the
+ * links stay in the middle whatever the title and the badge are. */
 header {
-	display: flex;
+	display: grid;
+	grid-template-columns: 1fr auto 1fr;
 	align-items: center;
-	justify-content: space-between;
+	gap: 16px;
 	margin-bottom: 16px;
+}
+
+header > .header-links {
+	grid-column: 2;
+}
+
+header > .conn-status {
+	grid-column: 3;
+	justify-self: end;
+}
+
+/* the page you are on: still a link, but marked */
+.back-link.current {
+	color: var(--text);
+	font-weight: 600;
+	border-bottom: 2px solid var(--accent);
+	padding-bottom: 2px;
+}
+
+@media (max-width: 700px) {
+	header {
+		grid-template-columns: 1fr auto;
+	}
+	header > .header-links {
+		grid-column: 1 / -1;
+		grid-row: 2;
+		flex-wrap: wrap;
+	}
+	header > .conn-status {
+		grid-column: 2;
+	}
 }
 
 header h1 {
@@ -117,14 +152,14 @@ header h1 {
 	letter-spacing: 0.04em;
 }
 
-#command-form, #rec-form {
+#command-form, #rawcmd-form, #rec-form {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 12px;
 	align-items: flex-end;
 }
 
-#command-form label, #rec-form label {
+#command-form label, #rawcmd-form label, #rec-form label {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
@@ -132,7 +167,7 @@ header h1 {
 	color: var(--text-muted);
 }
 
-#command-form input, #command-form select, #rec-form input, #rec-form select {
+#command-form input, #command-form select, #rawcmd-form input, #rawcmd-form select, #rec-form input, #rec-form select {
 	font-size: 13px;
 	padding: 6px 8px;
 	border: 1px solid var(--border);
@@ -159,7 +194,7 @@ header h1 {
 	filter: brightness(1.1);
 }
 
-#command-result, #rec-result {
+#command-result, #rawcmd-result, #rec-result {
 	margin-top: 10px;
 	font-family: var(--mono);
 	font-size: 12px;
@@ -167,12 +202,17 @@ header h1 {
 	word-break: break-all;
 }
 
-#command-result.ok, #rec-result.ok {
+#command-result.ok, #rawcmd-result.ok, #rec-result.ok {
 	color: var(--good);
 }
 
-#command-result.err, #rec-result.err {
+#command-result.err, #rawcmd-result.err, #rec-result.err {
 	color: var(--bad);
+}
+
+/* status.html: the command row, above the set-value row */
+#rawcmd-result {
+	margin-bottom: 16px;
 }
 
 #devices {
@@ -1024,4 +1064,99 @@ header h1 {
 	background: var(--panel-bg);
 	border-radius: 6px;
 	cursor: pointer;
+}
+
+/* status.html - rts2-mon's status list */
+
+.status-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+
+.status-table th, .status-table td {
+	padding: 5px 8px;
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	vertical-align: top;
+}
+
+/* fixed widths, so that the columns stay put as the state texts change */
+.status-table th:nth-child(1) { width: 110px; }
+.status-table th:nth-child(3) { width: 250px; }
+.status-table th:nth-child(4) { width: 90px; }
+
+.status-table th {
+	color: var(--text-muted);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.status-table td.dev-name {
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.status-table td.dev-state, .status-table td.state-hex {
+	font-family: var(--mono);
+	font-size: 12px;
+}
+
+.status-table .state-hex {
+	text-align: right;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+/* rts2-mon's colours (NCentraldWindow::printState, the level api/status
+ * sends): a bar at the left and the name in the colour */
+.status-table tr td:first-child {
+	border-left: 4px solid transparent;
+}
+
+.status-table tr.level-ok td:first-child { border-left-color: var(--good); color: var(--good); }
+.status-table tr.level-priority td:first-child { border-left-color: var(--accent); color: var(--accent); }
+.status-table tr.level-warning td:first-child { border-left-color: var(--warn); color: var(--warn); }
+.status-table tr.level-failure td:first-child { border-left-color: var(--bad); color: var(--bad); }
+.status-table tr.level-failure td.dev-state { color: var(--bad); }
+
+.block-badge {
+	display: inline-block;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 1px 6px;
+	margin: 1px 0;
+	border-radius: 4px;
+	border: 1px solid var(--warn);
+	white-space: nowrap;
+}
+
+/* the device blocks it itself */
+.block-badge.own {
+	background: var(--warn);
+	color: white;
+}
+
+/* the block comes from another device */
+.block-badge.other {
+	color: var(--warn);
+}
+
+.status-legend {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin: 10px 0 0 0;
+}
+
+body.status-stale .status-table tbody {
+	opacity: 0.4;
+}
+
+@media (max-width: 700px) {
+	.status-table .state-hex {
+		display: none;
+	}
+	.status-table th:nth-child(3) {
+		width: auto;
+	}
 }

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Status</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<header>
+		<h1>RTS2 Status</h1>
+		<nav class="header-links">
+			<a href="index.html" class="back-link">image archive</a>
+			<a href="targets.html" class="back-link">target list</a>
+			<a href="target.html" class="back-link">target editor</a>
+			<a href="records.html" class="back-link">telemetry</a>
+			<a href="devices.html" class="back-link">devices</a>
+			<a href="status.html" class="back-link current" aria-current="page">status</a>
+		</nav>
+		<div id="status-conn" class="conn-status conn-unknown">loading&hellip;</div>
+	</header>
+
+	<section class="panel">
+		<h2>Devices</h2>
+		<table id="status-table" class="status-table">
+			<thead><tr><th>Device</th><th>State</th><th>Blocking</th><th class="state-hex">State bits</th></tr></thead>
+			<tbody></tbody>
+		</table>
+		<p class="status-legend">
+			<span class="block-badge own">BLOCK EXPOSURE</span> the device blocks it itself,
+			<span class="block-badge other">BLOCK EXPOSING</span> another device blocks it
+			(rts2-mon's <code>|</code> and <code>#</code>). Updated every second.
+		</p>
+	</section>
+
+	<script src="status.js"></script>
+</body>
+</html>

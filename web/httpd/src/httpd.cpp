@@ -45,6 +45,7 @@
 #define OPT_STATIC_DIR       OPT_LOCAL + 5
 #define OPT_BIND_ADDRESS     OPT_LOCAL + 6
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cmath>
@@ -58,6 +59,7 @@
 #include <list>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <sys/eventfd.h>
@@ -302,6 +304,40 @@ class HttpDevClient:public DevClient
 		HttpD *master;
 };
 
+/**
+ * A raw command from /api/cmd ("stop", "killall", ...), which holds its
+ * suspended HTTP request until the device answers - as classic's api.cpp
+ * does by default (its AsyncAPI), so that the page can say whether the
+ * command worked, with the device's error text if not. The answer goes
+ * through HttpD::commandAnswered() and is sent from pollSuccess(), never
+ * from inside the kernel's callback. A device whose connection breaks
+ * keeps the command and sends it again when it is back (Connection::
+ * reconnectSocket ()), so HttpD::idle () answers a request that waited
+ * CMD_TIMEOUT for nothing; a later answer of the device is then ignored.
+ * A command deleted unanswered (its connection deleted) answers from the
+ * destructor. Method bodies after HttpD, like HttpDevClient's.
+ * [JS 2026-10-27]
+ */
+class CommandHttp:public Command
+{
+	public:
+		CommandHttp (HttpD *_master, struct MHD_Connection *_request, const char *_device, const char *_text);
+		virtual ~CommandHttp ();
+		virtual int commandReturnOK (Connection *conn);
+		virtual int commandReturnFailed (int status, Connection *conn);
+		// ~HttpD: the HTTP server is gone, there is nothing to answer
+		void forget () { master = nullptr; }
+		// HttpD::idle (): no answer within CMD_TIMEOUT s
+		void checkTimeout (time_t now);
+	private:
+		void answer (bool ok, int status, const char *error);
+		HttpD *master;
+		struct MHD_Connection *request;
+		time_t started;
+		std::string device;
+		std::string text;
+};
+
 // STATUS.md task 7: which class HttpD actually extends is a compile-time
 // choice, matching classic src/httpd/httpd.h's own #ifdef RTS2_HAVE_PGSQL
 // split - DeviceDb layers DB connection handling (--database/--config
@@ -336,9 +372,24 @@ class HttpD:public HttpDBase
 		void broadcastValue (const char *device, Value *value);
 		void broadcastState (const char *device, Connection *conn);
 		void broadcastMessage (Message &msg);
+		// Called from CommandHttp: queue the answer to a held /api/cmd
+		// request, sent from pollSuccess(), and forget the command.
+		void commandAnswered (CommandHttp *cmd, struct MHD_Connection *connection, const std::string &body);
+		void commandGone (CommandHttp *cmd) { pendingCommands.erase (cmd); }
+		// The device name a push carries: "centrald", as /api/getall
+		// names it, for the connection to centrald, whose own name is
+		// empty (status.html showed its values as a nameless device).
+		const char *pushName (Connection *conn)
+		{
+			connections_t *cc = getCentraldConns ();
+			if (std::find (cc->begin (), cc->end (), conn) != cc->end ())
+				return "centrald";
+			return conn->getName ();
+		}
 
 	protected:
 		virtual int processOption (int in_opt);
+		virtual int idle ();
 		virtual int init ();
 		virtual int info () { return 0; }
 
@@ -508,6 +559,13 @@ class HttpD:public HttpDBase
 		// pairing classic's api.cpp repeats at every one of those call
 		// sites without a shared helper; worth having one here since
 		// web will keep needing it.
+		// /api/cmd: commands waiting for their device's answer (so that
+		// ~HttpD can tell them the HTTP server is gone), and the answers
+		// waiting to be sent. Main thread only.
+		std::set <CommandHttp *> pendingCommands;
+		std::vector <std::pair <struct MHD_Connection *, std::string>> commandResults;
+		void drainCommandResults ();
+
 		Connection *findDeviceConnection (const char *device)
 		{
 			if (isCentraldName (device))
@@ -519,6 +577,57 @@ class HttpD:public HttpDBase
 }
 
 using namespace rts2web;
+
+// /api/status: the colour rts2-mon's status list gives a device
+// (NCentraldWindow::printState, base/monitor/src/daemonwindow.cpp), as a
+// word the page turns into a class: failure, warning, priority (moving,
+// in progress) or ok. [JS 2026-10-27]
+static const char *statusLevel (Connection *conn, double progress)
+{
+	int real_state = conn->getRealState ();
+	if (conn->getErrorState ())
+		return "failure";
+	if (!conn->isGoodWeather ())
+		return "warning";
+	if (!std::isnan (progress) && progress < 100.0)
+		return "priority";
+	if (conn->getOtherType () == DEVICE_TYPE_FOCUS && real_state & FOC_FOCUSING)
+		return "priority";
+	if (conn->getOtherType () == DEVICE_TYPE_MOUNT)
+	{
+		if ((real_state & TEL_MASK_MOVING) == TEL_MOVING || (real_state & TEL_MASK_MOVING) == TEL_PARKING)
+			return "priority";
+		if ((real_state & TEL_MASK_MOVING) == TEL_OBSERVING && !(real_state & TEL_TRACKING))
+			return "failure";
+		return "ok";
+	}
+	if ((conn->getOtherType () == DEVICE_TYPE_DOME || conn->getOtherType () == DEVICE_TYPE_CUPOLA)
+		&& (real_state & DOME_DOME_MASK) != DOME_CLOSED && (real_state & DOME_DOME_MASK) != DOME_OPENED)
+		return "priority";
+	return "ok";
+}
+
+// One row of /api/status: what rts2-mon's status list prints (name, the
+// verbose state string with its blocking, the state in hex), plus the
+// parts a page needs to draw it: the device type, the full BOP state
+// (what other devices block, rts2-mon's "#"), progress in % and the level.
+static void statusEntry (const char *name, Connection *conn, std::ostringstream &os)
+{
+	double progress = conn->getProgress (getNow ());
+	os << "{\"name\":";
+	jsonString (name, os);
+	os << ",\"type\":" << conn->getOtherType ()
+		<< ",\"state\":" << conn->getState ()
+		<< ",\"bop\":" << conn->getFullBopState ()
+		<< ",\"statestring\":";
+	jsonString (conn->getStateString (true).c_str (), os);
+	os << ",\"progress\":";
+	if (std::isnan (progress))
+		os << "null";
+	else
+		os << progress;
+	os << ",\"level\":\"" << statusLevel (conn, progress) << "\"}";
+}
 
 HttpD::HttpD (int argc, char **argv):HttpDBase (argc, argv, DEVICE_TYPE_HTTPD, "HTTPD")
 {
@@ -533,7 +642,7 @@ HttpD::HttpD (int argc, char **argv):HttpDBase (argc, argv, DEVICE_TYPE_HTTPD, "
 	addOption (OPT_IMAGES_DIR, "images-dir", 1, "root of the image archive on disk (enables /preview/)");
 	addOption (OPT_CACHE_DIR, "cache-dir", 1, "root of the on-disk preview cache (defaults to <images-dir>/.cache)");
 	addOption (OPT_PREVIEW_WORKERS, "preview-workers", 1, "worker threads for preview generation (default 2)");
-	addOption (OPT_AUTH_FILE, "auth-file", 1, "credentials file gating /api/set,inc,dec (user:cryptedpass:perms lines, crypt(3) hashes) - writes are unrestricted if not set");
+	addOption (OPT_AUTH_FILE, "auth-file", 1, "credentials file gating /api/set,inc,dec,cmd (user:cryptedpass:perms lines, crypt(3) hashes) - writes are unrestricted if not set");
 	addOption (OPT_STATIC_DIR, "static-dir", 1, "root of the static web frontend (web/static/) - disabled if not set");
 	addOption (OPT_BIND_ADDRESS, "bind-address", 1, "restrict the HTTP port to this address (e.g. 127.0.0.1) - binds all interfaces if not set");
 }
@@ -545,6 +654,10 @@ HttpD::~HttpD ()
 	// calling wakeup()) once wakeupFd/wsClients/mhd start being torn
 	// down below.
 	delete workerPool;
+	// The kernel deletes queued commands with their connections, after
+	// this destructor; by then there is no HTTP server to answer.
+	for (std::set <CommandHttp *>::iterator iter = pendingCommands.begin (); iter != pendingCommands.end (); iter++)
+		(*iter)->forget ();
 	if (wakeupFd >= 0)
 		close (wakeupFd);
 
@@ -557,15 +670,105 @@ HttpD::~HttpD ()
 		MHD_stop_daemon (mhd);
 }
 
+// s; an HTTP request does not wait longer for the device
+#define CMD_TIMEOUT    30
+
+CommandHttp::CommandHttp (HttpD *_master, struct MHD_Connection *_request, const char *_device, const char *_text):Command (_master, _text), master (_master), request (_request), device (_device), text (_text)
+{
+	started = time (nullptr);
+}
+
+void CommandHttp::checkTimeout (time_t now)
+{
+	if (now - started < CMD_TIMEOUT)
+		return;
+	std::ostringstream err;
+	err << "no answer from the device within " << CMD_TIMEOUT << " s";
+	answer (false, DEVDEM_E_TIMEOUT, err.str ().c_str ());
+}
+
+CommandHttp::~CommandHttp ()
+{
+	answer (false, DEVDEM_E_SYSTEM, "device disconnected before answering");
+	if (master)
+		master->commandGone (this);
+}
+
+int CommandHttp::commandReturnOK (Connection *conn)
+{
+	answer (true, 0, "");
+	return Command::commandReturnOK (conn);
+}
+
+int CommandHttp::commandReturnFailed (int status, Connection *conn)
+{
+	// the rest of the device's "-1 <text>" line
+	const char *error = conn->paramNextWholeString ();
+	answer (false, status, error ? error : "");
+	return Command::commandReturnFailed (status, conn);
+}
+
+void CommandHttp::answer (bool ok, int status, const char *error)
+{
+	if (master == nullptr || request == nullptr)
+		return;
+	std::ostringstream os;
+	os << "{\"device\":";
+	jsonString (device.c_str (), os);
+	os << ",\"command\":";
+	jsonString (text.c_str (), os);
+	os << ",\"ok\":" << (ok ? "true" : "false") << ",\"status\":" << status << ",\"error\":";
+	jsonString (error, os);
+	os << "}";
+	master->commandAnswered (this, request, os.str ());
+	request = nullptr;
+}
+
+void HttpD::commandAnswered (CommandHttp *cmd, struct MHD_Connection *connection, const std::string &body)
+{
+	pendingCommands.erase (cmd);
+	commandResults.push_back (std::make_pair (connection, body));
+	// pollSuccess() sends it; the kernel's callback may even come before
+	// the request handler that queued the command has returned
+	wakeup ();
+}
+
+int HttpD::idle ()
+{
+	// a copy: an answer takes its command out of pendingCommands
+	std::vector <CommandHttp *> pending (pendingCommands.begin (), pendingCommands.end ());
+	time_t now = time (nullptr);
+	for (std::vector <CommandHttp *>::iterator iter = pending.begin (); iter != pending.end (); iter++)
+		(*iter)->checkTimeout (now);
+	return HttpDBase::idle ();
+}
+
+void HttpD::drainCommandResults ()
+{
+	if (commandResults.empty ())
+		return;
+	for (std::vector <std::pair <struct MHD_Connection *, std::string>>::iterator iter = commandResults.begin (); iter != commandResults.end (); iter++)
+	{
+		struct MHD_Response *response = MHD_create_response_from_buffer (iter->second.length (), (void *) iter->second.c_str (), MHD_RESPMEM_MUST_COPY);
+		MHD_add_response_header (response, "Content-Type", "application/json");
+		MHD_queue_response (iter->first, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		MHD_resume_connection (iter->first);
+	}
+	commandResults.clear ();
+	// Same requirement as drainPreviewResults() - see its comment.
+	MHD_run (mhd);
+}
+
 void HttpDevClient::valueChanged (Value *value)
 {
-	master->broadcastValue (getConnection ()->getName (), value);
+	master->broadcastValue (master->pushName (getConnection ()), value);
 	DevClient::valueChanged (value);
 }
 
 void HttpDevClient::stateChanged (ServerState *state)
 {
-	master->broadcastState (getConnection ()->getName (), getConnection ());
+	master->broadcastState (master->pushName (getConnection ()), getConnection ());
 	DevClient::stateChanged (state);
 }
 
@@ -620,7 +823,7 @@ int HttpD::init ()
 
 	if (authFile.empty ())
 	{
-		logStream (MESSAGE_WARNING) << "no --auth-file set - /api/set,inc,dec are UNRESTRICTED (any client may write to any device)" << sendLog;
+		logStream (MESSAGE_WARNING) << "no --auth-file set - /api/set,inc,dec,cmd are UNRESTRICTED (any client may write to any device)" << sendLog;
 	}
 	else
 	{
@@ -759,6 +962,7 @@ void HttpD::pollSuccess ()
 #ifdef WEB_HAVE_DB
 		drainDbResults ();
 #endif
+		drainCommandResults ();
 	}
 
 	for (std::list <WsClient *>::iterator iter = wsClients.begin (); iter != wsClients.end (); )
@@ -788,7 +992,11 @@ void HttpD::broadcastMessage (Message &msg)
 	if (wsClients.empty ())
 		return;
 	std::ostringstream os;
-	os << "{\"event\":\"message\",\"time\":" << msg.getMessageTime () << ",\"device\":";
+	// jsonTime: a plain << printed 1.79313e+09, minutes off (devices.html
+	// listed pushed messages out of order) [JS 2026-10-27]
+	os << "{\"event\":\"message\",\"time\":";
+	jsonTime (msg.getMessageTime (), os);
+	os << ",\"device\":";
 	jsonString (msg.getMessageOName (), os);
 	os << ",\"type\":" << msg.getType () << ",\"text\":";
 	jsonString (msg.getMessageString ().c_str (), os);
@@ -2065,6 +2273,30 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 			}
 			os << "}";
 		}
+		else if (!strcmp (url, "/api/status"))
+		{
+			// rts2-mon's "status" item (NCentraldWindow): centrald, then
+			// every device, in the order this daemon knows them.
+			os << "[";
+			bool first = true;
+			for (connections_t::iterator iter = getCentraldConns ()->begin (); iter != getCentraldConns ()->end (); iter++)
+			{
+				if (!first)
+					os << ",";
+				first = false;
+				statusEntry ("centrald", *iter, os);
+			}
+			for (connections_t::iterator iter = getConnections ()->begin (); iter != getConnections ()->end (); iter++)
+			{
+				if ((*iter)->getName ()[0] == '\0')
+					continue;
+				if (!first)
+					os << ",";
+				first = false;
+				statusEntry ((*iter)->getName (), *iter, os);
+			}
+			os << "]";
+		}
 		else if (!strcmp (url, "/api/get"))
 		{
 			const char *device = getParam (connection, "d", "");
@@ -2162,6 +2394,36 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 			conn->queCommand (new CommandChangeValue (this, std::string (variable), op, std::string (value)));
 
 			sendConnectionValues (conn, os);
+		}
+		else if (!strcmp (url, "/api/cmd"))
+		{
+			// Ported from classic api.cpp's "cmd": a raw command line
+			// ("stop", "killall", ...) to a device or centrald, as
+			// rts2-mon's command line sends it. The request waits for
+			// the device's answer (CommandHttp). Not ported: classic's
+			// async=1 (fire-and-forget) and the commands to HTTPD itself
+			// (autosave).
+			const char *device = getParam (connection, "d", "");
+			const char *cmd = getParam (connection, "c", "");
+			if (device[0] == '\0' || cmd[0] == '\0')
+				throw ApiError ("missing d or c parameter");
+			// one line: a newline would send a second command
+			if (strpbrk (cmd, "\r\n"))
+				throw ApiError ("command must be one line");
+
+			std::string authError;
+			if (!checkWriteAuth (connection, device, authError))
+				return sendUnauthorized (connection, authError.c_str ());
+
+			Connection *conn = findDeviceConnection (device);
+			if (conn == nullptr)
+				throw ApiError ("cannot find device with given name");
+
+			MHD_suspend_connection (connection);
+			CommandHttp *command = new CommandHttp (this, connection, device, cmd);
+			pendingCommands.insert (command);
+			conn->queCommand (command);
+			return MHD_YES;
 		}
 		else if (!strcmp (url, "/api/switchstate"))
 		{
