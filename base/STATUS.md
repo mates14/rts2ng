@@ -386,6 +386,13 @@ it, and say which classes you added.
   (set the clock 30 s off, see the own offset move 0.125 deg).
   `teld/gemini-udp/OPERATION.md` 5, "The mount's own RA offset".
   [JS 2026-10-26]
+- A script value the operand parser cannot read (`WINDOW=50:40:100:80`,
+  or `WINDOW="50 40 100 80"`) throws `rts2script::UnknowOperantMultiplier`
+  out of `OperandsSet::parseOperand` (script/src/operands.cpp:118), and
+  nothing up through `Script::parseBuf` catches it: rts2-scriptexec aborts
+  with SIGABRT. Anything parsing a target's script the same way would too.
+  Classic has the same code and no catch. Found 2026-10-28, not fixed.
+  [JS 2026-10-28]
 - `LTM1_1`/`LTM2_2` ignore binning.
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on

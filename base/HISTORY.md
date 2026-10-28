@@ -4126,3 +4126,11 @@ is "0 idle"; `IMAGE_READY` still follows.
 Tested against camd-dummy: "0 idle | 2 s LIGHT 1x1 | 32.8 | IMAGE_READY |
 SHUTTER_CLEARED" after a readout, "0 EXPOSING | ..." during the exposure
 as before; kernel tests pass. rts2-mon gets the same text (same function).
+
+## Block::getTimeout () (2026-10-27) [JS]
+
+A getter for the idle timeout `setTimeout ()` sets, added for rts2-httpd:
+it shortens the loop's wait to libmicrohttpd's own timeout while a large
+response is being sent, and needs the loop's own value to go back to
+(web/STATUS.md, "Image archive: pages, filters, enlarged images,
+downloads"). Additive; nothing else changes.

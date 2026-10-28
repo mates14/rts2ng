@@ -310,6 +310,11 @@ class Block: public App
 			if (new_timeout < idle_timeout)
 				idle_timeout = new_timeout;
 		}
+
+		/**
+		 * Timeout for idle calls, in usec (setTimeout ()). [JS 2026-10-27]
+		 */
+		long int getTimeout () { return idle_timeout; }
 		void oneRunLoop ();
 
 		/**
