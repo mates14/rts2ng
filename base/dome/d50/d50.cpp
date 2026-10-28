@@ -26,6 +26,13 @@
 #define TIME_TO_OPEN_DOME              40
 // this is to surely cross the EMI-caused false signal of endswitch being connected
 #define MINIMAL_TIME_TO_MOVE              2
+// base note: a close waiting for the mount (moving, or at rest outside the
+// dome limit) waited silently for ever; a real park takes ~25 s. After this
+// the wait is reported as critical, once.
+#define MOUNT_WAIT_ALARM_SEC           90
+// park sent to a mount at rest outside the dome limit at most this often;
+// classic sent one at every idle, several a second (D50, 2026-10-28)
+#define PARK_REPEAT_SEC                30
 
 // domeMotorState selection values
 #define DOME_MOTOR_STATE_OFF		0
@@ -103,6 +110,19 @@ class D50:public Ford
 		* @return zero (0) if the dome is parked or inside "closed-dome" safe area, -1 if an error occured, 1 when parking in progress, 2 otherwise
 		*/
 		int getMountState ();
+
+		// a close waiting for the mount since then (0 = not waiting); whether
+		// that wait was reported; when park was last sent to the mount
+		double mountWaitSince = 0;
+		double mountWaitLast = 0;
+		bool mountWaitReported = false;
+		double parkSentAt = 0;
+
+		/**
+		 * The close waits for the mount: reports it once after
+		 * MOUNT_WAIT_ALARM_SEC, so a roof held open in bad weather calls a human.
+		 */
+		void waitingForMount (int mountState);
 
 	protected:
 		virtual int init ();
@@ -320,9 +340,13 @@ int D50::startClose ()
 				break;
 			case 1:
 				logStream (MESSAGE_DEBUG) << "startClose: Mount is moving or parking, waiting for it to stop" << sendLog;
+				waitingForMount (mountState);
 				return 1;
 				break;
 			case 2:
+				waitingForMount (mountState);
+				if (getNow () - parkSentAt < PARK_REPEAT_SEC)
+					return 1;
 				logStream (MESSAGE_DEBUG) << "startClose: Mount is not within limits at the moment, sending 'park' command." << sendLog;
 				rts2core::Connection *connMount = NULL;
 				connMount = getOpenConnection (mountDevice);
@@ -332,10 +356,17 @@ int D50::startClose ()
 					return -1;
 				}
 				connMount->queCommand (new rts2core::Command (this, COMMAND_TELD_PARK));
+				parkSentAt = getNow ();
 				return 1;
 				break;
 		}
 	}
+	// the mount is safe (or ignored): the close goes on
+	if (mountWaitSince != 0 && mountWaitReported)
+		logStream (MESSAGE_INFO) << "the mount is in a position safe for the dome after " << (int) (getNow () - mountWaitSince) << " s, closing" << sendLog;
+	mountWaitSince = 0;
+	mountWaitReported = false;
+	parkSentAt = 0;
 
 	if (closing)
 	{
@@ -427,6 +458,24 @@ int D50::stop ()
 	timeToOpenMax = timeToOpenMin = 0;
 	timeToCloseMax = timeToCloseMin = 0;
 	return stopMotors ();
+}
+
+void D50::waitingForMount (int mountState)
+{
+	// startClose () runs at every idle while a close is wanted; a gap means the
+	// earlier wait ended without a close (the weather turned good)
+	if (mountWaitSince == 0 || getNow () - mountWaitLast > 10)
+	{
+		mountWaitSince = getNow ();
+		mountWaitReported = false;
+	}
+	mountWaitLast = getNow ();
+	if (mountWaitReported || getNow () - mountWaitSince < MOUNT_WAIT_ALARM_SEC)
+		return;
+	mountWaitReported = true;
+	logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "the dome cannot close: for " << (int) (getNow () - mountWaitSince)
+		<< " s the mount " << (mountState == 1 ? "is moving" : "is at rest outside the dome limit (" + std::string (mountInsideDomeVariable) + " false), park sent")
+		<< " - check the mount, or set ignore_mount_state if it is really safe" << sendLog;
 }
 
 int D50::getMountState ()

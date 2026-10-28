@@ -192,6 +192,12 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - The mount sends `inside_dome_limit` the moment it changes. The dome waits
   while the mount is moving or parking. The mount refuses any move but park
   while the dome is closing or waiting to close.
+- A close waiting for the mount sends `park` at once, then at most every
+  30 s while the mount stays at rest outside the dome limit, and reports a
+  wait of over 90 s once as critical (`D50::waitingForMount ()`): the roof
+  still never closes onto a mount outside the limit, but a roof held open
+  in bad weather calls a human. Classic waited silently and sent `park`
+  at every idle. [JS 2026-10-28]
 - The dome raises `BOP_TEL_MOVE` (not only `BOP_EXPOSURE`) while opening.
 - A close that does not reach the end switch is retried 3 times
   (`Dome::closeFailed()`), then reported as critical.

@@ -191,6 +191,9 @@ class Dome:public rts2core::Device
 		int checkOpening ();
 
 		int closeDomeWeather ();
+		// closeDomeWeather () logged for this bad-weather period; reset when
+		// the weather is good again
+		bool weatherCloseLogged = false;
 
 		rts2core::ValueString *stateMaster;
 

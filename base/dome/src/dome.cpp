@@ -349,6 +349,7 @@ int Dome::idle ()
 	checkOpening ();
 	if (isGoodWeather ())
 	{
+		weatherCloseLogged = false;
 		if (weatherOpensDome->getValueBool () == true && (getMasterState () & SERVERD_ONOFF_MASK) == SERVERD_STANDBY)
 		{
 			setMasterOn ();
@@ -403,7 +404,15 @@ int Dome::closeDomeWeather ()
 	{
 		if (domeAutoClose == NULL || domeAutoClose->getValueBool () == true)
 		{
-			logStream (MESSAGE_DEBUG) << "closeDomeWeather: domeCloseStart" << sendLog;
+			// base note: classic logged this on every idle () in bad weather -
+			// several lines a second with --debug (D50 dome, 2026-10-28: 5644
+			// in 30 min). Once per bad-weather period; the close itself still
+			// runs on every pass.
+			if (!weatherCloseLogged)
+			{
+				logStream (MESSAGE_DEBUG) << "closeDomeWeather: domeCloseStart" << sendLog;
+				weatherCloseLogged = true;
+			}
 			ret = domeCloseStart ();
 		}
 		setMasterStandby ();

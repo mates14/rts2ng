@@ -4134,3 +4134,41 @@ it shortens the loop's wait to libmicrohttpd's own timeout while a large
 response is being sent, and needs the loop's own value to go back to
 (web/STATUS.md, "Image archive: pages, filters, enlarged images,
 downloads"). Additive; nothing else changes.
+
+## D50 dome: weather log, a close that waits for the mount (2026-10-28) [JS]
+
+D50's DOME logged `closeDomeWeather: domeCloseStart` about 3 times a
+second (5644 lines in 30 min) in bad weather with the roof closed. The
+BART fix of October ("Debug messages without --debug") only drops DEBUG
+from daemons run without `--debug`; D50's dome runs with it. `Dome` now logs
+the line once per bad-weather period (reset when the weather is good); the
+close itself still runs on every pass.
+
+The close at 00:36 that night was checked against the interlock: bad
+weather 00:36:25, the mount outside the limit was sent `park` (four times
+in that second, the mount parked once), parked 00:36:48, roof started
+00:36:51.45, closed 00:37:18; the mount was re-checked on every pass of
+the close. Correct.
+
+But `D50::startClose ()` with the mount at rest outside the dome limit
+sends `park` and returns "waiting" at every idle, with no limit and only
+DEBUG lines. If the park does not bring the mount inside (a mount that
+refuses moves, a wrong park position or `inside_dome_limit`), the roof
+stays open in the rain and nobody is told; on the bench the dummy mount
+parked hundreds of times in 90 s with the roof open. Same in classic. Now
+(`waitingForMount ()`): `park` at once, then at most every 30 s
+(`PARK_REPEAT_SEC`); a wait of over 90 s (`MOUNT_WAIT_ALARM_SEC`; a park
+takes ~25 s) is reported once as CRITICAL with REPORTIT; when the mount
+gets inside the close goes on, with an INFO line if it was reported. A gap
+of over 10 s between calls starts a new wait (the weather turned good).
+The roof still never closes onto a mount outside the limit; a mount that
+does not answer and a mount moving during a close behave as before.
+
+Bench (`dome/tests/d50-bench` plus `rts2-sensor-external` as the weather
+station; the dummy's `move_fast` for a park that ends, `CAL_NUT` as
+`inside_dome_limit`): 258 passes in 20 s of bad weather, one log line;
+mount inside, the roof closes in 7 s; mount at rest outside, `park` at 0,
+32, 62 and 92 s, the critical at 91 s, mount put inside at 103 s, closed 7
+s later. The dummy's own park never ends without `move_fast`
+(`isParking ()` is `isMoving ()`, which waits for a target time a park
+does not set) - a bench limit, not the dome.
