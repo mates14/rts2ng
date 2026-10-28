@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Nightreport</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body class="nightreport-page">
+	<header>
+		<h1>RTS2 Nightreport</h1>
+		<nav class="header-links">
+			<a href="index.html" class="back-link">image archive</a>
+			<a href="targets.html" class="back-link">target list</a>
+			<a href="target.html" class="back-link">target editor</a>
+			<a href="records.html" class="back-link">telemetry</a>
+			<a href="devices.html" class="back-link">devices</a>
+			<a href="status.html" class="back-link">status</a>
+			<a href="monitor.html" class="back-link">monitor</a>
+			<a href="nightreport.html" class="back-link current" aria-current="page">nightreport</a>
+		</nav>
+		<div id="nr-conn" class="conn-status conn-unknown">loading&hellip;</div>
+	</header>
+
+	<section class="panel nr-panel">
+		<div class="nr-controls">
+			<label>Night <input type="date" id="nr-night"></label>
+			<button type="button" id="nr-tonight">current night</button>
+			<span class="nr-show" role="group" aria-label="show">
+				<label><input type="radio" name="nr-show" value="fit" checked> what fits the window</label>
+				<label><input type="radio" name="nr-show" value="tail"> the last <input type="number" id="nr-tail" min="1" value="20"> rows</label>
+				<label><input type="radio" name="nr-show" value="all"> all</label>
+			</span>
+			<label><input type="checkbox" id="nr-hover-on" checked> preview on mouse-over</label>
+			<span id="nr-range" class="nr-range"></span>
+		</div>
+		<div id="nr-list" class="nr-list"></div>
+	</section>
+
+	<div id="nr-hover" class="nr-hover" hidden><img alt=""><div class="nr-hover-text"></div></div>
+
+	<script src="lightbox.js"></script>
+	<script src="nightreport.js"></script>
+</body>
+</html>

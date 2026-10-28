@@ -1928,6 +1928,45 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/nightreport"))
+	{
+		int year = atoi (getParam (connection, "year", "-1"));
+		int month = atoi (getParam (connection, "month", "-1"));
+		int day = atoi (getParam (connection, "day", "-1"));
+		if (year <= 0 || month <= 0 || day <= 0)
+			return sendTextError (connection, MHD_HTTP_BAD_REQUEST, "year, month and day are all required for /api/db/nightreport");
+		std::string imagesDirCopy = imagesDir;
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, imagesDirCopy, year, month, day] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbNightReport (imagesDirCopy, year, month, day, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 	else if (!strcmp (url, "/api/db/images"))
 	{
 		const char *targetStr = getParam (connection, "target", "");

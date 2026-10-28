@@ -276,6 +276,17 @@ struct ImageQuery
 void dbImagesPage (const std::string &imagesDir, const ImageQuery &q, std::ostringstream &os);
 
 /**
+ * GET /api/db/nightreport?year=&month=&day= - what `rts2-nightreport -i`
+ * prints for the night, as rows: `{"from","to","observations":[{"id",
+ * "text","images":[{"text","previewPath","file","time"}]}]}`. "text" is
+ * the very line classic prints (Observation::printObsHeader (),
+ * Image::print (DISPLAY_ALL)), the rest is for the page (hover, click).
+ * The images: one query for the night, grouped by observation.
+ * [JS 2026-10-28]
+ */
+void dbNightReport (const std::string &imagesDir, int year, int month, int day, std::ostringstream &os);
+
+/**
  * GET /api/db/recvals - the catalogue of recorded device/value pairs,
  * with the extent of the samples stored for each:
  * `[{"id":3,"device":"CLOUD","value":"TEMP_DIFF","type":20,

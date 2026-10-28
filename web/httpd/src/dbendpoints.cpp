@@ -8,6 +8,7 @@
 #include "rts2db/targetell.h"
 #include "rts2db/observationset.h"
 #include "rts2db/imageset.h"
+#include "imgdisplay.h"
 #include "rts2db/scheduling.h"
 #include "rts2db/targetlist.h"
 #include "rts2db/targetscripts.h"
@@ -895,6 +896,76 @@ void rts2web::dbImagesPage (const std::string &imagesDir, const ImageQuery &q, s
 		os << ",\"count\":" << iter->second << "}";
 	}
 	os << "]}}";
+}
+
+// a printed line without its ends' blanks and its newline
+static std::string printedLine (const std::string &s)
+{
+	size_t b = s.find_first_not_of (" \n");
+	size_t e = s.find_last_not_of (" \n");
+	return b == std::string::npos ? "" : s.substr (b, e - b + 1);
+}
+
+void rts2web::dbNightReport (const std::string &imagesDir, int year, int month, int day, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	time_t from;
+	int64_t duration;
+	getNightDuration (year, month, day, from, duration);
+	time_t end = from + duration;
+
+	rts2db::ObservationSet obsSet;
+	obsSet.loadTime (&from, &end);
+	rts2db::ImageSetDate is (from, end);
+	is.load ();
+	// the night's images by observation, in time order
+	std::map <int, std::vector <rts2image::Image *>> imagesOf;
+	for (rts2db::ImageSet::iterator iter = is.begin (); iter != is.end (); iter++)
+		imagesOf[(*iter)->getObsId ()].push_back (*iter);
+	// by the exposure start with its microseconds: the set comes sorted by
+	// img_date, whole seconds, and the frames the cameras start together
+	// came in any order (classic's listing too)
+	for (auto &oi : imagesOf)
+		std::stable_sort (oi.second.begin (), oi.second.end (), [] (rts2image::Image *a, rts2image::Image *b) { return a->getExposureStart () < b->getExposureStart (); });
+
+	os << "{\"from\":";
+	jsonTime (from, os);
+	os << ",\"to\":";
+	jsonTime (end, os);
+	os << ",\"observations\":[";
+	for (rts2db::ObservationSet::iterator iter = obsSet.begin (); iter != obsSet.end (); iter++)
+	{
+		if (iter != obsSet.begin ())
+			os << ",";
+		std::ostringstream line;
+		iter->printObsHeader (line);
+		os << "{\"id\":" << iter->getObsId () << ",\"text\":";
+		jsonString (printedLine (line.str ()).c_str (), os);
+		os << ",\"images\":[";
+		const std::vector <rts2image::Image *> &imgs = imagesOf[iter->getObsId ()];
+		for (size_t i = 0; i < imgs.size (); i++)
+		{
+			rts2image::Image *img = imgs[i];
+			std::ostringstream iline;
+			img->print (iline, DISPLAY_ALL, nullptr);
+			const char *path = img->getFileName () ? img->getFileName () : "";
+			const char *slash = strrchr (path, '/');
+			if (i)
+				os << ",";
+			os << "{\"text\":";
+			jsonString (printedLine (iline.str ()).c_str (), os);
+			os << ",\"previewPath\":";
+			jsonString (computePreviewPath (imagesDir, path).c_str (), os);
+			os << ",\"file\":";
+			jsonString (slash ? slash + 1 : path, os);
+			os << ",\"time\":";
+			jsonTime (img->getExposureStart (), os);
+			os << "}";
+		}
+		os << "]}";
+	}
+	os << "]}";
 }
 
 void rts2web::dbListRecvals (std::ostringstream &os)

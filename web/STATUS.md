@@ -3682,3 +3682,38 @@ Now a big preview (ps over 400, the enlarged images at 2048) is quality
 `/preview/...&jq=N` sets it (10-100). The quality is part of the cache
 name (`.jq98.`), so old 85 previews are not found any more - a purge
 clears them; the cache grows by about 2x per enlarged image viewed.
+
+## nightreport.html: rts2-nightreport -i as a page (2026-10-28) [JS]
+
+"nightreport" in the headers, after monitor. What `rts2-nightreport -i`
+prints for a night (the current one, or one picked): every observation's
+line, then its images' lines or "--- no images ---", in monospace,
+refreshed every 30 s (2 min in a hidden tab); new rows flash. Shown as
+what fits the window without scrolling (the default; the list's height is
+measured to the window's bottom, less what the page still overflows by,
+and rows dropped until it does not scroll), the last N rows (editable), or
+all - kept in the browser. A cut inside an observation puts that
+observation's line on top. In an image row the acquisition time
+(classic's Timestamp, found in the line by its format) is a link: the
+mouse over it shows the preview (400 px) beside it - "preview on
+mouse-over", on by default, kept in the browser - and a click opens it
+big (lightbox.js), corrected or raw as chosen in the image archive; the
+file name is its tooltip. The rest of the row does nothing.
+
+rts2-httpd: `/api/db/nightreport?year=&month=&day=` gives the rows with the
+very lines classic prints - Observation::printObsHeader () and
+Image::print (DISPLAY_ALL), both in rts2ng already - plus each image's
+preview path, file name and time (`dbNightReport ()`). The images: one
+query for the night, grouped by observation, sorted by the exposure start
+with its microseconds (the set is sorted by img_date, whole seconds, so
+frames the cameras start together came in any order; classic's listing
+too).
+
+Tested on lascaux (the test rts2-httpd, 2026-10-27): the same 37
+observations and the same images per observation as classic's
+rts2-nightreport -i -n 2026-10-27 (590 rows); 134 kB, 0.05 s. The page:
+fit 31 rows at 713 px and 47 at 1013 px, neither list nor page scrolling;
+the last 20 and 5 rows, each starting with its observation's line; all
+591 rows; the preview over the time only (all 29 image rows of the view
+linked, nothing over the row's text), off with the checkbox; the click on
+the time into the lightbox, on the row's text nothing.
