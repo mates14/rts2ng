@@ -3717,3 +3717,21 @@ the last 20 and 5 rows, each starting with its observation's line; all
 591 rows; the preview over the time only (all 29 image rows of the view
 linked, nothing over the row's text), off with the checkbox; the click on
 the time into the lightbox, on the row's text nothing.
+
+## Corrected previews at D50 (2026-10-28) [JS]
+
+asarina runs at D50 too (the site page's C0 image is a `-df.fits`), with
+its default paths - the same as SBT's: `--calib-root /home/mates/calib
+--calib-dir-template "/home/mates/flat{year}/"` for rts2-httpd there.
+C0 is chip andor46 (1024x1024, no overscan, needs no --datasec); its
+masters are in /home/mates/calib/andor46/<year>/ (2016-2026). D50's
+/home/mates/flat2026/ is the old single-camera layout without camera
+directories, which asarina (and calib.cpp) do not read for a frame with
+CCD_NAME.
+
+Tested on lascaux50 with a test rts2-httpd (built in ~torman, own
+centrald, the real DB read-only), every camera/filter/exposure
+combination of 2026-10-27 (32, all C0) against asarina's own choice: the
+same masters for all 32. Exposures with no dark within 3 s (28, 30, 50 s)
+get "flat only"; asarina finds no dark for them either. A corrected C0
+frame loses its dust rings and the dark patch in the middle.
