@@ -2,7 +2,7 @@
 # generation - not otherwise pulled in by base_kernel.
 find_package(Threads REQUIRED)
 
-add_executable(rts2-httpd src/httpd.cpp src/jsonvalue.cpp src/preview.cpp src/userauth.cpp src/websocket.cpp src/workerpool.cpp)
+add_executable(rts2-httpd src/calib.cpp src/httpd.cpp src/jsonvalue.cpp src/preview.cpp src/userauth.cpp src/websocket.cpp src/workerpool.cpp)
 
 if(WEB_WITH_DB)
 	# STATUS.md task 7: DB-bound endpoints. Linking against db alone is

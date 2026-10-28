@@ -18,9 +18,12 @@
 #include "timestamp.h"
 #include "configuration.h"
 
+#include <fitsio.h>
 #include <libnova/libnova.h>
 #include <cmath>
+#include <cstring>
 #include <ctime>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -759,6 +762,139 @@ void rts2web::dbSearchImagesByNight (const std::string &imagesDir, int year, int
 	rts2db::ImageSetDate is (from, end);
 	is.load ();
 	writeImageSetJson (is, imagesDir, os);
+}
+
+// "1x1" from the FITS header (BINX, BINY), "" when it cannot be read. The
+// DB has no binning, so only the images of the page asked for are opened:
+// a header, a few kB each, not the whole night's frames.
+static std::string fitsBinning (const char *path)
+{
+	fitsfile *f;
+	int status = 0;
+	if (path == nullptr || path[0] == '\0' || fits_open_file (&f, path, READONLY, &status))
+		return "";
+	long binx = 0, biny = 0;
+	int sx = 0, sy = 0;
+	fits_read_key (f, TLONG, "BINX", &binx, nullptr, &sx);
+	fits_read_key (f, TLONG, "BINY", &biny, nullptr, &sy);
+	fits_close_file (f, &status);
+	if (sx || binx <= 0)
+		return "";
+	return std::to_string (binx) + "x" + std::to_string (sy || biny <= 0 ? binx : biny);
+}
+
+void rts2web::dbImagesPage (const std::string &imagesDir, const ImageQuery &q, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2db::ImageSet *is;
+	if (q.byTarget >= 0)
+	{
+		// a bad target id is a 400, as in dbSearchImagesByTarget ()
+		rts2db::Target *tar = createTarget (q.byTarget, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
+		delete tar;
+		is = new rts2db::ImageSetTarget (q.byTarget);
+	}
+	else
+	{
+		time_t from;
+		int64_t duration;
+		getNightDuration (q.year, q.month, q.day, from, duration);
+		is = new rts2db::ImageSetDate (from, from + duration);
+	}
+	std::unique_ptr <rts2db::ImageSet> owner (is);
+	is->load ();
+
+	std::map <int, std::string> nameCache;
+	struct Facet { std::string name; int count = 0; };
+	std::map <int, Facet> targets;
+	std::map <std::string, int> cameras, filters;
+	std::vector <rts2image::Image *> matching;
+
+	for (rts2db::ImageSet::iterator iter = is->begin (); iter != is->end (); iter++)
+	{
+		rts2image::Image *img = *iter;
+		const char *cam = img->getCameraName () ? img->getCameraName () : "";
+		const char *flt = img->getFilter () ? img->getFilter () : "";
+		bool okTarget = q.target < 0 || img->getTargetId () == q.target;
+		bool okCamera = q.cameras.empty () || q.cameras.count (cam);
+		bool okFilter = q.filters.empty () || q.filters.count (flt);
+		// each facet with the other two filters applied
+		if (okCamera && okFilter)
+		{
+			Facet &t = targets[img->getTargetId ()];
+			if (t.count++ == 0)
+				t.name = resolveTargetName (img->getTargetId (), nameCache);
+		}
+		if (okTarget && okFilter)
+			cameras[cam]++;
+		if (okTarget && okCamera)
+			filters[flt]++;
+		if (okTarget && okCamera && okFilter)
+			matching.push_back (img);
+	}
+
+	// the set comes in time order (img_date ASC); the page is cut from
+	// the sorted list
+	if (q.newestFirst)
+		std::reverse (matching.begin (), matching.end ());
+
+	os << "{\"total\":" << matching.size () << ",\"offset\":" << q.offset << ",\"limit\":" << q.limit << ",\"images\":[";
+	for (size_t i = q.offset; i < matching.size () && i < (size_t) q.offset + q.limit; i++)
+	{
+		rts2image::Image *img = matching[i];
+		const char *path = img->getFileName () ? img->getFileName () : "";
+		const char *slash = strrchr (path, '/');
+		if (i > (size_t) q.offset)
+			os << ",";
+		os << "{\"path\":";
+		jsonString (path, os);
+		os << ",\"previewPath\":";
+		jsonString (computePreviewPath (imagesDir, path).c_str (), os);
+		os << ",\"file\":";
+		jsonString (slash ? slash + 1 : path, os);
+		os << ",\"obsId\":" << img->getObsId () << ",\"imgId\":" << img->getImgId () << ",\"targetId\":" << img->getTargetId () << ",\"targetName\":";
+		jsonString (resolveTargetName (img->getTargetId (), nameCache).c_str (), os);
+		os << ",\"cameraName\":";
+		jsonString (img->getCameraName () ? img->getCameraName () : "", os);
+		os << ",\"filter\":";
+		jsonString (img->getFilter () ? img->getFilter () : "", os);
+		os << ",\"exposure\":";
+		jsonNumber (img->getExposureLength (), os);
+		os << ",\"binning\":";
+		jsonString (fitsBinning (path).c_str (), os);
+		os << ",\"exposureStart\":";
+		jsonTime (img->getExposureStart (), os);
+		os << "}";
+	}
+	os << "],\"facets\":{\"targets\":[";
+	for (std::map <int, Facet>::iterator iter = targets.begin (); iter != targets.end (); iter++)
+	{
+		if (iter != targets.begin ())
+			os << ",";
+		os << "{\"id\":" << iter->first << ",\"name\":";
+		jsonString (iter->second.name.c_str (), os);
+		os << ",\"count\":" << iter->second.count << "}";
+	}
+	os << "],\"cameras\":[";
+	for (std::map <std::string, int>::iterator iter = cameras.begin (); iter != cameras.end (); iter++)
+	{
+		if (iter != cameras.begin ())
+			os << ",";
+		os << "{\"name\":";
+		jsonString (iter->first.c_str (), os);
+		os << ",\"count\":" << iter->second << "}";
+	}
+	os << "],\"filters\":[";
+	for (std::map <std::string, int>::iterator iter = filters.begin (); iter != filters.end (); iter++)
+	{
+		if (iter != filters.begin ())
+			os << ",";
+		os << "{\"name\":";
+		jsonString (iter->first.c_str (), os);
+		os << ",\"count\":" << iter->second << "}";
+	}
+	os << "]}}";
 }
 
 void rts2web::dbListRecvals (std::ostringstream &os)

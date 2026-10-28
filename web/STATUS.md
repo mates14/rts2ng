@@ -3452,3 +3452,233 @@ line was squeezed half under the panel's border. The values area had
 flex-basis auto (its full height), so everything shrank with it; now
 only it shrinks (`flex: 1 1 0`), and the head, filters and description
 keep their height.
+
+## Image archive: pages, filters, enlarged images, downloads (2026-10-27) [JS]
+
+index.html (app.js), one night's view:
+- The images come a page at a time: 24/48/96/192 per page (kept in the
+  browser), a pager above and below the thumbnails.
+- Filters: a click on a target in the observations shows only its images
+  (the row is marked; a second click, or the x of the target chip, shows
+  all again); checkboxes for the cameras and the photometric filters,
+  each with its count, and "all" and "none" for each (none: then tick
+  the ones wanted; the counts stay, no images are shown). The counts are those the other filters let
+  through, so a count is what ticking it shows.
+- A thumbnail (200 px) shows the file name, UT time, exposure, filter,
+  camera and target. A click opens it big (preview at 2048 px) in the
+  zoomable viewer of the site pages, now `lightbox.js`, shared: wheel or
+  touchpad zoom from the image's own size or the fitted size up to 8
+  screen pixels per image pixel, pan with the mouse, click or Esc closes.
+- Downloads: the arrow on a thumbnail downloads that FITS file; the
+  checkboxes select images (both at the right of the caption, one above
+  the other, so that the image itself only opens the viewer) (kept across pages and filters), with "select
+  this page", "select all matching" and "download selected (.tar)". The
+  tar is posted as a form, so the browser saves it as it comes, however
+  large.
+
+rts2-httpd:
+- `/api/db/images?...&limit=N[&offset=][&tar=ID][&cameras=a,b]
+  [&filters=a,b]` gives one page and the facets (`dbImagesPage ()`),
+  from the DB rows only. Without `limit` the old whole-night list, as
+  before.
+- `/fits/<archive path>`: the FITS file as it is, sent from the fd.
+- `POST /api/download[?name=]`: the archive paths in the body, one per
+  line or as a form's `paths` field, answered with one tar (ustar,
+  streamed: `TarStream`), at most 5000 files. The paths go through
+  `resolveImagePath ()` (preview.cpp's check, now public): no "..", no
+  absolute path, nothing outside --images-dir, files only. Its prefix
+  compare also let `/images2/...` through for an images-dir of
+  `/images`: fixed.
+- MHD drove only responses that fit one socket write: in external epoll
+  mode a connection still sending gets no new epoll event while its
+  socket stays writable, and MHD asks to run again through
+  `MHD_get_timeout ()` instead, which nobody asked. A FITS download
+  stopped after 4 kB. Now `HttpD::idle ()` runs MHD when that is due and
+  keeps the loop's wait within MHD's timeout (Block::getTimeout () added
+  to base to get the loop's own back). 3 MB now take 14 ms on lascaux;
+  rts2-httpd idles at 0 % CPU.
+- Preview cache: thumbnails are now 200 px and the enlarged images 2048
+  px; both are cached on first view (the sites' cache is
+  `<images-dir>/.cache`), so the first view of a night is slow and the
+  cache grows (measured: 0.7-0.8 MB a 2048 px JPEG, 3 kB a thumbnail).
+- The archive holds the raw frames (no DARK/FLAT/BIAS keywords; `PROC`
+  is RTS2's processing status). The site pages show corrected images:
+  asarina-imgproc (MJ's pipeline, /etc/rts2/img_process) corrects each
+  new frame into a temporary `-df.fits`, makes the web JPEGs from it
+  (cxtoweb.sh, rts2-image) and lets RTS2 archive the raw frame. The
+  archive's previews are now corrected the same way, see "Image archive:
+  dark/flat corrected previews" below.
+
+Tested on lascaux, a test rts2-httpd (own centrald, no devices, the real
+`stars` DB and /images, read-only, cache in ~torman) through a tunnel,
+SBT's night of 2026-10-27 (340 images, 3 cameras, 7 filters): paging,
+the target filter (18 images, 12 without C3), cameras, 24 per page,
+selection over pages, select all matching (303), the lightbox (open,
+zoom 264 %, Esc). Downloads: one FITS (3 MB, identical to the file), a
+tar of 3 (72 MB, files identical) and of all 36 C3 frames (114 MB, 0.14
+s on lascaux), as lines and as a form; refused: "..", a directory, an
+empty list.
+
+## Image archive: dark/flat corrected previews (2026-10-28) [JS]
+
+The archive's previews can be dark/flat corrected with the masters
+asarina (MJ's pipeline) corrects the site pages' images with, chosen by
+asarina's own rules (asarina/pipeline/image.py, ImageProcessor), ported
+to `web/httpd/src/calib.cpp`:
+
+- The chip of the frame and of every master: pyrt's camera registry,
+  asked through `pyrt-chip-id` (not copied: MJ's registry stays the only
+  one), its answer kept per combination of the seven header fields it
+  reads (CCD_NAME, CCD_SER, CCD_TYPE, DESCRIPTION, INSTRUME, PRODUCT_ID,
+  SERIAL). A master directory is one call; after that nothing.
+- The masters of a year: `<calib-root>/<chip>/<year>/`, then
+  `<calib-dir-template>/<CCD_NAME>/` (`{year}` in the template), the first
+  loaded of a key kept. A dark: same chip, CCD_TEMP rounded to 5 C groups,
+  same BINX, the closest EXPTIME within 3 s; a flat: same chip, FILTER and
+  BINX; else the other years, -1, +1, ... +-5, loaded on top.
+- A windowed frame takes the masters' window (CCDSEC, else LTV1/LTV2); a
+  full frame is cut to the chip's active area (asarina's CAMERA_CROPS,
+  copied: four chips).
+- Not as asarina, which corrects nothing without both: what is found is
+  applied and the rest named ("dark only, no flat for halpha (chip ...)");
+  with neither, the raw preview ("raw: no dark (chip mi6166, -20 C, bin 1,
+  120 s), no flat for r ...").
+
+rts2-httpd: `--calib-root`, `--calib-dir-template`, `--chip-id-cmd`
+(default pyrt-chip-id); with neither directory, previews are raw. At SBT:
+`--calib-root /home/mates/calib --calib-dir-template
+"/home/mates/flat{year}/"` (asarina's paths; rts2-httpd's user must read
+them and run pyrt-chip-id). `/preview/...&cal=1` asks for the corrected
+variant (without cal, raw as before); the answer says what applied
+(`X-RTS2-Calibration`) and which masters (`X-RTS2-Masters`). The cache
+keeps the variants apart: `<frame>.ps<size>.q<q>.raw.jpg` and
+`.cal.jpg`, the latter with a `.cal.jpg.txt` (the calibration text and
+the masters). The masters are read in strips, the
+stretch is the kernel's (Image::getChannelGrayscaleByteBuffer: low
+quantile white, rows flipped). A cached corrected preview does not notice
+new masters.
+
+index.html: "Previews: dark/flat corrected / raw" (corrected by default,
+kept in the browser); the enlarged image says what was applied
+(`openLightboxFetch ()` in lightbox.js reads the header).
+
+Found on the way: SBT's C3 is now chip mi2065 (1536x1024), masters in
+/home/mates/calib/mi2065/2026; /home/mates/flat2026/C3 holds the previous
+chip's (mi0008, 2252x1509). C1's Halpha and SII flats are only in
+calib/mi6166/2026.
+
+Tested on lascaux (the test rts2-httpd, SBT's night of 2026-10-27), each
+camera/filter/exposure combination of the night (25) against asarina's
+own find_best_dark/find_flat (read-only, same configuration): the same
+masters for all 25. The year fallback with a staged tree (C3's 2026
+masters as 2024, no 2026): the same 25 again, C3 from 2024, C1/C2 raw on
+both sides. Pictures: C1 cut to its active area and flat, C3 flat
+(vignetting and a dust ring gone). First corrected preview of a camera
+1.5-2 s (directories indexed, the registry asked), then like the raw one.
+The page: the switch, cal=1/0 on thumbnails and the enlarged image, the
+calibration text in it.
+
+## Image archive: binning in the captions, a purge of the preview cache (2026-10-28) [JS]
+
+- Captions: UT time, exposure, filter, binning ("1x1"), camera. The DB
+  has no binning, so `dbImagesPage ()` reads BINX/BINY from the FITS
+  headers of the page's images only (cfitsio, the header alone): 0.05 s
+  for 48, 1.5 s for 192 with headers not yet in the disk cache.
+- "purge preview cache" (the selection bar, with a confirmation): GET
+  `/api/purge-cache` deletes the whole preview cache, raw and corrected,
+  every night, on a worker (`purgePreviewCache ()`), and says how many
+  files and MB went. Only what the cache writes goes, `*.jpg` and
+  `*.jpg.txt`, then the directories left empty; no symlink is followed,
+  and the cache directory itself stays - so a --cache-dir pointed at the
+  archive by mistake loses no FITS file. A write, behind the same login
+  as /api/set: with --auth-file the login needs `preview-cache` (or `*`)
+  among its devices. `DbResult`, its queue and drain are no longer
+  DB-only: the purge answers through them.
+- The raw previews are now cached as `*.raw.jpg` (they had no marker);
+  older raw previews are no longer found - a purge clears them.
+
+Tested on lascaux (the test rts2-httpd): binning 1x1 for all three
+cameras of the night, in the API and the captions; a purge with a decoy
+`keepme/decoy.fits` and a symlink into the archive in the cache: 9
+previews deleted, the decoy, the symlink and the archive left; the
+button (96 files, 0.2 MB).
+
+## Previews stretched from the good data section, DATASEC (2026-10-28) [JS]
+
+A preview's stretch (the quantiles) must come from the image's real data
+only, not from an overscan; the MI cameras' frames have one (C1/C2: 29
+columns and 10 rows of overscan and dark edge at the start, 17 columns and
+19 rows at the end). The area is the FITS keyword `DATASEC`, which camd
+writes into every frame when started with `--datasec X:Y:W:H` (the good
+area in unbinned detector pixels, 0-based), adjusted for a window and the
+binning (devcliimg.cpp). Tested with camd-dummy (--datasec 10:5:180:140,
+200x150): full frame `[11:190,6:145]`, window 50,40 100x80
+`[1:100,1:80]`, binning 2x2 `[6:95,3:72]`.
+
+- Raw previews already used it: the kernel's histogram, which the
+  stretch comes from, takes only DATASEC (Image::getChannelHistogram).
+  With a C1 frame given `DATASEC = '[30:4127,11:4108]'` the raw preview
+  is stretched from the sky (full contrast, the vignetting shows); the
+  same frame without it is a dull grey, the overscan setting the black
+  level.
+- The corrected previews (preview.cpp) now take their quantiles from
+  DATASEC as well, within the chip's active-area crop.
+- No frame has DATASEC so far: SBT's cameras are not started with
+  --datasec. Measured on 2026-10-27's frames (column and row medians),
+  C1 and C2 need `--datasec 29:10:4098:4098` (the same area as asarina's
+  CAMERA_CROPS for mi6166/mi6167); C3 (mi2065, G2-1600, 1536x1024) has no
+  overscan and needs none. That is /etc/rts2/devices at SBT (root), and a
+  restart of C1 and C2. Frames taken before keep the whole-frame stretch.
+
+Seen on the way (base, not fixed): a script value the operand parser
+cannot read (`WINDOW=50:40:100:80`, also quoted with spaces) throws
+`UnknowOperantMultiplier`, which nothing catches - rts2-scriptexec aborts
+(SIGABRT); classic has the same code (base/STATUS.md, open items).
+
+## Image archive: no frames around the images, FITS opened rather than saved (2026-10-28) [JS]
+
+- Thumbnails have no black background any more (transparent, the
+  caption box's colour shows); the enlarged image (lightbox.js) has no
+  white border.
+- The arrow on a thumbnail ("open this FITS file") opens the FITS file instead of saving it: no
+  `download` attribute, and `/fits/` answers `Content-Disposition: inline`
+  with `Content-Type: image/fits` (RFC 4047; the type desktops associate
+  FITS viewers with - shared-mime-info has it). A page cannot start an
+  application itself: the browser opens it in its associated application
+  or asks, as set (Firefox asks or opens; Chrome saves it and opens it on
+  a click, with "always open files of this type"). `/fits/...?download=1`
+  still sends it as an attachment.
+
+The site monitor pages' own lightbox (web/sites/*-monitor.html) keeps its
+white border; only index.html's lightbox.js was changed.
+
+## Image archive: page jumps and newest first (2026-10-28) [JS]
+
+- The pager (above and below the thumbnails): first, previous, the page
+  number in a field (Enter or leaving it goes there; past the last page
+  means the last), next, last; the buttons that cannot go anywhere are
+  disabled.
+- "oldest first / newest first" beside it, kept in the browser. The order
+  is rts2-httpd's (`/api/db/images ...&order=desc`, `ImageQuery::
+  newestFirst`): the night's images are reversed before the page is cut,
+  so page 1 holds the latest frames.
+
+Tested on lascaux, 2026-10-27's night (553 images, 12 pages of 48): the
+API in both orders (16:46:35 first, 00:34:18 first), last and first page
+with their buttons disabled, page 4 by number (images 145-192), page 99
+(the last), newest first kept and both pagers following.
+
+## Previews: JPEG quality 98 for the enlarged images (2026-10-28) [JS]
+
+The enlarged images showed JPEG artefacts: every preview was quality 85.
+Measured on a C3 frame at 2048 px against a quality-100 encoding: around
+a star, pixels off by up to 19 grey levels at 85 (the dark core speckled,
+the halo blocky), 7 at 95, 4 at 98; in the plain sky the blocks drown in
+the noise. Size: C3 (1536x1024) 0.8 / 1.2 / 1.5 MB, C1 (2048x2048) 1.4 /
+2.3 / 3.0 MB at 85 / 95 / 98.
+
+Now a big preview (ps over 400, the enlarged images at 2048) is quality
+98, a thumbnail stays 85 (never zoomed, most of the cache by count).
+`/preview/...&jq=N` sets it (10-100). The quality is part of the cache
+name (`.jq98.`), so old 85 previews are not found any more - a purge
+clears them; the cache grows by about 2x per enlarged image viewed.

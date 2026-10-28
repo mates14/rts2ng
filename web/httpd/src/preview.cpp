@@ -2,11 +2,16 @@
 
 #include "image.h"
 
+#include "calib.h"
+
+#include <fitsio.h>
 #include <jpeglib.h>
 #include <csetjmp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
@@ -40,9 +45,11 @@ bool looksSafe (const std::string &relPath)
 	return true;
 }
 
-// Shared by checkPreviewCache() and generatePreview(): resolves and
-// validates relPath, filling fullPath/srcStat on success.
-bool validatePath (const std::string &imagesDir, const std::string &relPath, std::string &fullPath, struct stat &srcStat, std::string &errorMsg)
+}
+
+// Shared by checkPreviewCache(), generatePreview() and /fits/: resolves
+// and validates relPath, filling fullPath/srcStat on success.
+bool rts2web::resolveImagePath (const std::string &imagesDir, const std::string &relPath, std::string &fullPath, struct stat &srcStat, std::string &errorMsg)
 {
 	if (!looksSafe (relPath))
 	{
@@ -63,20 +70,189 @@ bool validatePath (const std::string &imagesDir, const std::string &relPath, std
 	fs::path canonicalRoot = fs::weakly_canonical (imagesDir, ec);
 	std::string cf = canonicalFull.string ();
 	std::string cr = canonicalRoot.string ();
-	if (ec || cf.compare (0, cr.size (), cr) != 0)
+	// inside the root: the root itself followed by a "/" (a bare prefix
+	// compare let /images2/x through for an imagesDir of /images)
+	if (ec || cf.compare (0, cr.size (), cr) != 0 || (cf.size () > cr.size () && cr.back () != '/' && cf[cr.size ()] != '/'))
 	{
 		errorMsg = "invalid path";
+		return false;
+	}
+	if (!S_ISREG (srcStat.st_mode))
+	{
+		errorMsg = "not a file";
 		return false;
 	}
 
 	return true;
 }
 
-std::string cacheFileFor (const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles)
+namespace
+{
+
+// ".raw.jpg" or ".cal.jpg" (dark/flat corrected, its calibration text in
+// a ".cal.jpg.txt" beside it): the two variants never share a file
+std::string cacheFileFor (const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, int jpegQuality, bool calibrated)
 {
 	char suffix[64];
-	snprintf (suffix, sizeof (suffix), ".ps%d.q%04d.jpg", previewSize, (int) (quantiles * 10000));
+	snprintf (suffix, sizeof (suffix), ".ps%d.q%04d.jq%d.%s.jpg", previewSize, (int) (quantiles * 10000), jpegQuality, calibrated ? "cal" : "raw");
 	return cacheDir + "/" + relPath + suffix;
+}
+
+// --- dark/flat correction ------------------------------------------------
+//
+// The masters and how they apply come from findCalibration () (calib.cpp:
+// asarina's choice of masters, ported). Here they are applied, (data -
+// dark) / flat, and the frame rendered as the kernel renders a raw one.
+// What applied goes to the response's X-RTS2-Calibration. [JS 2026-10-28]
+
+// rows [y, y + n) of the columns [x, x + w) of a 2-D image as floats
+// (BZERO/BSCALE applied)
+bool readBlock (fitsfile *f, long x, long w, long y, long n, float *out)
+{
+	int status = 0;
+	long fpixel[2] = {x + 1, y + 1};
+	long lpixel[2] = {x + w, y + n};
+	long inc[2] = {1, 1};
+	fits_read_subset (f, TFLOAT, fpixel, lpixel, inc, nullptr, out, nullptr, &status);
+	return status == 0;
+}
+
+// The corrected frame as the kernel renders a raw one
+// (Image::getChannelGrayscaleByteBuffer): the low quantile white, the high
+// one black, linear between, rows flipped; cut to the chip's active area
+// when calibration says so. Read in strips, so that only the corrected
+// frame is held whole. False (errorMsg says why) when nothing applies or
+// a file cannot be read.
+bool renderCalibrated (const std::string &fullPath, const rts2web::CalibConfig &config, float quantiles, std::vector <unsigned char> &gray, int &w, int &h, std::string &calibration, std::string &masters, std::string &errorMsg)
+{
+	rts2web::CalibFrames cal;
+	rts2web::findCalibration (config, fullPath, cal);
+	calibration = cal.text;
+	masters = (cal.dark.empty () ? "" : "dark=" + cal.dark) + (cal.dark.empty () || cal.flat.empty () ? "" : "; ") + (cal.flat.empty () ? "" : "flat=" + cal.flat);
+	if (cal.dark.empty () && cal.flat.empty ())
+	{
+		errorMsg = cal.text;
+		return false;
+	}
+
+	fitsfile *img = nullptr, *fd = nullptr, *ff = nullptr;
+	int status = 0;
+	bool ok = !fits_open_file (&img, fullPath.c_str (), READONLY, &status);
+	// DATASEC, the good data section ("[x1:x2,y1:y2]", 1-based, written by
+	// camd --datasec): the stretch is taken from it alone, as the kernel
+	// does for a raw preview (Image::getChannelHistogram), so that an
+	// overscan does not set the black level. Without it, the whole frame.
+	long ds[4] = {0, 0, 0, 0};
+	bool haveDatasec = false;
+	if (ok)
+	{
+		char val[FLEN_VALUE] = "";
+		int dstatus = 0;
+		fits_read_key (img, TSTRING, "DATASEC", val, nullptr, &dstatus);
+		haveDatasec = dstatus == 0 && sscanf (val, " [%ld:%ld,%ld:%ld]", ds, ds + 1, ds + 2, ds + 3) == 4;
+	}
+	status = 0;
+	ok = ok && (cal.dark.empty () || !fits_open_file (&fd, cal.dark.c_str (), READONLY, &status));
+	status = 0;
+	ok = ok && (cal.flat.empty () || !fits_open_file (&ff, cal.flat.c_str (), READONLY, &status));
+
+	const long STRIP = 64;
+	long cw = cal.cropW, ch = cal.cropH;
+	std::vector <float> data;
+	if (ok)
+		data.resize ((size_t) cw * ch);
+	std::vector <float> d (fd ? (size_t) cw * STRIP : 0), fl (ff ? (size_t) cw * STRIP : 0);
+	for (long y = 0; ok && y < ch; y += STRIP)
+	{
+		long n = std::min (STRIP, ch - y);
+		float *row = data.data () + (size_t) y * cw;
+		// the frame's crop, and the same pixels in the masters (offset by
+		// the frame's window there)
+		ok = readBlock (img, cal.cropX0, cw, cal.cropY0 + y, n, row)
+			&& (!fd || readBlock (fd, cal.x0 + cal.cropX0, cw, cal.y0 + cal.cropY0 + y, n, d.data ()))
+			&& (!ff || readBlock (ff, cal.x0 + cal.cropX0, cw, cal.y0 + cal.cropY0 + y, n, fl.data ()));
+		for (size_t i = 0; ok && i < (size_t) cw * n; i++)
+		{
+			float v = row[i];
+			if (fd)
+				v -= d[i];
+			// a dead flat pixel is left as it is
+			if (ff && fl[i] > 0.01f)
+				v /= fl[i];
+			row[i] = v;
+		}
+	}
+	for (fitsfile *f : {img, fd, ff})
+		if (f)
+		{
+			status = 0;
+			fits_close_file (f, &status);
+		}
+	if (!ok)
+	{
+		errorMsg = "cannot read the frame or a master";
+		return false;
+	}
+
+	// quantiles from up to a million evenly spaced pixels of the good data
+	// section (in the crop's coordinates), or of all when it is not given
+	// or does not overlap the crop
+	long qx0 = 0, qx1 = cw, qy0 = 0, qy1 = ch;
+	if (haveDatasec)
+	{
+		long x0 = std::max (0L, ds[0] - 1 - cal.cropX0), x1 = std::min (cw, ds[1] - cal.cropX0);
+		long y0 = std::max (0L, ds[2] - 1 - cal.cropY0), y1 = std::min (ch, ds[3] - cal.cropY0);
+		if (x0 < x1 && y0 < y1)
+		{
+			qx0 = x0;
+			qx1 = x1;
+			qy0 = y0;
+			qy1 = y1;
+		}
+	}
+	size_t total = data.size ();
+	size_t region = (size_t) (qx1 - qx0) * (qy1 - qy0);
+	size_t stride = std::max ((size_t) 1, region / 1000000);
+	std::vector <float> sample;
+	sample.reserve (region / stride + 1);
+	for (size_t k = 0; k < region; k += stride)
+	{
+		long y = qy0 + k / (qx1 - qx0), x = qx0 + k % (qx1 - qx0);
+		float v = data[(size_t) y * cw + x];
+		if (std::isfinite (v))
+			sample.push_back (v);
+	}
+	if (sample.empty ())
+	{
+		errorMsg = "no finite pixels";
+		return false;
+	}
+	size_t lo = std::min (sample.size () - 1, (size_t) (quantiles * sample.size ()));
+	size_t hi = std::min (sample.size () - 1, (size_t) ((1 - quantiles) * sample.size ()));
+	std::nth_element (sample.begin (), sample.begin () + lo, sample.end ());
+	float low = sample[lo];
+	std::nth_element (sample.begin (), sample.begin () + hi, sample.end ());
+	float high = sample[hi];
+
+	w = cw;
+	h = ch;
+	gray.resize (total);
+	for (long y = 0; y < ch; y++)
+	{
+		const float *src = data.data () + (size_t) y * cw;
+		unsigned char *dst = gray.data () + (size_t) (ch - 1 - y) * cw;
+		for (long x = 0; x < cw; x++)
+		{
+			float v = src[x];
+			if (!std::isfinite (v) || v <= low)
+				dst[x] = 255;
+			else if (v >= high)
+				dst[x] = 0;
+			else
+				dst[x] = (unsigned char) (255 - 255 * (v - low) / (high - low));
+		}
+	}
+	return true;
 }
 
 // libjpeg's default error handler calls exit() - long jump out instead
@@ -127,7 +303,7 @@ std::vector <unsigned char> downsample (const unsigned char *src, int srcW, int 
 	return dst;
 }
 
-bool encodeJpeg (const unsigned char *gray, int width, int height, std::string &out)
+bool encodeJpeg (const unsigned char *gray, int width, int height, int quality, std::string &out)
 {
 	struct jpeg_compress_struct cinfo;
 	JpegErrorMgr jerr;
@@ -152,7 +328,7 @@ bool encodeJpeg (const unsigned char *gray, int width, int height, std::string &
 	cinfo.input_components = 1;
 	cinfo.in_color_space = JCS_GRAYSCALE;
 	jpeg_set_defaults (&cinfo);
-	jpeg_set_quality (&cinfo, 85, TRUE);
+	jpeg_set_quality (&cinfo, quality, TRUE);
 
 	jpeg_start_compress (&cinfo, TRUE);
 
@@ -173,14 +349,14 @@ bool encodeJpeg (const unsigned char *gray, int width, int height, std::string &
 
 }
 
-rts2web::PreviewStatus rts2web::checkPreviewCache (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, std::string &jpegDataOrError)
+rts2web::PreviewStatus rts2web::checkPreviewCache (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, int jpegQuality, bool calibrated, std::string &jpegDataOrError, std::string &calibration, std::string &masters)
 {
 	std::string fullPath;
 	struct stat srcStat;
-	if (!validatePath (imagesDir, relPath, fullPath, srcStat, jpegDataOrError))
+	if (!resolveImagePath (imagesDir, relPath, fullPath, srcStat, jpegDataOrError))
 		return PreviewStatus::Invalid;
 
-	std::string cacheFile = cacheFileFor (cacheDir, relPath, previewSize, quantiles);
+	std::string cacheFile = cacheFileFor (cacheDir, relPath, previewSize, quantiles, jpegQuality, calibrated);
 
 	struct stat cacheStat;
 	if (stat (cacheFile.c_str (), &cacheStat) == 0 && cacheStat.st_mtime >= srcStat.st_mtime)
@@ -191,6 +367,14 @@ rts2web::PreviewStatus rts2web::checkPreviewCache (const std::string &imagesDir,
 			std::ostringstream ss;
 			ss << in.rdbuf ();
 			jpegDataOrError = ss.str ();
+			calibration = "raw";
+			masters = "";
+			if (calibrated)
+			{
+				std::ifstream txt (cacheFile + ".txt");
+				std::getline (txt, calibration);
+				std::getline (txt, masters);
+			}
 			return PreviewStatus::Hit;
 		}
 		// cache file vanished/became unreadable between stat() and
@@ -201,15 +385,32 @@ rts2web::PreviewStatus rts2web::checkPreviewCache (const std::string &imagesDir,
 	return PreviewStatus::Miss;
 }
 
-bool rts2web::generatePreview (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, std::string &jpegData, std::string &errorMsg)
+bool rts2web::generatePreview (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, int jpegQuality, const CalibConfig *calib, std::string &jpegData, std::string &calibration, std::string &masters, std::string &errorMsg)
 {
 	std::string fullPath;
 	struct stat srcStat;
-	if (!validatePath (imagesDir, relPath, fullPath, srcStat, errorMsg))
+	if (!resolveImagePath (imagesDir, relPath, fullPath, srcStat, errorMsg))
 		return false;
 
 	int srcW = 0, srcH = 0;
 	unsigned char *buf = nullptr;
+
+	// dark/flat corrected when asked (calib given) and possible;
+	// otherwise, and whatever went wrong there, the raw preview below
+	bool calibrated = calib != nullptr;
+	calibration = "raw";
+	masters = "";
+	std::vector <unsigned char> corrected;
+	if (calibrated)
+	{
+		std::string why;
+		if (!renderCalibrated (fullPath, *calib, quantiles, corrected, srcW, srcH, calibration, masters, why))
+		{
+			corrected.clear ();
+			masters = "";
+			calibration = why.compare (0, 4, "raw:") == 0 ? why : "raw: " + why;
+		}
+	}
 
 	// Not locked: each call opens its own independent rts2image::Image/
 	// fitsfile* handle onto a different file - no state is shared
@@ -228,32 +429,41 @@ bool rts2web::generatePreview (const std::string &imagesDir, const std::string &
 	// whether openFile() throws or what pixels get decoded. Accepted as
 	// a negligible, understood risk rather than serialized away.
 	rts2image::Image img;
-	try
+	if (corrected.empty ())
 	{
-		img.openFile (fullPath.c_str (), true, false);
+		try
+		{
+			img.openFile (fullPath.c_str (), true, false);
+		}
+		catch (rts2core::Error &er)
+		{
+			errorMsg = "cannot open image";
+			return false;
+		}
+
+		img.loadChannels ();
+		if (img.getChannelSize () == 0)
+		{
+			errorMsg = "image has no data";
+			return false;
+		}
+
+		srcW = img.getChannelWidth (0);
+		srcH = img.getChannelHeight (0);
+
+		img.getChannelGrayscaleImage (img.getDataType (), 0, buf, quantiles, 0);
+
+		if (buf == nullptr)
+		{
+			errorMsg = "cannot render preview";
+			return false;
+		}
 	}
-	catch (rts2core::Error &er)
+	else
 	{
-		errorMsg = "cannot open image";
-		return false;
-	}
-
-	img.loadChannels ();
-	if (img.getChannelSize () == 0)
-	{
-		errorMsg = "image has no data";
-		return false;
-	}
-
-	srcW = img.getChannelWidth (0);
-	srcH = img.getChannelHeight (0);
-
-	img.getChannelGrayscaleImage (img.getDataType (), 0, buf, quantiles, 0);
-
-	if (buf == nullptr)
-	{
-		errorMsg = "cannot render preview";
-		return false;
+		buf = new unsigned char[corrected.size ()];
+		memcpy (buf, corrected.data (), corrected.size ());
+		std::vector <unsigned char> ().swap (corrected);
 	}
 
 	int dstW = srcW, dstH = srcH;
@@ -273,20 +483,85 @@ bool rts2web::generatePreview (const std::string &imagesDir, const std::string &
 		: downsample (buf, srcW, srcH, dstW, dstH);
 	delete[] buf;
 
-	if (!encodeJpeg (small.data (), dstW, dstH, jpegData))
+	if (!encodeJpeg (small.data (), dstW, dstH, jpegQuality, jpegData))
 	{
 		errorMsg = "JPEG encoding failed";
 		return false;
 	}
 
-	std::string cacheFile = cacheFileFor (cacheDir, relPath, previewSize, quantiles);
+	std::string cacheFile = cacheFileFor (cacheDir, relPath, previewSize, quantiles, jpegQuality, calibrated);
 	fs::path cachePathObj (cacheFile);
 	std::error_code mkec;
 	fs::create_directories (cachePathObj.parent_path (), mkec);
 
+	// the text first: a JPEG found without it reads as "raw"
+	if (calibrated)
+	{
+		std::ofstream txt (cacheFile + ".txt", std::ios::trunc);
+		txt << calibration << "\n" << masters << "\n";
+	}
 	std::ofstream out (cacheFile, std::ios::binary | std::ios::trunc);
 	if (out)
 		out.write (jpegData.data (), jpegData.size ());
 
+	return true;
+}
+
+// Only what the cache writes goes: *.jpg and *.jpg.txt, then the
+// directories left empty (deepest first) - so a cache-dir set to the
+// archive by mistake loses no FITS file. The cache directory itself
+// stays. [JS 2026-10-28]
+bool rts2web::purgePreviewCache (const std::string &cacheDir, long &files, long long &bytes, std::string &errorMsg)
+{
+	files = 0;
+	bytes = 0;
+	std::error_code ec;
+	fs::path root = fs::weakly_canonical (cacheDir, ec);
+	if (ec || cacheDir.empty () || root == root.root_path ())
+	{
+		errorMsg = "refusing to purge " + cacheDir;
+		return false;
+	}
+	if (!fs::is_directory (root, ec))
+		return true;
+	std::vector <fs::path> dirs;
+	for (fs::recursive_directory_iterator it (root, fs::directory_options::skip_permission_denied, ec), end; it != end; it.increment (ec))
+	{
+		if (ec)
+			break;
+		const fs::directory_entry &e = *it;
+		if (e.is_symlink (ec))
+		{
+			// not followed, not deleted
+			if (e.is_directory (ec))
+				it.disable_recursion_pending ();
+			continue;
+		}
+		if (e.is_directory (ec))
+		{
+			dirs.push_back (e.path ());
+			continue;
+		}
+		std::string name = e.path ().filename ().string ();
+		bool ours = (name.size () > 4 && name.compare (name.size () - 4, 4, ".jpg") == 0)
+			|| (name.size () > 8 && name.compare (name.size () - 8, 8, ".jpg.txt") == 0);
+		if (!ours || !e.is_regular_file (ec))
+			continue;
+		std::error_code sec;
+		uintmax_t size = e.file_size (sec);
+		if (fs::remove (e.path (), sec))
+		{
+			files++;
+			bytes += sec ? 0 : size;
+		}
+	}
+	// deepest first; a directory with anything else in it stays
+	std::sort (dirs.begin (), dirs.end (), [] (const fs::path &a, const fs::path &b) { return a.string ().size () > b.string ().size (); });
+	for (const fs::path &d : dirs)
+	{
+		std::error_code dec;
+		if (fs::is_empty (d, dec) && !dec)
+			fs::remove (d, dec);
+	}
 	return true;
 }

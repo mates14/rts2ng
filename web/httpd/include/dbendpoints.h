@@ -6,6 +6,7 @@
 #ifdef WEB_HAVE_DB
 
 #include <sstream>
+#include <set>
 #include <string>
 
 namespace rts2web
@@ -241,6 +242,38 @@ void dbSearchImagesByTarget (const std::string &imagesDir, int targetId, std::os
  * imagesDir/previewPath mean.
  */
 void dbSearchImagesByNight (const std::string &imagesDir, int year, int month, int day, std::ostringstream &os);
+
+/**
+ * What GET /api/db/images?...&limit=N asks for: one page of a night's (or
+ * a target's) images, filtered. [JS 2026-10-27]
+ */
+struct ImageQuery
+{
+	int year = -1, month = -1, day = -1;	//!< the night, or
+	int byTarget = -1;						//!< all images of this target
+	int target = -1;						//!< filter: only this target (-1: all)
+	std::set <std::string> cameras;			//!< filter: only these cameras (empty: all)
+	std::set <std::string> filters;			//!< filter: only these filters (empty: all)
+	int offset = 0;
+	int limit = 48;
+	bool newestFirst = false;				//!< order=desc: the latest image first
+};
+
+/**
+ * GET /api/db/images?year=&month=&day=|target=N&limit=N[&offset=N]
+ * [&tar=ID][&cameras=C1,C2][&filters=R,V][&order=desc]: one page of the
+ * images (in time order, the latest first with order=desc), as
+ * `{"total":N,"offset":N,"limit":N,"images":[...],"facets":{"targets":
+ * [{"id","name","count"}],"cameras":[{"name","count"}],"filters":[...]}}`.
+ * An image has what dbSearchImagesByNight () gives plus "file" (the base
+ * name), "imgId", "filter", "exposure" and "binning" ("1x1", from the
+ * FITS header of each image of the page - the DB has none - "" when it
+ * cannot be read). A facet counts the images the
+ * other two filters let through, so a count is what ticking it shows.
+ * All from the DB rows, but the binning: only the page's images are opened
+ * (their headers).
+ */
+void dbImagesPage (const std::string &imagesDir, const ImageQuery &q, std::ostringstream &os);
 
 /**
  * GET /api/db/recvals - the catalogue of recorded device/value pairs,

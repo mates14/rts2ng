@@ -1,6 +1,9 @@
 #pragma once
 
 #include <string>
+#include <sys/stat.h>
+
+#include "calib.h"
 
 namespace rts2web
 {
@@ -40,13 +43,22 @@ enum class PreviewStatus
 };
 
 /**
+ * calibrated: the dark/flat corrected variant (see generatePreview ());
+ * calibration then comes from the cache too.
+ *
  * Cheap, synchronous check - safe to call on Block's main thread.
  * Validates relPath is safely contained within imagesDir, confirms the
  * source image exists, and checks for a fresh cached JPEG.
  */
-PreviewStatus checkPreviewCache (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, std::string &jpegDataOrError);
+PreviewStatus checkPreviewCache (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, int jpegQuality, bool calibrated, std::string &jpegDataOrError, std::string &calibration, std::string &masters);
 
 /**
+ * calib: non-null for the dark/flat corrected variant, with the masters
+ * asarina would take (calib.h). What was applied comes back in
+ * calibration ("dark and flat corrected", "dark only, ...", "raw: <why>");
+ * a frame that cannot be corrected is rendered raw, never refused.
+ * masters: the masters applied, "dark=<path>; flat=<path>".
+ *
  * Expensive: FITS decode + downsample + JPEG encode + write to cache.
  * Only meaningful after checkPreviewCache() returned Miss. Meant to run
  * on a worker thread, not Block's main poll-loop thread. Safe to call
@@ -54,6 +66,22 @@ PreviewStatus checkPreviewCache (const std::string &imagesDir, const std::string
  * the comment in preview.cpp on why the actual cfitsio calls are
  * serialized internally regardless.
  */
-bool generatePreview (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, std::string &jpegData, std::string &errorMsg);
+bool generatePreview (const std::string &imagesDir, const std::string &cacheDir, const std::string &relPath, int previewSize, float quantiles, int jpegQuality, const CalibConfig *calib, std::string &jpegData, std::string &calibration, std::string &masters, std::string &errorMsg);
+
+/**
+ * Resolves relPath (an archive path relative to imagesDir, as /preview/
+ * and /fits/ take it) to fullPath, refusing anything that is not a file
+ * inside imagesDir: a "..", an absolute path, or a symlink out of it.
+ * Fills srcStat. Cheap (stat + canonicalisation), safe on the main
+ * thread; the check checkPreviewCache () makes too.
+ */
+bool resolveImagePath (const std::string &imagesDir, const std::string &relPath, std::string &fullPath, struct stat &srcStat, std::string &errorMsg);
+
+/**
+ * Deletes the preview cache: every *.jpg and *.jpg.txt under cacheDir,
+ * then the directories left empty; nothing else, and no symlink is
+ * followed. Counts what went. Slow for a big cache: a worker's job.
+ */
+bool purgePreviewCache (const std::string &cacheDir, long &files, long long &bytes, std::string &errorMsg);
 
 }

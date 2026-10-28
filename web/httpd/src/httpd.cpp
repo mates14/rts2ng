@@ -46,6 +46,9 @@
 #define OPT_AUTH_FILE        OPT_LOCAL + 4
 #define OPT_STATIC_DIR       OPT_LOCAL + 5
 #define OPT_BIND_ADDRESS     OPT_LOCAL + 6
+#define OPT_CALIB_ROOT       OPT_LOCAL + 7
+#define OPT_CALIB_TEMPLATE   OPT_LOCAL + 8
+#define OPT_CHIP_ID_CMD      OPT_LOCAL + 9
 
 #include <algorithm>
 #include <cctype>
@@ -264,17 +267,19 @@ struct PreviewResult
 	struct MHD_Connection *connection;
 	bool ok;
 	std::string jpegData;
+	std::string calibration;
+	std::string masters;
 	std::string errorMsg;
 };
 
-#ifdef WEB_HAVE_DB
 /**
  * Result of a worker-thread DB query (STATUS.md task 7, added after
  * lascaux.asu.cas.cz testing showed why this can't stay synchronous -
  * see the long comment by handleDb() below). The job itself decides the
  * final JSON body and HTTP status (success or error), so - unlike
  * PreviewResult - there's nothing left for the main thread to branch on
- * beyond "send exactly this".
+ * beyond "send exactly this". Also the preview cache purge's, so it is
+ * there without DB too. [JS 2026-10-28]
  */
 struct DbResult
 {
@@ -282,7 +287,6 @@ struct DbResult
 	std::string body;
 	unsigned int httpStatus;
 };
-#endif
 
 /**
  * Generic DevClient used for every connected device (see
@@ -441,6 +445,10 @@ class HttpD:public HttpDBase
 		// than guessing a path.
 		std::string imagesDir;
 		std::string cacheDir;
+		// --calib-root, --calib-dir-template, --chip-id-cmd: where the
+		// dark/flat corrected previews find their masters (calib.h);
+		// neither directory set: previews are raw
+		CalibConfig calib;
 
 		// STATUS.md task 6: local (non-DB) auth, gating /api/set,inc,dec.
 		// Deliberately open (no auth check at all) when authFile is
@@ -513,19 +521,20 @@ class HttpD:public HttpDBase
 		// (JPEG on success, JSON error otherwise) - shared between the
 		// synchronous cache-hit path and the async worker-completion
 		// path in drainPreviewResults().
-		MHD_Result sendPreviewResponse (struct MHD_Connection *connection, bool ok, const std::string &jpegData, const std::string &errorMsg);
+		MHD_Result sendPreviewResponse (struct MHD_Connection *connection, bool ok, const std::string &jpegData, const std::string &errorMsg, const std::string &calibration = "", const std::string &masters = "");
 
-#ifdef WEB_HAVE_DB
 		// STATUS.md task 7: DB queries also run on workerPool now, not
 		// inline - see handleDb()'s comment for why this stopped being
 		// optional. Shares the same pool/wakeupFd as preview generation
 		// (STATUS.md task 5) rather than a second pool - both are
 		// occasional, bursty background work, not worth a dedicated pool
-		// each until real contention between the two shows up.
+		// each until real contention between the two shows up. The cache
+		// purge answers through it too.
 		std::mutex dbResultsMutex;
 		std::queue <DbResult> dbResults;
 
 		void drainDbResults ();
+#ifdef WEB_HAVE_DB
 		MHD_Result handleDb (struct MHD_Connection *connection, const char *url);
 #endif
 
@@ -542,6 +551,14 @@ class HttpD:public HttpDBase
 
 		MHD_Result handleRequest (struct MHD_Connection *connection, const char *url);
 		MHD_Result handlePreview (struct MHD_Connection *connection, const char *relPath);
+		// /fits/<relPath>[?download=1]: one archived FITS file, as it is on
+		// disk, inline (to open) or as an attachment (to save)
+		MHD_Result handleFits (struct MHD_Connection *connection, const char *relPath);
+		// POST /api/download: the archive paths in the body, one per
+		// line, answered with one tar of the files
+		MHD_Result handleDownload (struct MHD_Connection *connection, const std::string &body);
+		// frees what answer () kept for a request (a POST body)
+		static void requestCompleted (void *cls, struct MHD_Connection *connection, void **req_cls, enum MHD_RequestTerminationCode toe);
 
 		// STATUS.md task 8: serves a file under staticDir if one exists
 		// for url, filling result and returning true; returns false
@@ -566,6 +583,8 @@ class HttpD:public HttpDBase
 		// ~HttpD can tell them the HTTP server is gone), and the answers
 		// waiting to be sent. Main thread only.
 		std::set <CommandHttp *> pendingCommands;
+		// the loop's idle timeout without MHD's (idle ())
+		long int baseTimeout;
 		std::vector <std::pair <struct MHD_Connection *, std::string>> commandResults;
 		void drainCommandResults ();
 
@@ -685,11 +704,16 @@ HttpD::HttpD (int argc, char **argv):HttpDBase (argc, argv, DEVICE_TYPE_HTTPD, "
 	mhdEpollFd = -1;
 	previewWorkers = 2;
 	wakeupFd = -1;
+	calib.chipIdCmd = "pyrt-chip-id";
+	baseTimeout = getTimeout ();
 	workerPool = nullptr;
 
 	addOption ('p', "port", 1, "HTTP port to listen on (default 8889)");
 	addOption (OPT_IMAGES_DIR, "images-dir", 1, "root of the image archive on disk (enables /preview/)");
 	addOption (OPT_CACHE_DIR, "cache-dir", 1, "root of the on-disk preview cache (defaults to <images-dir>/.cache)");
+	addOption (OPT_CALIB_ROOT, "calib-root", 1, "master darks and flats for corrected previews, in <dir>/<chip id>/<year>/ (asarina's calib_root, e.g. /home/mates/calib)");
+	addOption (OPT_CALIB_TEMPLATE, "calib-dir-template", 1, "legacy master directory with {year}, CCD_NAME appended (asarina's calib_dir, e.g. /home/mates/flat{year}/) - previews are raw if neither is set");
+	addOption (OPT_CHIP_ID_CMD, "chip-id-cmd", 1, "camera registry command naming the chip of a FITS file (default pyrt-chip-id)");
 	addOption (OPT_PREVIEW_WORKERS, "preview-workers", 1, "worker threads for preview generation (default 2)");
 	addOption (OPT_AUTH_FILE, "auth-file", 1, "credentials file gating /api/set,inc,dec,cmd (user:cryptedpass:perms lines, crypt(3) hashes) - writes are unrestricted if not set");
 	addOption (OPT_STATIC_DIR, "static-dir", 1, "root of the static web frontend (web/static/) - disabled if not set");
@@ -789,6 +813,21 @@ int HttpD::idle ()
 	time_t now = time (nullptr);
 	for (std::vector <CommandHttp *>::iterator iter = pending.begin (); iter != pending.end (); iter++)
 		(*iter)->checkTimeout (now);
+	// MHD in external epoll mode: a connection still sending a response
+	// larger than its socket buffer (a FITS file, a tar) gets no new
+	// epoll event while its socket stays writable (edge-triggered); MHD
+	// asks to run again through MHD_get_timeout () instead. So MHD runs
+	// here when that is due, and the loop's next wait is no longer than
+	// MHD's timeout. Here, not in addPollSocks (): Block::oneRunLoop ()
+	// takes the wait before it calls addPollSocks (). Ignored, a download
+	// stopped after its first 4 kB. [JS 2026-10-27]
+	MHD_UNSIGNED_LONG_LONG mhdTimeout;
+	if (mhd && MHD_get_timeout (mhd, &mhdTimeout) == MHD_YES && mhdTimeout == 0)
+		MHD_run (mhd);
+	if (mhd && MHD_get_timeout (mhd, &mhdTimeout) == MHD_YES && (long int) mhdTimeout * 1000 < baseTimeout)
+		setTimeout ((long int) mhdTimeout * 1000);
+	else
+		setTimeout (baseTimeout);
 	return HttpDBase::idle ();
 }
 
@@ -831,6 +870,15 @@ int HttpD::processOption (int in_opt)
 		case OPT_IMAGES_DIR:
 			imagesDir = optarg;
 			break;
+		case OPT_CALIB_ROOT:
+			calib.root = optarg;
+			break;
+		case OPT_CALIB_TEMPLATE:
+			calib.dirTemplate = optarg;
+			break;
+		case OPT_CHIP_ID_CMD:
+			calib.chipIdCmd = optarg;
+			break;
 		case OPT_CACHE_DIR:
 			cacheDir = optarg;
 			break;
@@ -860,6 +908,7 @@ int HttpD::init ()
 	// itself, then connects to the database (--database, default
 	// "stars") - one call does both, no separate step needed here.
 	int ret = HttpDBase::init ();
+	baseTimeout = getTimeout ();
 	if (ret)
 		return ret;
 
@@ -867,7 +916,8 @@ int HttpD::init ()
 	{
 		if (cacheDir.empty ())
 			cacheDir = imagesDir + "/.cache";
-		logStream (MESSAGE_INFO) << "/preview/ enabled, images-dir " << imagesDir << ", cache-dir " << cacheDir << sendLog;
+		logStream (MESSAGE_INFO) << "/preview/ enabled, images-dir " << imagesDir << ", cache-dir " << cacheDir
+			<< (calib.enabled () ? ", masters in " + calib.root + " and " + calib.dirTemplate + ", chips by " + calib.chipIdCmd : std::string (", raw previews only")) << sendLog;
 	}
 
 	if (authFile.empty ())
@@ -919,11 +969,11 @@ int HttpD::init ()
 			logStream (MESSAGE_ERROR) << "invalid --bind-address " << bindAddress << " (must be a plain IPv4 address)" << sendLog;
 			return -1;
 		}
-		mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_SOCK_ADDR, (struct sockaddr *) &bindAddr, MHD_OPTION_END);
+		mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_SOCK_ADDR, (struct sockaddr *) &bindAddr, MHD_OPTION_NOTIFY_COMPLETED, &HttpD::requestCompleted, this, MHD_OPTION_END);
 	}
 	else
 	{
-		mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_END);
+		mhd = MHD_start_daemon (MHD_USE_EPOLL | MHD_ALLOW_UPGRADE, httpPort, nullptr, nullptr, &HttpD::answer, this, MHD_OPTION_NOTIFY_COMPLETED, &HttpD::requestCompleted, this, MHD_OPTION_END);
 	}
 	if (mhd == nullptr)
 	{
@@ -1008,9 +1058,7 @@ void HttpD::pollSuccess ()
 			;							 // drain the eventfd counter (non-blocking fd - the loop
 										 // ends on EAGAIN once it's empty)
 		drainPreviewResults ();
-#ifdef WEB_HAVE_DB
 		drainDbResults ();
-#endif
 		drainCommandResults ();
 	}
 
@@ -1085,9 +1133,286 @@ void HttpD::broadcastState (const char *device, Connection *conn)
 		(*iter)->sendFrame (frame);
 }
 
+// The tar download takes its file list as a POST body: a few hundred
+// paths do not fit in a URL through Apache (8190 bytes). MHD hands the
+// body over in pieces; it is collected in *req_cls (freed by
+// requestCompleted ()) and the request answered once all of it is in.
+#define DOWNLOAD_BODY_MAX    (1024 * 1024)
+
 MHD_Result HttpD::answer (void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **req_cls)
 {
+	if (!strcmp (method, "POST") && !strcmp (url, "/api/download"))
+	{
+		std::string *body = (std::string *) *req_cls;
+		if (body == nullptr)
+		{
+			*req_cls = new std::string ();
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0)
+		{
+			if (body->size () + *upload_data_size <= DOWNLOAD_BODY_MAX)
+				body->append (upload_data, *upload_data_size);
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		return ((HttpD *) cls)->handleDownload (connection, *body);
+	}
 	return ((HttpD *) cls)->handleRequest (connection, url);
+}
+
+void HttpD::requestCompleted (void *cls, struct MHD_Connection *connection, void **req_cls, enum MHD_RequestTerminationCode toe)
+{
+	delete (std::string *) *req_cls;
+	*req_cls = nullptr;
+}
+
+/**
+ * The tar of a download, made while it is sent (MHD's content reader):
+ * a ustar header, the file read from disk and its padding to 512 bytes
+ * for each file, then two zero blocks. The size is known in advance, so
+ * the browser shows the progress. Runs on the main thread, one chunk
+ * (at most MHD's buffer) per call. [JS 2026-10-27]
+ */
+struct TarStream
+{
+	struct Entry
+	{
+		std::string name;			// in the tar: the archive path
+		std::string fullPath;
+		uint64_t size;
+		time_t mtime;
+		uint64_t start;				// of its header in the tar
+	};
+	std::vector <Entry> entries;
+	uint64_t total = 0;
+	size_t current = 0;				// the entry being sent
+	int fd = -1;					// its file, open while its data is sent
+
+	static uint64_t padded (uint64_t size) { return (size + 511) / 512 * 512; }
+
+	void add (const std::string &name, const std::string &fullPath, const struct stat &st)
+	{
+		entries.push_back (Entry {name, fullPath, (uint64_t) st.st_size, st.st_mtime, total});
+		total += 512 + padded (st.st_size);
+	}
+
+	void finish () { total += 1024; }
+
+	// ustar header; a name over 100 characters is split into prefix/name
+	static void header (const Entry &e, char *h)
+	{
+		memset (h, 0, 512);
+		std::string name = e.name, prefix;
+		if (name.size () > 100)
+		{
+			size_t cut = name.rfind ('/', 155);
+			while (cut != std::string::npos && name.size () - cut - 1 > 100)
+				cut = std::string::npos;
+			if (cut != std::string::npos)
+			{
+				prefix = name.substr (0, cut);
+				name = name.substr (cut + 1);
+			}
+		}
+		// both fit (the split above), so no terminating zero is needed
+		memcpy (h, name.c_str (), std::min ((size_t) 100, name.size ()));
+		snprintf (h + 100, 8, "%07o", 0644);
+		snprintf (h + 108, 8, "%07o", 0);
+		snprintf (h + 116, 8, "%07o", 0);
+		snprintf (h + 124, 12, "%011llo", (unsigned long long) e.size);
+		snprintf (h + 136, 12, "%011llo", (unsigned long long) e.mtime);
+		memset (h + 148, ' ', 8);
+		h[156] = '0';
+		memcpy (h + 257, "ustar", 6);
+		memcpy (h + 263, "00", 2);
+		memcpy (h + 345, prefix.c_str (), std::min ((size_t) 155, prefix.size ()));
+		unsigned int sum = 0;
+		for (int i = 0; i < 512; i++)
+			sum += (unsigned char) h[i];
+		snprintf (h + 148, 8, "%06o", sum);
+		h[155] = ' ';
+	}
+
+	ssize_t read (uint64_t pos, char *buf, size_t max)
+	{
+		while (current < entries.size () && pos >= entries[current].start + 512 + padded (entries[current].size))
+		{
+			closeFile ();
+			current++;
+		}
+		if (current >= entries.size ())
+		{
+			// the two zero blocks at the end
+			size_t n = std::min ((uint64_t) max, total - pos);
+			if (n == 0)
+				return MHD_CONTENT_READER_END_OF_STREAM;
+			memset (buf, 0, n);
+			return n;
+		}
+		const Entry &e = entries[current];
+		uint64_t off = pos - e.start;
+		if (off < 512)
+		{
+			char h[512];
+			header (e, h);
+			size_t n = std::min ((uint64_t) max, 512 - off);
+			memcpy (buf, h + off, n);
+			return n;
+		}
+		off -= 512;
+		if (off < e.size)
+		{
+			if (fd < 0 && (fd = open (e.fullPath.c_str (), O_RDONLY)) < 0)
+				return MHD_CONTENT_READER_END_WITH_ERROR;
+			ssize_t n = pread (fd, buf, std::min ((uint64_t) max, e.size - off), off);
+			// a file that shrank since its size went into the header
+			if (n <= 0)
+				return MHD_CONTENT_READER_END_WITH_ERROR;
+			return n;
+		}
+		size_t n = std::min ((uint64_t) max, padded (e.size) - off);
+		memset (buf, 0, n);
+		return n;
+	}
+
+	void closeFile ()
+	{
+		if (fd >= 0)
+			close (fd);
+		fd = -1;
+	}
+
+	~TarStream () { closeFile (); }
+};
+
+static ssize_t tarRead (void *cls, uint64_t pos, char *buf, size_t max)
+{
+	return ((TarStream *) cls)->read (pos, buf, max);
+}
+
+static void tarFree (void *cls)
+{
+	delete (TarStream *) cls;
+}
+
+// at most this many files in one tar
+#define DOWNLOAD_MAX_FILES    5000
+
+static MHD_Result sendTextError (struct MHD_Connection *connection, unsigned int status, const std::string &msg)
+{
+	std::ostringstream os;
+	os << "{\"error\":";
+	jsonString (msg.c_str (), os);
+	os << "}";
+	std::string body = os.str ();
+	struct MHD_Response *response = MHD_create_response_from_buffer (body.size (), (void *) body.c_str (), MHD_RESPMEM_MUST_COPY);
+	MHD_add_response_header (response, "Content-Type", "application/json");
+	MHD_Result ret = MHD_queue_response (connection, status, response);
+	MHD_destroy_response (response);
+	return ret;
+}
+
+// application/x-www-form-urlencoded: "+" is a space, %XX a byte
+static std::string formDecode (const std::string &in)
+{
+	std::string out;
+	for (size_t i = 0; i < in.size (); i++)
+	{
+		if (in[i] == '+')
+			out += ' ';
+		else if (in[i] == '%' && i + 2 < in.size () && isxdigit ((unsigned char) in[i + 1]) && isxdigit ((unsigned char) in[i + 2]))
+		{
+			out += (char) strtol (in.substr (i + 1, 2).c_str (), nullptr, 16);
+			i += 2;
+		}
+		else
+			out += in[i];
+	}
+	return out;
+}
+
+MHD_Result HttpD::handleDownload (struct MHD_Connection *connection, const std::string &rawBody)
+{
+	if (imagesDir.empty ())
+		return sendTextError (connection, MHD_HTTP_NOT_FOUND, "images-dir not configured");
+	if (rawBody.size () >= DOWNLOAD_BODY_MAX)
+		return sendTextError (connection, MHD_HTTP_BAD_REQUEST, "file list too long");
+	// the paths one per line, sent as they are or as a form's "paths"
+	// field (the page posts a form, so that the browser saves the tar
+	// as it comes)
+	std::string body = rawBody.compare (0, 6, "paths=") == 0 ? formDecode (rawBody.substr (6)) : rawBody;
+
+	TarStream *tar = new TarStream ();
+	std::istringstream lines (body);
+	std::string relPath;
+	std::set <std::string> seen;
+	while (std::getline (lines, relPath))
+	{
+		if (!relPath.empty () && relPath.back () == '\r')
+			relPath.pop_back ();
+		if (relPath.empty () || !seen.insert (relPath).second)
+			continue;
+		if (tar->entries.size () >= DOWNLOAD_MAX_FILES)
+		{
+			delete tar;
+			return sendTextError (connection, MHD_HTTP_BAD_REQUEST, "at most " + std::to_string (DOWNLOAD_MAX_FILES) + " files in one download");
+		}
+		std::string fullPath, err;
+		struct stat st;
+		if (!resolveImagePath (imagesDir, relPath, fullPath, st, err))
+		{
+			delete tar;
+			return sendTextError (connection, MHD_HTTP_BAD_REQUEST, relPath + ": " + err);
+		}
+		tar->add (relPath, fullPath, st);
+	}
+	if (tar->entries.empty ())
+	{
+		delete tar;
+		return sendTextError (connection, MHD_HTTP_BAD_REQUEST, "no files to download");
+	}
+	tar->finish ();
+
+	// the name the browser saves it as: name=, letters, digits, . _ - only
+	std::string name = getParam (connection, "name", "rts2-images");
+	for (char &c : name)
+		if (!isalnum ((unsigned char) c) && c != '.' && c != '_' && c != '-')
+			c = '_';
+	std::string disposition = "attachment; filename=\"" + name + ".tar\"";
+
+	struct MHD_Response *response = MHD_create_response_from_callback (tar->total, 64 * 1024, &tarRead, tar, &tarFree);
+	MHD_add_response_header (response, "Content-Type", "application/x-tar");
+	MHD_add_response_header (response, "Content-Disposition", disposition.c_str ());
+	MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+	MHD_destroy_response (response);
+	return ret;
+}
+
+MHD_Result HttpD::handleFits (struct MHD_Connection *connection, const char *relPath)
+{
+	if (imagesDir.empty ())
+		return sendTextError (connection, MHD_HTTP_NOT_FOUND, "images-dir not configured");
+	std::string fullPath, err;
+	struct stat st;
+	if (!resolveImagePath (imagesDir, relPath, fullPath, st, err))
+		return sendTextError (connection, MHD_HTTP_NOT_FOUND, err);
+	int fd = open (fullPath.c_str (), O_RDONLY);
+	if (fd < 0)
+		return sendTextError (connection, MHD_HTTP_NOT_FOUND, "cannot open the file");
+	// inline, as image/fits (RFC 4047, what desktops associate FITS
+	// viewers with): the browser offers to open it in that application
+	// rather than only saving it; ?download=1 to save it
+	const char *slash = strrchr (relPath, '/');
+	bool download = getParam (connection, "download", "0")[0] == '1';
+	std::string disposition = std::string (download ? "attachment" : "inline") + "; filename=\"" + (slash ? slash + 1 : relPath) + "\"";
+	// MHD sends it from the fd (sendfile) and closes it
+	struct MHD_Response *response = MHD_create_response_from_fd ((uint64_t) st.st_size, fd);
+	MHD_add_response_header (response, "Content-Type", "image/fits");
+	MHD_add_response_header (response, "Content-Disposition", disposition.c_str ());
+	MHD_Result ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+	MHD_destroy_response (response);
+	return ret;
 }
 
 MHD_Result HttpD::handleWsUpgrade (struct MHD_Connection *connection)
@@ -1243,7 +1568,7 @@ MHD_Result HttpD::sendUnauthorized (struct MHD_Connection *connection, const cha
 	return ret;
 }
 
-MHD_Result HttpD::sendPreviewResponse (struct MHD_Connection *connection, bool ok, const std::string &jpegData, const std::string &errorMsg)
+MHD_Result HttpD::sendPreviewResponse (struct MHD_Connection *connection, bool ok, const std::string &jpegData, const std::string &errorMsg, const std::string &calibration, const std::string &masters)
 {
 	struct MHD_Response *response;
 	unsigned int httpStatus;
@@ -1252,6 +1577,12 @@ MHD_Result HttpD::sendPreviewResponse (struct MHD_Connection *connection, bool o
 	{
 		response = MHD_create_response_from_buffer (jpegData.length (), (void *) jpegData.data (), MHD_RESPMEM_MUST_COPY);
 		MHD_add_response_header (response, "Content-Type", "image/jpeg");
+		// what the preview is: "raw", "dark and flat corrected", ...
+		if (!calibration.empty ())
+			MHD_add_response_header (response, "X-RTS2-Calibration", calibration.c_str ());
+		// and the masters it took, "dark=<path>; flat=<path>"
+		if (!masters.empty ())
+			MHD_add_response_header (response, "X-RTS2-Masters", masters.c_str ());
 		httpStatus = MHD_HTTP_OK;
 	}
 	else
@@ -1320,17 +1651,28 @@ MHD_Result HttpD::handlePreview (struct MHD_Connection *connection, const char *
 	if (previewSize <= 0)
 		previewSize = 128;
 	float quantiles = atof (getParam (connection, "q", "0.005"));
+	// JPEG quality: jq=, else 85 for a thumbnail and 98 for a big
+	// preview, which is looked at enlarged and zoomed: at 85 a star's
+	// core was speckled and its halo blocky (pixels up to 19 grey levels
+	// off), at 98 up to 4, for 2x the size (a C1 preview at 2048 px:
+	// 3.0 MB instead of 1.4) [JS 2026-10-28]
+	int jpegQuality = atoi (getParam (connection, "jq", previewSize > 400 ? "98" : "85"));
+	jpegQuality = std::max (10, std::min (100, jpegQuality));
 	std::string relPathStr (relPath);
+	// cal=1: dark/flat corrected, if the masters are configured (and
+	// found, else raw); without it raw, as before
+	bool calibrated = calib.enabled () && getParam (connection, "cal", "0")[0] == '1';
+	CalibConfig calibCopy = calib;
 
 	// Cache-hit (or invalid-path/missing-source) is cheap - a stat()
 	// plus maybe a file read - and stays inline on the main thread, per
 	// STATUS.md task 5's design: only cache-miss regeneration needs
 	// offloading.
-	std::string jpegDataOrError;
-	PreviewStatus status = checkPreviewCache (imagesDir, cacheDir, relPathStr, previewSize, quantiles, jpegDataOrError);
+	std::string jpegDataOrError, calibration, masters;
+	PreviewStatus status = checkPreviewCache (imagesDir, cacheDir, relPathStr, previewSize, quantiles, jpegQuality, calibrated, jpegDataOrError, calibration, masters);
 
 	if (status == PreviewStatus::Hit)
-		return sendPreviewResponse (connection, true, jpegDataOrError, "");
+		return sendPreviewResponse (connection, true, jpegDataOrError, "", calibration, masters);
 	if (status == PreviewStatus::Invalid)
 		return sendPreviewResponse (connection, false, "", jpegDataOrError);
 
@@ -1345,11 +1687,11 @@ MHD_Result HttpD::handlePreview (struct MHD_Connection *connection, const char *
 
 	std::string imagesDirCopy = imagesDir;
 	std::string cacheDirCopy = cacheDir;
-	workerPool->submit ([this, connection, imagesDirCopy, cacheDirCopy, relPathStr, previewSize, quantiles] ()
+	workerPool->submit ([this, connection, imagesDirCopy, cacheDirCopy, relPathStr, previewSize, quantiles, jpegQuality, calibrated, calibCopy] ()
 	{
 		PreviewResult r;
 		r.connection = connection;
-		r.ok = generatePreview (imagesDirCopy, cacheDirCopy, relPathStr, previewSize, quantiles, r.jpegData, r.errorMsg);
+		r.ok = generatePreview (imagesDirCopy, cacheDirCopy, relPathStr, previewSize, quantiles, jpegQuality, calibrated ? &calibCopy : nullptr, r.jpegData, r.calibration, r.masters, r.errorMsg);
 		{
 			std::lock_guard <std::mutex> lock (previewResultsMutex);
 			previewResults.push (std::move (r));
@@ -1376,7 +1718,7 @@ void HttpD::drainPreviewResults ()
 
 	for (std::vector <PreviewResult>::iterator iter = results.begin (); iter != results.end (); iter++)
 	{
-		sendPreviewResponse (iter->connection, iter->ok, iter->jpegData, iter->errorMsg);
+		sendPreviewResponse (iter->connection, iter->ok, iter->jpegData, iter->errorMsg, iter->calibration, iter->masters);
 		MHD_resume_connection (iter->connection);
 	}
 
@@ -1388,7 +1730,6 @@ void HttpD::drainPreviewResults ()
 	MHD_run (mhd);
 }
 
-#ifdef WEB_HAVE_DB
 void HttpD::drainDbResults ()
 {
 	std::vector <DbResult> results;
@@ -1417,6 +1758,7 @@ void HttpD::drainDbResults ()
 	MHD_run (mhd);
 }
 
+#ifdef WEB_HAVE_DB
 // STATUS.md task 7: DB queries run on workerPool, not inline on the main
 // thread, as of 2026-08-17 - the original first-slice implementation
 // answered these synchronously (fine against the sparse local test
@@ -1609,15 +1951,54 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		int targetId = byTarget ? atoi (targetStr) : 0;
 		std::string imagesDirCopy = imagesDir;
 
+		// with limit=: one page, filtered (dbImagesPage ()); without, the
+		// whole list as before
+		const char *limitStr = getParam (connection, "limit", "");
+		bool paged = limitStr[0] != '\0';
+		ImageQuery q;
+		if (paged)
+		{
+			q.year = year;
+			q.month = month;
+			q.day = day;
+			q.byTarget = byTarget ? targetId : -1;
+			q.limit = std::max (1, std::min (10000, atoi (limitStr)));
+			q.offset = std::max (0, atoi (getParam (connection, "offset", "0")));
+			q.newestFirst = !strcmp (getParam (connection, "order", "asc"), "desc");
+			const char *tar = getParam (connection, "tar", "");
+			q.target = tar[0] ? atoi (tar) : -1;
+			auto split = [] (const char *csv, std::set <std::string> &out)
+			{
+				std::istringstream in (csv);
+				std::string item;
+				while (std::getline (in, item, ','))
+					out.insert (item);
+			};
+			// a parameter given but empty is one empty name: images with
+			// no filter
+			if (MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, "cameras"))
+				split (getParam (connection, "cameras", ""), q.cameras);
+			if (MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, "filters"))
+			{
+				const char *f = getParam (connection, "filters", "");
+				if (f[0] == '\0')
+					q.filters.insert ("");
+				else
+					split (f, q.filters);
+			}
+		}
+
 		MHD_suspend_connection (connection);
-		workerPool->submit ([this, connection, imagesDirCopy, byTarget, targetId, year, month, day] ()
+		workerPool->submit ([this, connection, imagesDirCopy, byTarget, targetId, year, month, day, paged, q] ()
 		{
 			DbResult r;
 			r.connection = connection;
 			std::ostringstream os;
 			try
 			{
-				if (byTarget)
+				if (paged)
+					dbImagesPage (imagesDirCopy, q, os);
+				else if (byTarget)
 					dbSearchImagesByTarget (imagesDirCopy, targetId, os);
 				else
 					dbSearchImagesByNight (imagesDirCopy, year, month, day, os);
@@ -2210,6 +2591,10 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 	if (!strncmp (url, previewPrefix, strlen (previewPrefix)))
 		return handlePreview (connection, url + strlen (previewPrefix));
 
+	static const char *fitsPrefix = "/fits/";
+	if (!strncmp (url, fitsPrefix, strlen (fitsPrefix)))
+		return handleFits (connection, url + strlen (fitsPrefix));
+
 	if (!strcmp (url, "/ws"))
 		return handleWsUpgrade (connection);
 
@@ -2510,6 +2895,47 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 			conn->queCommand (new CommandChangeValue (this, std::string (variable), op, std::string (value)));
 
 			sendConnectionValues (conn, os);
+		}
+		else if (!strcmp (url, "/api/purge-cache"))
+		{
+			// The whole preview cache goes (purgePreviewCache (): only
+			// what the cache writes); the previews are made again when
+			// asked. A write: the same login as set, for "preview-cache".
+			if (imagesDir.empty ())
+				throw ApiError ("images-dir not configured");
+			std::string authError;
+			if (!checkWriteAuth (connection, "preview-cache", authError))
+				return sendUnauthorized (connection, authError.c_str ());
+			std::string cacheDirCopy = cacheDir;
+			MHD_suspend_connection (connection);
+			workerPool->submit ([this, connection, cacheDirCopy] ()
+			{
+				DbResult r;
+				r.connection = connection;
+				long files;
+				long long bytes;
+				std::string err;
+				std::ostringstream answer;
+				if (purgePreviewCache (cacheDirCopy, files, bytes, err))
+				{
+					answer << "{\"files\":" << files << ",\"bytes\":" << bytes << "}";
+					r.httpStatus = MHD_HTTP_OK;
+				}
+				else
+				{
+					answer << "{\"error\":";
+					jsonString (err.c_str (), answer);
+					answer << "}";
+					r.httpStatus = MHD_HTTP_BAD_REQUEST;
+				}
+				r.body = answer.str ();
+				{
+					std::lock_guard <std::mutex> lock (dbResultsMutex);
+					dbResults.push (std::move (r));
+				}
+				wakeup ();
+			});
+			return MHD_YES;
 		}
 		else if (!strcmp (url, "/api/cmd"))
 		{
