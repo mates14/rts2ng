@@ -3791,3 +3791,27 @@ Tested in headless Chromium against a mock (four observations, C1-C3):
 all, without C3 (an observation of only C3 frames left with "--- no
 images ---", nothing flashing, ["C3"] kept), only C2, only C2 with the
 last 3 rows. Page files only: a pull in MJ's checkouts deploys it.
+
+## Monitors: live camera updates over the WebSocket (2026-10-29) [JS]
+
+bart-monitor.html and d50-monitor.html open rts2-httpd's WebSocket
+(`/images/ws`, behind the same Apache `ProxyPass /images` as the API) and
+merge every value change of their cameras into the page at once, so the
+script position, exposure and state follow the camera within a second (a
+`for 3 { E 5 }` loop slipped past the 10 s polling). A camera state change
+also fetches that camera, for the `progress_start`/`progress_end` the state
+event lacks. Reconnects after 5 s, backing off to 60 s; the 10 s polling is
+unchanged, so without the WebSocket the page works as before.
+
+Needs, at each site (outside the repo, `/etc/apache2/sites-available/
+default-ssl.conf`, done by JS on 2026-10-29 at SBT and D50):
+`ProxyPass /images http://localhost:8889 upgrade=websocket` (Apache 2.4.47+;
+both run 2.4.68). The browser sends its cached RTS2 Basic-auth login with
+the handshake, as with the API; without it Apache answers 401.
+
+httpd's `/ws` needs no subscription: every value change of every device,
+about 1 KB/s at SBT by day. Checked: the handshake on lascaux directly
+(101); through Apache from outside 401 without the login, as the API; with
+JS's browser on both pages, one long-lived connection from Apache to httpd
+receiving 0.5-2.2 KB every second (polling would come in 10 s bursts).
+Apache logs a WebSocket in access.log only when it closes.

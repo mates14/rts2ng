@@ -2988,6 +2988,54 @@
             reloadGuideHistory();
         }
 
+        // Live camera updates over rts2-httpd's WebSocket (/ws, behind the
+        // same Apache ProxyPass as the API; needs "upgrade=websocket" on that
+        // line). httpd pushes every value change of every device; the
+        // cameras' are merged into systemData and the camera lines redrawn at
+        // once, so a short script loop shows. A camera state change (an
+        // exposure or readout starting) fetches that camera, for the progress
+        // times the state event does not carry. The 10 s polling stays, so
+        // the page works as before without the WebSocket. [JS 2026-10-29]
+        const LIVE_CAMS = ['C1', 'C2', 'C3'];
+        let liveSocketDelay = 5000;
+        function startLiveUpdates() {
+            let ws;
+            try {
+                const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
+                    + API_BASE.replace(/\/api$/, '') + '/ws';
+                ws = new WebSocket(url);
+            } catch (e) {
+                setTimeout(startLiveUpdates, liveSocketDelay);
+                return;
+            }
+            ws.onopen = () => { liveSocketDelay = 5000; };
+            ws.onmessage = ev => {
+                let m;
+                try { m = JSON.parse(ev.data); } catch (e) { return; }
+                if (!LIVE_CAMS.includes(m.device))
+                    return;
+                if (m.event === 'value' && m.v) {
+                    systemData[m.device] = Object.assign(systemData[m.device] || {}, m.v);
+                    updateCameraStatus();
+                } else if (m.event === 'state') {
+                    if (systemData[m.device])
+                        systemData[m.device].state = m.value;
+                    updateCameraStatus();
+                    fetchDeviceData(m.device).then(d => {
+                        if (d) {
+                            systemData[m.device] = d;
+                            updateCameraStatus();
+                        }
+                    }).catch(() => {});
+                }
+            };
+            ws.onclose = () => {
+                setTimeout(startLiveUpdates, liveSocketDelay);
+                liveSocketDelay = Math.min(liveSocketDelay * 2, 60000);
+            };
+        }
+        startLiveUpdates();
+
         setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
         // the state lines' seconds count between polls
         setInterval(updateCameraStatus, 1000);
