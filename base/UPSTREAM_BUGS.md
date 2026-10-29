@@ -1957,3 +1957,16 @@ state at all.
 
 rts2ng: a chip with no activity printed is "idle"; `IMAGE_READY` stays
 where `getStateString ()` prints it.
+
+## A block reports the element after the one that runs (`lib/rts2script/elementblock.cpp`, `getStartPos`) [JS 2026-10-29]
+
+`Script::nextCommand` asks the current element for its position after
+its `nextCommand` returned. A block's `nextCommand` runs its inner element
+and then `blockScriptRet` moves `curr_element` past it, so the block's
+`getStartPos`/`getLen` report the next element: in `for 300 {
+T0.WOFFS=(...) E 60 }` the camera's `scriptPosition` showed `T0.WOFFS`
+for every exposure, in rts2-mon and the web monitors alike.
+
+rts2ng: `blockScriptRet` keeps the element that returned
+(`reported_element`), and the block reports that one; a nested block
+reports its own.

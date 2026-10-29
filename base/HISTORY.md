@@ -4200,3 +4200,53 @@ s after the last readout. A queued change logs "command end with note ...
 was queued" at DEBUG, two more lines per exposure on a camera run with
 `--debug`. D50's C0 (Andor) is built by hand on lascaux50 and needs a
 rebuild to get this.
+
+## The script position inside a block (2026-10-29) [JS]
+
+JS saw D50's C0 run `filter=r for 300 { T0.WOFFS=(rand(-0.03,0.03),
+rand(-0.03,0.03)) E 60 }` with the WOFFS element highlighted through
+every exposure, in rts2-mon too. The cause is in the block, not in the
+queueing of 2026-10-29 above: `ElementBlock::blockScriptRet` advances
+`curr_element` past the element that returned the command, and only then
+`Script::nextCommand` asks the block for `getStartPos`, so a block always
+reported the element after the running one (classic does the same,
+UPSTREAM_BUGS). With `E` the last element of the loop that is the first
+one, WOFFS. The earlier "first `E 5` only" symptom of target 1109 was
+this too, for the exposures inside a loop.
+
+The block now remembers the element that returned (`reported_element`,
+set in `blockScriptRet`, not cleared at the block's end, as the last pass
+of a loop reports after `afterBlockEnd`).
+
+Tried first and dropped: sending the position when the command is
+dispatched rather than prepared. It is correct too, but it adds two round
+trips in front of the next exposure for every element that changes the
+position: camd-dummy, `for 6 { T0.WOFFS=(0,0) E 1 }`, readout to the next
+exposure 263 ms before, 302 ms with it. The fix in the block sends the
+same commands as before; with `CAM_WORKING` the prefetched position waits
+for the readout anyway.
+
+Bench: private centrald, teld-dummy, camd-dummy, rts2-scriptexec,
+listening to the camera's `V scriptPosition` broadcasts against its
+exposure starts. D50's script: `E 3` (53) is set 0.3 s before each
+exposure and stays through it, WOFFS (11) shows for 45 ms after each
+readout, 0 after the last. `E 1 for 2 { E 2 for 2 { E 1 } }`: 12 before
+each `E 2`, 24 before each pair of inner `E 1`, 0 at the end.
+
+JS remembered nested `for` loops misbehaving in the past (before these
+notes), so the loops themselves were tested too: camd-dummy with
+`--read-sleep 1`, filterd-dummy with a 1 s move, the images' FILTER and
+EXPOSURE in DATE-OBS order against the script expanded by hand, and the
+position at each exposure start. All matched for two and three levels of
+nesting with a filter change before each exposure (`for 2 { filter=g E 1
+for 3 { filter=r E 1 filter=i E 2 } }`, 14 images; `for 2 { for 2 {
+filter=g E 1 for 2 { filter=r E 2 } } filter=i E 1 }`; the same with
+`T0.WOFFS` inside), loops after each other, `for 1`, `for 0`, an empty
+block, a filter change as a loop's last element, and alternating filters
+in one loop; every wheel move ended 0.2 s before its exposure started. No
+glitch found.
+
+The fix is
+in rts2-executor (db links base's script library), so it reaches the sites
+with the next release and an EXEC restart; the cameras, C0's Andor
+included, need no rebuild.

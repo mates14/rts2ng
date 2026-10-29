@@ -73,6 +73,8 @@ class ElementBlock:public Element
 	protected:
 		std::list < Element * > blockElements;
 		std::list < Element * >::iterator curr_element;
+		// element whose command was returned last, for getStartPos/getLen
+		Element *reported_element;
 		int blockScriptRet (int ret);
 		int loopCount;
 

@@ -26,6 +26,7 @@ using namespace rts2image;
 ElementBlock::ElementBlock (Script * in_script):Element (in_script)
 {
 	curr_element = blockElements.end ();
+	reported_element = nullptr;
 	loopCount = 0;
 }
 
@@ -41,6 +42,12 @@ ElementBlock::~ElementBlock (void)
 
 int ElementBlock::blockScriptRet (int ret)
 {
+	// base note: remember the element that returned the command before
+	// curr_element moves past it; classic reported the next element, so
+	// in "for 5 { A E 60 }" the script position showed A during every
+	// exposure.
+	if (curr_element != blockElements.end ())
+		reported_element = *curr_element;
 	switch (ret)
 	{
 		case 0:
@@ -209,6 +216,8 @@ void ElementBlock::beforeExecuting ()
 
 int ElementBlock::getStartPos ()
 {
+	if (reported_element)
+		return reported_element->getStartPos ();
 	if (curr_element != blockElements.end ())
 		return (*curr_element)->getStartPos ();
 	return Element::getStartPos ();
@@ -216,6 +225,8 @@ int ElementBlock::getStartPos ()
 
 int ElementBlock::getLen ()
 {
+	if (reported_element)
+		return reported_element->getLen ();
 	if (curr_element != blockElements.end ())
 		return (*curr_element)->getLen ();
 	return Element::getLen ();
