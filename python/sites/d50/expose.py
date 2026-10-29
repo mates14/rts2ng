@@ -2,18 +2,28 @@
 """Expose the current target in a sequence of filters, each for a requested SNR,
 until the executor wants another target.
 
-    exe expose.py --filters rzgi --snr 30 --fallback-mag 16.3
+    exe expose.py --filters rzgi --snr 30 --fallback-mag 16.3 --acquire 3x10 --dither 0.03
 
 The exposure time of each filter is computed before every cycle from the
 current conditions (the COND device) and the target magnitude (--mag, else
 the local ATLAS, else lcgen on hog, else --fallback-mag).  There is no
 repetition count: the cycles go on while the queuer keeps the target, and
 the script ends at an exposure boundary once EXEC has another target as next.
+The mount may move meanwhile (centering), that does not end it.
+
+--acquire NxT takes N unfiltered frames of T s first, for the centering.
+--dither D offsets the mount by a random (-D..D, -D..D) deg before each
+science frame, as T0.WOFFS=(rand(-D,D),rand(-D,D)) does in a script.  A
+value change from an exe script does not wait for the device, so an
+exposure queued right after it could start before T0 even raises its
+exposure block; the script therefore waits until T0 has applied the offset
+and no device of --block-devices blocks exposures.
 """
 
 import argparse
 import os
-from time import sleep
+import random
+from time import sleep, time
 
 from rts2 import scriptcomm
 try:
@@ -27,15 +37,19 @@ except ImportError:
     _spec.loader.exec_module(snrexp)
 
 TELESCOPE = 'D50'
+BOP_EXPOSURE = 0x01000000      # status.h
 
 
 class Expose(scriptcomm.Rts2Comm):
     """Filter cycles at a requested SNR (or a fixed exposure) on one camera."""
 
     def __init__(self, filters, snr=None, exptime=None, mag=None, fallback_mag=None,
-                 mag_sources=('atlas', 'lcgen'), tmin=1, tmax=300):
+                 mag_sources=('atlas', 'lcgen'), tmin=1, tmax=300, acquire=None,
+                 acquire_filter='N', dither=0.0, block_devices=('T0', 'W0')):
         super().__init__()
         self.filters = filters
+        self.acquire, self.acquire_filter = acquire, acquire_filter
+        self.dither, self.block_devices = dither, tuple(block_devices)
         self.snr, self.exptime = snr, exptime
         self.mag, self.fallback_mag, self.mag_sources = mag, fallback_mag, tuple(mag_sources)
         self.tmin, self.tmax = tmin, tmax
@@ -54,13 +68,59 @@ class Expose(scriptcomm.Rts2Comm):
         next_t = self.getValueInteger('next', 'EXEC')
         return next_t is not None and next_t >= 0 and next_t != self.target
 
-    def mount_moved(self):
+    def blocked(self):
+        """True while a device of block_devices blocks exposures."""
+        for dev in self.block_devices:
+            try:
+                if self.getState(dev) & BOP_EXPOSURE:
+                    return True
+            except scriptcomm.Rts2NotActive:
+                raise
+            except Exception:
+                continue
+        return False
+
+    def wait_unblocked(self, timeout=120):
+        sleep(0.5)          # let the devices take the changes just sent
+        end = time() + timeout
+        while self.blocked():
+            if time() > end:
+                self.log('W', f"{self.name}: exposures still blocked after {timeout}s, exposing anyway")
+                return
+            sleep(0.5)
+
+    def offset(self):
+        """Random dither, waiting until T0 has applied it."""
+        dx, dy = (random.uniform(-self.dither, self.dither) for _ in range(2))
+        self.setValue('woffs', f'{dx:.6f} {dy:.6f}', 'T0')
+        end = time() + 30
+        while time() < end:
+            try:
+                offs = [float(v) for v in (self.getValue('OFFS', 'T0') or '').split()[:2]]
+                if len(offs) == 2 and abs(offs[0] - dx) < 1e-5 and abs(offs[1] - dy) < 1e-5:
+                    return
+            except ValueError:
+                pass
+            sleep(0.2)
+        self.log('W', f"{self.name}: T0 did not report offset {dx:.4f} {dy:.4f} in 30s")
+
+    def take(self, f, t, dither=False):
+        """One exposure in filter f for t s; True if an image came."""
+        self.setValue('filter', f)
+        self.setValue('exposure', t)
+        if dither:
+            self.offset()
+        self.wait_unblocked()
         try:
-            return self.getValueFloat('move_started', 'T0') > self.getValueFloat('move_end', 'T0') + 1
+            image = self.exposure()
         except scriptcomm.Rts2NotActive:
             raise
-        except Exception:
+        except Exception as e:
+            self.log('E', f"{self.name}: exposure in {f} failed: {e}")
+            sleep(5)
             return False
+        self.process(image)
+        return True
 
     def wait_for_tracking(self):
         if self.isParked('T0'):
@@ -89,29 +149,22 @@ class Expose(scriptcomm.Rts2Comm):
         return {f: plan['exptime'][f'{self.camera}/{lf}'] for f, lf in zip(self.filters, long)}
 
     def run(self):
-        """Cycles until the executor wants another target or the mount moves; images taken."""
+        """Cycles until the executor wants another target; images taken."""
         n = 0
         self.wait_for_tracking()
+        if self.acquire:
+            count, t = self.acquire
+            self.log('I', f"{self.name}: acquisition {count}x{t:g}s in {self.acquire_filter}")
+            for _ in range(count):
+                if self.next_is_other():
+                    return n
+                n += self.take(self.acquire_filter, t)
         while True:
             for f, t in self.plan().items():
                 if self.next_is_other():
                     self.log('I', f"{self.name}: next target queued, ending after {n} images")
                     return n
-                self.setValue('filter', f)
-                self.setValue('exposure', t)
-                try:
-                    image = self.exposure()
-                except scriptcomm.Rts2NotActive:
-                    raise
-                except Exception as e:
-                    self.log('E', f"{self.name}: exposure in {f} failed: {e}")
-                    sleep(5)
-                    continue
-                self.process(image)
-                n += 1
-                if self.mount_moved():
-                    self.log('I', f"{self.name}: mount moved, ending after {n} images")
-                    return n
+                n += self.take(f, t, dither=self.dither > 0)
 
 
 def parse_arguments():
@@ -133,7 +186,19 @@ def parse_arguments():
     parser.add_argument("-f", "--fallback-mag", type=float, help="magnitude when no source knows the target")
     parser.add_argument("--tmin", type=positive_float, default=1.0, help="shortest exposure")
     parser.add_argument("--tmax", type=positive_float, default=300.0, help="longest exposure")
+    parser.add_argument("--acquire", help="unfiltered frames before the cycles, NxT, e.g. 3x10")
+    parser.add_argument("--acquire-filter", default="N", help="filter of the acquisition frames")
+    parser.add_argument("--dither", type=float, default=0.0,
+                        help="random offset of each science frame, up to this many deg in RA and Dec")
+    parser.add_argument("--block-devices", default="T0,W0",
+                        help="devices whose exposure block an exposure waits for")
     args = parser.parse_args()
+    if args.acquire:
+        try:
+            count, t = args.acquire.lower().split('x')
+            args.acquire = (int(count), positive_float(t))
+        except ValueError:
+            parser.error("--acquire takes NxT, e.g. 3x10")
     if args.magerr:
         args.snr = snrexp.MAGERR_K / args.magerr
     if bool(args.snr) == bool(args.exptime):
@@ -148,7 +213,9 @@ if __name__ == '__main__':
         e = Expose(args.filters, snr=args.snr, exptime=args.exptime, mag=args.mag,
                    fallback_mag=args.fallback_mag,
                    mag_sources=[s for s in args.mag_source.split(',') if s],
-                   tmin=args.tmin, tmax=args.tmax)
+                   tmin=args.tmin, tmax=args.tmax, acquire=args.acquire,
+                   acquire_filter=args.acquire_filter, dither=args.dither,
+                   block_devices=[d for d in args.block_devices.split(',') if d])
         e.log('I', f"{e.name}: starts filters {''.join(args.filters)} "
                    + (f"snr {args.snr:g}" if args.snr else f"exp {args.exptime:g}s"))
         n = e.run()
