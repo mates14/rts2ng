@@ -3735,3 +3735,31 @@ combination of 2026-10-27 (32, all C0) against asarina's own choice: the
 same masters for all 32. Exposures with no dark within 3 s (28, 30, 50 s)
 get "flat only"; asarina finds no dark for them either. A corrected C0
 frame loses its dust rings and the dark patch in the middle.
+
+## nightreport hover without gaps; devices.html polls without the push (2026-10-29) [JS]
+
+- nightreport.html: the time link (`.nr-name`) was an inline span, only
+  as tall as the font, so between two rows the mouse was over no time and
+  the preview blinked out. Now it is as tall as the row (inline-block,
+  the list's line height in whole pixels, 17 px): moving the mouse down
+  the times changes the preview without a gap.
+- devices.html said "reconnecting" for good at the sites: its live
+  values come over `/ws`, which rts2-httpd answers (101 on
+  localhost:8889/ws on lascaux), but the sites' Apache proxies `/images`
+  with a plain `ProxyPass /images http://localhost:8889`, and Apache 2.4
+  passes no WebSocket without `upgrade=websocket`. Now, while /ws is not
+  open, the page polls api/getall and api/messages every 2 s (10 s in a
+  hidden tab): changed values are updated and flash as pushed ones do,
+  messages not shown yet are added, each once (`shownMessages`, as a
+  message may come both ways). The push is still tried with backoff up to
+  30 s and takes over when it opens. Badge: "live", "polled", "no
+  answer". `upgrade=websocket` on the sites' ProxyPass would give the
+  push back; not needed for the page to work.
+
+Tested in headless Chromium against a mock (values changing with each
+request, a message added every 2 s, /ws refused): devices.html "polled",
+the changing value updated with each poll, the messages newest first and
+each once; nightreport.html 12 times of 17 px with 0 px between them, a
+walk down the time column passing all 12 with no pixel on none. Both are
+page files only: a pull in MJ's checkout on each site puts them live, no
+release.

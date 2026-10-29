@@ -134,7 +134,14 @@ async function loadRecentMessages () {
 const MESSAGE_LEVELS = { 1: 'error', 2: 'warning', 4: 'info', 8: 'debug' };
 
 // Newest first: a message goes on top, the oldest drops off the bottom.
+// Each once: it may come pushed and polled both.
+const shownMessages = new Set ();
+
 function prependMessage (m) {
+	const key = `${m.time}\t${m.device}\t${m.text}`;
+	if (shownMessages.has (key))
+		return;
+	shownMessages.add (key);
 	const li = document.createElement ('li');
 	const level = MESSAGE_LEVELS[m.type & 0x0f] || 'info';
 	li.className = 'level-' + level;
@@ -164,6 +171,7 @@ function connectWs () {
 	ws.onopen = () => {
 		setConnStatus ('open', 'live');
 		reconnectDelay = 1000;
+		stopPolling ();
 	};
 
 	ws.onmessage = (ev) => {
@@ -186,8 +194,11 @@ function connectWs () {
 		}
 	};
 
+	// Without the push (the sites' Apache passes no WebSocket unless its
+	// ProxyPass has upgrade=websocket), the page polls instead, and tries
+	// the push again now and then.
 	ws.onclose = () => {
-		setConnStatus ('closed', 'reconnecting…');
+		startPolling ();
 		setTimeout (connectWs, reconnectDelay);
 		reconnectDelay = Math.min (reconnectDelay * 2, MAX_RECONNECT_DELAY);
 	};
@@ -195,6 +206,49 @@ function connectWs () {
 	ws.onerror = () => {
 		ws.close ();
 	};
+}
+
+// --- polling, while there is no push ---------------------------------------
+
+const POLL_MS = 2000;
+let pollTimer = null;
+let polling = false;
+
+function startPolling () {
+	if (polling)
+		return;
+	polling = true;
+	poll ();
+}
+
+function stopPolling () {
+	polling = false;
+	clearTimeout (pollTimer);
+}
+
+// The values that changed since the last poll (updateValue () flashes
+// them, as for a push), and the messages not shown yet.
+async function poll () {
+	try {
+		const [vr, mr] = await Promise.all ([fetch ('api/getall', { cache: 'no-store' }), fetch ('api/messages', { cache: 'no-store' })]);
+		if (!vr.ok)
+			throw new Error (`api/getall -> ${vr.status}`);
+		const data = await vr.json ();
+		if (!polling)
+			return;
+		for (const device of Object.keys (data))
+			for (const name of Object.keys (data[device]))
+				if (!state[device] || JSON.stringify (state[device][name]) !== JSON.stringify (data[device][name]))
+					updateValue (device, name, data[device][name]);
+		if (mr.ok)
+			for (const m of (await mr.json ()).slice (-MAX_MESSAGES))
+				prependMessage (m);
+		setConnStatus ('open', 'polled');
+	} catch (e) {
+		setConnStatus ('closed', 'no answer');
+	}
+	if (polling)
+		pollTimer = setTimeout (poll, document.hidden ? POLL_MS * 5 : POLL_MS);
 }
 
 // --- Command form ----------------------------------------------------------

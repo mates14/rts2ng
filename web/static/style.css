@@ -1798,7 +1798,8 @@ body.monitor-page.status-stale .mon-statusbar {
 .nr-list {
 	font-family: var(--mono);
 	font-size: 12px;
-	line-height: 1.45;
+	/* whole pixels: the times' hover areas (.nr-name) touch row to row */
+	line-height: 17px;
 	overflow-x: auto;
 }
 
@@ -1833,7 +1834,13 @@ body.nr-fit .nr-list {
 	color: var(--text-muted);
 }
 
+/* the whole row's height, not only the font's: moving the mouse down the
+ * times passes from one to the next with no gap, so the preview changes
+ * instead of blinking out between the rows */
 .nr-name {
+	display: inline-block;
+	line-height: inherit;
+	vertical-align: top;
 	color: var(--accent);
 	cursor: zoom-in;
 }
