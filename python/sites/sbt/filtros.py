@@ -429,24 +429,24 @@ def parse_arguments():
         "-e", "--exptime",
         type=positive_float,
         default=None,
-        help="exposure time of single exposures in seconds (120 without --snr)"
+        help="exposure time [s] (120); with --snr, the one of filters without any magnitude (300)"
     )
 
     parser.add_argument(
         "-s", "--snr",
         type=positive_float,
-        help="instead of -e: exposure times for this SNR, from the current conditions"
+        help="exposure time of each filter for this SNR, from the current conditions (COND)"
     )
 
     parser.add_argument(
         "--magerr",
         type=positive_float,
-        help="instead of -e: exposure times for this magnitude error"
+        help="as --snr, for this magnitude error"
     )
 
     parser.add_argument(
         "-m", "--mag",
-        help="with --snr: target magnitude, '17.5' or 'r=17.5,g=18.1' (default: --mag-source)"
+        help="with --snr: target magnitude, '17.5' or 'r=17.5,g=18.1' (else --mag-source)"
     )
 
     parser.add_argument(

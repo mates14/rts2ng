@@ -180,7 +180,7 @@ def parse_arguments():
     parser.add_argument("--magerr", type=positive_float, help="magnitude error to reach (instead of --snr)")
     parser.add_argument("-e", "--exptime", type=positive_float,
                         help="fixed exposure time; with --snr, the one of filters without any magnitude")
-    parser.add_argument("-m", "--mag", help="target magnitude, '16.3' or 'r=16.3,g=16.9' (default: --mag-source)")
+    parser.add_argument("-m", "--mag", help="target magnitude, '16.3' or 'r=16.3,g=16.9' (else --mag-source)")
     parser.add_argument("--mag-source", default="atlas,lcgen", help="where to look the magnitude up, in order")
     parser.add_argument("-f", "--fallback-mag", type=float, help="magnitude when no source knows the target")
     parser.add_argument("--tmin", type=positive_float, default=1.0, help="shortest exposure")
