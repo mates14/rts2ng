@@ -8,7 +8,15 @@ import argparse
 import os
 
 from rts2 import scriptcomm
-import snrexp
+try:
+    from rts2 import snrexp
+except ImportError:
+    # the installed rts2 package predates snrexp: take it from this checkout
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location('snrexp', os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), '..', '..', 'rts2', 'snrexp.py'))
+    snrexp = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(snrexp)
 
 class Filtros(scriptcomm.Rts2Comm):
     """Perform synchronized observations with two cameras with synchronized filter exchange.
@@ -41,7 +49,8 @@ class Filtros(scriptcomm.Rts2Comm):
         }
     }
 
-    def __init__(self, exptime=120, narrow=False, snr=None, mag='lcgen', tmin=5, tmax=300):
+    def __init__(self, exptime=120, narrow=False, snr=None, mag=None, fallback_mag=None,
+                 mag_sources=('atlas', 'lcgen'), tmin=5, tmax=300):
         """Initialize the Filtros instance.
 
         Args:
@@ -49,8 +58,10 @@ class Filtros(scriptcomm.Rts2Comm):
             narrow (bool, optional): Whether to use narrow-band filters. Defaults to False.
             snr (float, optional): Requested SNR; the exposure time of each filter
                 is then computed from the current conditions (COND) instead.
-            mag (str, optional): With snr: target magnitude, '17.5' or
-                'r=17.5,g=18.1', or 'lcgen' for the latest one from hog's lcgen.
+            mag (str, optional): With snr: target magnitude, '17.5' or 'r=17.5,g=18.1';
+                otherwise taken from mag_sources (local ATLAS, lcgen on hog).
+            fallback_mag (float, optional): Magnitude when no source knows the target.
+            mag_sources (tuple, optional): Where to look the magnitude up, in order.
             tmin, tmax (float, optional): Limits of the computed exposure times.
 
         Raises:
@@ -70,6 +81,8 @@ class Filtros(scriptcomm.Rts2Comm):
         self.narrow = narrow
         self.snr = snr
         self.mag = mag
+        self.fallback_mag = fallback_mag
+        self.mag_sources = tuple(mag_sources)
         self.tmin, self.tmax = tmin, tmax
         self.exptimes = None
 
@@ -177,37 +190,18 @@ class Filtros(scriptcomm.Rts2Comm):
         self.log('I', f"{self.name}: Switched to {'narrow' if self.narrow else 'wide'} band mode")
 
     def target_magnitudes(self, filters):
-        """Target magnitude per filter (long names), from --mag or lcgen.
+        """Target magnitude per filter (long names): --mag, ATLAS, lcgen, --fallback-mag.
 
         Returns:
-            dict: filter -> magnitude; filters without one are left out
+            dict: filter -> (magnitude, origin); filters without one are left out
         """
-        spec = str(self.mag).strip()
-        if spec != 'lcgen' and '=' not in spec:
-            return {f: float(spec) for f in filters}
-        if spec == 'lcgen':
-            try:
-                ori = (self.getValue('ORI', 'T0') or '').split()
-                ra, dec = float(ori[0]), float(ori[1])
-                latest = snrexp.lcgen_latest(ra, dec)
-            except scriptcomm.Rts2NotActive:
-                raise
-            except Exception as e:
-                # no magnitude: those filters get --tmax, the observation goes on
-                self.log('W', f"{self.name}: lcgen failed ({e}), exposing {self.tmax:g}s")
-                return {}
-            self.log('I', f"{self.name}: lcgen {ra:.4f} {dec:+.4f}: " + (', '.join(
-                f"{f}={m:.2f} (JD {j:.1f}, {n} pts)" for f, (m, j, n) in sorted(latest.items())) or 'nothing'))
-        else:
-            latest = {snrexp.long_filter(k.strip()): (float(v), 0, 1)
-                      for k, v in (kv.split('=') for kv in spec.split(','))}
-        mags = {}
+        ra, dec = snrexp.target_position(self)
+        log = lambda level, text: self.log(level, f"{self.name}: {text}")
+        mags = snrexp.target_mags(filters, ra, dec, snrexp.parse_mag(self.mag), self.mag_sources,
+                                  self.fallback_mag, log)
         for f in filters:
-            m, used = snrexp.magnitude_for(f, latest)
-            if m is not None:
-                mags[f] = m
-                if used != f:
-                    self.log('W', f"{self.name}: no {f} magnitude, using {used}={m:.2f}")
+            if f not in mags:
+                log('W', f"no magnitude for {f}, exposing {self.tmax:g}s")
         return mags
 
     def plan_exposures(self):
@@ -222,16 +216,11 @@ class Filtros(scriptcomm.Rts2Comm):
         groups = {c: [snrexp.long_filter(f) for f in fl]
                   for c, fl in self.FILTER_MAPS[mode].items() if c != 'C3'}
         own = [snrexp.long_filter(f) for f in self.get_current_filters()]
-        cond = lambda name: self.getValue(name, 'COND')
-
-        def airmass():
-            X = self.getValueFloat('AIRMASS', 'T0')
-            return X if X and 1 <= X < 10 else 1.5
+        reader = lambda: snrexp.CondReader('SBT', lambda name: self.getValue(name, 'COND'))
 
         def compute():
-            X = airmass()
             mags = self.target_magnitudes(sorted({f for fl in groups.values() for f in fl}))
-            return snrexp.make_plan(groups, mags, self.snr, X, snrexp.CondReader(cond),
+            return snrexp.make_plan(groups, mags, self.snr, snrexp.target_airmass(self), reader(),
                                     self.tmin, self.tmax, self.OVERHEAD_TIME)
 
         obsid = self.getValueInteger('obsid', 'EXEC')
@@ -240,21 +229,17 @@ class Filtros(scriptcomm.Rts2Comm):
         self.tick = plan['tick']
         self.exptimes = dict(plan['exptime'])
         if self.camera not in groups:
-            mags = self.target_magnitudes(own)
-            mine = snrexp.make_plan({self.camera: own}, mags, self.snr, airmass(),
-                                    snrexp.CondReader(cond), self.tmin,
-                                    max(min(self.tmax, self.tick - self.OVERHEAD_TIME), self.tmin), 0)
+            mine = snrexp.make_plan({self.camera: own}, self.target_magnitudes(own), self.snr,
+                                    snrexp.target_airmass(self), reader(), self.tmin,
+                                    max(min(self.tmax, self.tick - self.OVERHEAD_TIME), self.tmin))
             self.exptimes.update(mine['exptime'])
             plan['info'].update(mine['info'])
         self.exptime = max(self.exptimes[f'{self.camera}/{f}'] for f in own)
         self.log('I', f"{self.name}: plan {key} ({'shared' if plan['shared'] else 'computed'}): "
-                      f"SNR {plan['snr']} X={plan['airmass']:.2f} tick {self.tick:g}s")
+                      f"SNR {plan['snr']:g} X={plan['airmass']:.2f} tick {self.tick:g}s")
         for k, i in sorted(plan['info'].items()):
             if k.split('/')[0] == self.camera or not plan['shared']:
-                mag = 'no mag' if i['mag'] is None else f"mag {i['mag']:.2f}"
-                need = '' if i['need'] != i['need'] else f" (needs {i['need']:.0f}s)"
-                snr = '' if i['snr'] is None else f" SNR {i['snr']:.0f}"
-                self.log('I', f"{self.name}:   {k}: {mag}: {i['t']:g}s{need}{snr}, {i['cond']}")
+                self.log('I', f"{self.name}:   {snrexp.describe(k, i)}")
 
     def run(self, num_requested):
         """Execute a sequence of timed exposures with synchronized filter changes.
@@ -457,8 +442,19 @@ def parse_arguments():
 
     parser.add_argument(
         "-m", "--mag",
-        default="lcgen",
-        help="with --snr: target magnitude, '17.5' or 'r=17.5,g=18.1', or 'lcgen' (latest on hog)"
+        help="with --snr: target magnitude, '17.5' or 'r=17.5,g=18.1' (default: --mag-source)"
+    )
+
+    parser.add_argument(
+        "--mag-source",
+        default="atlas,lcgen",
+        help="with --snr and no --mag: where to look the target magnitude up, in order"
+    )
+
+    parser.add_argument(
+        "-f", "--fallback-mag",
+        type=float,
+        help="with --snr: magnitude when no source knows the target"
     )
 
     parser.add_argument(
@@ -504,11 +500,13 @@ if __name__ == '__main__':
 
         # Initialize Filtros with parsed arguments
         filtros = Filtros(exptime=args.exptime or 120.0, narrow=args.narrow, snr=args.snr,
-                          mag=args.mag, tmin=args.tmin, tmax=args.tmax)
+                          mag=args.mag, fallback_mag=args.fallback_mag,
+                          mag_sources=[s for s in args.mag_source.split(',') if s],
+                          tmin=args.tmin, tmax=args.tmax)
 
         num = args.number
         if args.snr:
-            filtros.log('I', f"{filtros.name}: starts snr:{args.snr:g} mag:{args.mag} num:{num}")
+            filtros.log('I', f"{filtros.name}: starts snr:{args.snr:g} mag:{args.mag or args.mag_source} num:{num}")
         else:
             filtros.log('I', f"{filtros.name}: starts exp:{filtros.exptime} num:{num}")
 
