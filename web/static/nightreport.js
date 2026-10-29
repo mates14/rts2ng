@@ -13,6 +13,7 @@ const rangeEl = document.getElementById ('nr-range');
 const connEl = document.getElementById ('nr-conn');
 const hoverEl = document.getElementById ('nr-hover');
 const hoverOnEl = document.getElementById ('nr-hover-on');
+const camerasEl = document.getElementById ('nr-cameras');
 
 const REFRESH_MS = 30000;
 const HOVER_SIZE = 400;				// preview/?ps= under the mouse
@@ -66,14 +67,59 @@ async function currentNight () {
 
 // every row of the report, as classic prints them: an observation, then
 // its images or "--- no images ---"
+// The camera of an image: the first word of classic's line.
+function cameraOf (im) {
+	return im.text.trim ().split (/\s+/)[0];
+}
+
+// Cameras switched off; kept in the browser as the unticked ones, so that
+// a camera new in a report starts ticked.
+let hiddenCameras = new Set ();
+try {
+	hiddenCameras = new Set (JSON.parse (localStorage.getItem ('nightreportHiddenCameras') || '[]'));
+} catch (e) {
+}
+
+// a checkbox for each camera with images in the report
+function renderCameras () {
+	const cams = [...new Set (report.observations.flatMap (o => o.images.map (cameraOf)))].sort ();
+	const html = cams.length < 2 ? '' : 'cameras ' + cams.map (c =>
+		`<label><input type="checkbox" value="${escapeHtml (c)}"${hiddenCameras.has (c) ? '' : ' checked'}> ${escapeHtml (c)}</label>`).join (' ');
+	if (camerasEl.dataset.html !== html) {
+		camerasEl.dataset.html = html;
+		camerasEl.innerHTML = html;
+	}
+}
+
+camerasEl.addEventListener ('change', ev => {
+	const box = ev.target.closest ('input[type="checkbox"]');
+	if (!box)
+		return;
+	if (box.checked)
+		hiddenCameras.delete (box.value);
+	else
+		hiddenCameras.add (box.value);
+	try {
+		localStorage.setItem ('nightreportHiddenCameras', JSON.stringify ([...hiddenCameras]));
+	} catch (e) {
+	}
+	camerasEl.dataset.html = '';
+	// rows that come back are not new
+	firstLoad = true;
+	render ();
+});
+
+// every row of the report, as classic prints them: an observation, then
+// its images (those of the ticked cameras) or "--- no images ---"
 function allRows () {
 	const rows = [];
 	for (const o of report.observations) {
 		const head = { kind: 'obs', text: o.text, key: 'o' + o.id };
 		rows.push (head);
-		if (o.images.length === 0)
+		const images = o.images.filter (im => !hiddenCameras.has (cameraOf (im)));
+		if (images.length === 0)
 			rows.push ({ kind: 'none', text: '--- no images ---', key: 'n' + o.id, head });
-		for (const im of o.images)
+		for (const im of images)
 			rows.push ({ kind: 'img', text: im.text, key: 'i' + o.id + '/' + im.file, head, im });
 	}
 	return rows;
@@ -108,6 +154,7 @@ let rendered = [];
 function render () {
 	if (!report)
 		return;
+	renderCameras ();
 	const rows = allRows ();
 	const mode = showMode ();
 	// fit: first the list's height, ending at the window's bottom;

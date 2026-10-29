@@ -3775,3 +3775,19 @@ sends, so no rts2-httpd change. Checked with SBT's live device list:
 centrald T0 C1 C2 C3 DOME KAFKA F1 F2 F3 BARTUPS CLOUD DISK_BART
 RAIN_BART RAIN_D50 SCH WEATHER_BART EXEC IMGP QUEUE, on both pages. Page
 files only: a pull in MJ's checkouts deploys it.
+
+## nightreport.html: a filter by camera (2026-10-29) [JS]
+
+A checkbox for each camera with images in the report ("cameras C1 C2
+C3", shown from two cameras up), all ticked by default; the unticked ones
+are kept in the browser, so a camera new in a report starts ticked. The
+camera is the first word of classic's image line, so no rts2-httpd change.
+The images of unticked cameras go; every observation stays, one left
+without images says "--- no images ---" as classic does, and the fit /
+last N / all modes count only the rows shown. Rows coming back with a
+change of the filter do not flash as new.
+
+Tested in headless Chromium against a mock (four observations, C1-C3):
+all, without C3 (an observation of only C3 frames left with "--- no
+images ---", nothing flashing, ["C3"] kept), only C2, only C2 with the
+last 3 rows. Page files only: a pull in MJ's checkouts deploys it.

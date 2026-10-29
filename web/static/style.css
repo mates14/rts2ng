@@ -1776,6 +1776,12 @@ body.monitor-page.status-stale .mon-statusbar {
 	padding: 3px 6px;
 }
 
+.nr-cameras {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+}
+
 .nr-show {
 	display: inline-flex;
 	flex-wrap: wrap;
