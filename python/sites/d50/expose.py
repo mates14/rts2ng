@@ -109,6 +109,7 @@ class Expose(scriptcomm.Rts2Comm):
         """{filter name: exposure time} for the next cycle."""
         if not self.snr:
             return {f: self.exptime for f in self.filters}
+        # with snr, self.exptime is the exposure of filters without any magnitude
         long = [snrexp.long_filter(f) for f in self.filters]
         log = lambda level, text: self.log(level, f"{self.name}: {text}")
         if self.mags is None:
@@ -118,10 +119,11 @@ class Expose(scriptcomm.Rts2Comm):
                                            self.mag_sources, self.fallback_mag, log)
             for f in long:
                 if f not in self.mags:
-                    log('W', f"no magnitude for {f}, exposing {self.tmax:g}s")
+                    log('W', f"no magnitude for {f}, exposing {min(self.exptime or self.tmax, self.tmax):g}s")
         reader = snrexp.CondReader(TELESCOPE, lambda name: self.getValue(name, 'COND'))
         plan = snrexp.make_plan({self.camera: long}, self.mags, self.snr,
-                                snrexp.target_airmass(self), reader, self.tmin, self.tmax)
+                                snrexp.target_airmass(self), reader, self.tmin, self.tmax,
+                                fallback_t=self.exptime)
         for k, i in plan['info'].items():
             log('I', snrexp.describe(k, i))
         return {f: plan['exptime'][f'{self.camera}/{lf}'] for f, lf in zip(self.filters, long)}
@@ -158,7 +160,8 @@ def parse_arguments():
                         help="filters in order, 'rzgi' or 'r,z,g,i'")
     parser.add_argument("-s", "--snr", type=positive_float, help="SNR to reach in each filter")
     parser.add_argument("--magerr", type=positive_float, help="magnitude error to reach (instead of --snr)")
-    parser.add_argument("-e", "--exptime", type=positive_float, help="fixed exposure time instead of --snr")
+    parser.add_argument("-e", "--exptime", type=positive_float,
+                        help="fixed exposure time; with --snr, the one of filters without any magnitude")
     parser.add_argument("-m", "--mag", help="target magnitude, '16.3' or 'r=16.3,g=16.9' (default: --mag-source)")
     parser.add_argument("--mag-source", default="atlas,lcgen", help="where to look the magnitude up, in order")
     parser.add_argument("-f", "--fallback-mag", type=float, help="magnitude when no source knows the target")
@@ -177,8 +180,8 @@ def parse_arguments():
             parser.error("--acquire takes NxT, e.g. 3x10")
     if args.magerr:
         args.snr = snrexp.MAGERR_K / args.magerr
-    if bool(args.snr) == bool(args.exptime):
-        parser.error("give one of --snr/--magerr or -e")
+    if not args.snr and not args.exptime:
+        parser.error("give --snr/--magerr or -e")
     args.filters = args.filters.split(',') if ',' in args.filters else list(args.filters)
     return args
 

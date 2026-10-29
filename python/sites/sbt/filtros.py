@@ -80,6 +80,8 @@ class Filtros(scriptcomm.Rts2Comm):
         self.tick = self.OVERHEAD_TIME + self.exptime
         self.narrow = narrow
         self.snr = snr
+        # with snr, the exposure of filters without any magnitude
+        self.fallback_t = exptime if snr else None
         self.mag = mag
         self.fallback_mag = fallback_mag
         self.mag_sources = tuple(mag_sources)
@@ -201,7 +203,7 @@ class Filtros(scriptcomm.Rts2Comm):
                                   self.fallback_mag, log)
         for f in filters:
             if f not in mags:
-                log('W', f"no magnitude for {f}, exposing {self.tmax:g}s")
+                log('W', f"no magnitude for {f}, exposing {min(self.fallback_t or self.tmax, self.tmax):g}s")
         return mags
 
     def plan_exposures(self):
@@ -221,7 +223,7 @@ class Filtros(scriptcomm.Rts2Comm):
         def compute():
             mags = self.target_magnitudes(sorted({f for fl in groups.values() for f in fl}))
             return snrexp.make_plan(groups, mags, self.snr, snrexp.target_airmass(self), reader(),
-                                    self.tmin, self.tmax, self.OVERHEAD_TIME)
+                                    self.tmin, self.tmax, self.OVERHEAD_TIME, self.fallback_t)
 
         obsid = self.getValueInteger('obsid', 'EXEC')
         key = f'{obsid}-{mode}' if obsid is not None and obsid >= 0 else f'pid{os.getpid()}'
@@ -231,7 +233,8 @@ class Filtros(scriptcomm.Rts2Comm):
         if self.camera not in groups:
             mine = snrexp.make_plan({self.camera: own}, self.target_magnitudes(own), self.snr,
                                     snrexp.target_airmass(self), reader(), self.tmin,
-                                    max(min(self.tmax, self.tick - self.OVERHEAD_TIME), self.tmin))
+                                    max(min(self.tmax, self.tick - self.OVERHEAD_TIME), self.tmin),
+                                    fallback_t=self.fallback_t)
             self.exptimes.update(mine['exptime'])
             plan['info'].update(mine['info'])
         self.exptime = max(self.exptimes[f'{self.camera}/{f}'] for f in own)
@@ -368,7 +371,7 @@ class Filtros(scriptcomm.Rts2Comm):
                     self.stop = True
                     break
 
-                self.log('I', f"{self.name}: Starting exposure {num_completed + 1}/{num_requested}")
+                self.log('I', f"{self.name}: Starting exposure {num_completed + 1}/{num_requested:g}")
 
                 try:
                     image = self.exposure()
@@ -474,8 +477,8 @@ def parse_arguments():
     parser.add_argument(
         "-n", "--number",
         type=int,
-        default=10,
-        help="number of exposures to obtain"
+        default=None,
+        help="number of exposures to obtain (default: until EXEC has another target as next)"
     )
 
     parser.add_argument(
@@ -487,8 +490,7 @@ def parse_arguments():
     args = parser.parse_args()
     if args.magerr:
         args.snr = snrexp.MAGERR_K / args.magerr
-    if args.snr and args.exptime:
-        parser.error("give either -e or --snr/--magerr, not both")
+    # with --snr, -e is the exposure of filters without any magnitude
     if not args.snr and not args.exptime:
         args.exptime = 120.0
     return args
@@ -499,21 +501,30 @@ if __name__ == '__main__':
         args = parse_arguments()
 
         # Initialize Filtros with parsed arguments
-        filtros = Filtros(exptime=args.exptime or 120.0, narrow=args.narrow, snr=args.snr,
+        filtros = Filtros(exptime=args.exptime or (300.0 if args.snr else 120.0),
+                          narrow=args.narrow, snr=args.snr,
                           mag=args.mag, fallback_mag=args.fallback_mag,
                           mag_sources=[s for s in args.mag_source.split(',') if s],
                           tmin=args.tmin, tmax=args.tmax)
 
-        num = args.number
+        # without -n: until the executor wants another target (next_is_other)
+        total = num = args.number if args.number else float('inf')
         if args.snr:
             filtros.log('I', f"{filtros.name}: starts snr:{args.snr:g} mag:{args.mag or args.mag_source} num:{num}")
         else:
             filtros.log('I', f"{filtros.name}: starts exp:{filtros.exptime} num:{num}")
 
         while num > 0 and not filtros.stop:
-            num -= filtros.run(num)
+            done = filtros.run(num)
+            num -= done
+            if done == 0:
+                # nothing taken (parked, failing camera): do not spin, and
+                # do not hold the target once another one is queued
+                if filtros.next_is_other():
+                    break
+                sleep(10)
 
-        filtros.log('I', f"{filtros.name}: ended with {args.number - num} images done")
+        filtros.log('I', f"{filtros.name}: ended with {total - num:g} images done")
 
     except scriptcomm.Rts2NotActive:
         # executor ended our script (target change, kill) - just go

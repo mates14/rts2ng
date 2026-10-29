@@ -329,12 +329,12 @@ def target_airmass(comm, default=1.5):
 PLAN_DIR = '/tmp'
 
 
-def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0):
+def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0, fallback_t=None):
     """Exposure time of every camera/filter in groups ({camera: [filters]}) and their tick.
 
     mags: {filter: (mag, origin)}.  Each time is rounded up to TIME_GRID and
-    limited to [tmin, tmax] (a filter without a magnitude gets tmax); the
-    tick is the longest one plus overhead.
+    limited to [tmin, tmax]; a filter without a magnitude gets fallback_t
+    (or tmax).  The tick is the longest one plus overhead.
     """
     exp, info = {}, {}
     for camera, filters in groups.items():
@@ -342,7 +342,7 @@ def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0):
             mag, origin = mags.get(filt, (None, None))
             c = reader.conditions(camera, filt, X)
             if mag is None:
-                t, need = tmax, None
+                t, need = min(fallback_t or tmax, tmax), None
             else:
                 need = c.exptime(mag, snr)
                 t = round_up(need, tmin, tmax)
