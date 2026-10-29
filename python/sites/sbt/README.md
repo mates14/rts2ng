@@ -82,7 +82,7 @@ give; `zp1` the 1 s zeropoint, `s` the sky variance rate [ADU^2/s/px], and in
 parentheses where the conditions came from.  SNR well below the request
 means `--tmax` (or saturation) limited it.
 
-The calculator is `rts2/snrexp.py` (in the rts2 package; the scripts load it
-from this checkout while the installed package predates it).  SBT's 1 s
+The calculator is `rts2/snrexp.py` (in the rts2 package; the scripts always load it
+from this checkout, as the installed package may carry an older one).  SBT's 1 s
 zeropoint in r is ~18.0: under a dark sky SNR 10 at r=16.5 takes ~45 s, SNR
 50 about an hour.

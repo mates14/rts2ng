@@ -8,15 +8,16 @@ import argparse
 import os
 
 from rts2 import scriptcomm
-try:
-    from rts2 import snrexp
-except ImportError:
-    # the installed rts2 package predates snrexp: take it from this checkout
+# the calculator from this checkout, which the script itself comes from; the
+# installed rts2 package may carry an older snrexp
+_snrexp = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'rts2', 'snrexp.py')
+if os.path.exists(_snrexp):
     import importlib.util
-    _spec = importlib.util.spec_from_file_location('snrexp', os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), '..', '..', 'rts2', 'snrexp.py'))
+    _spec = importlib.util.spec_from_file_location('snrexp', _snrexp)
     snrexp = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(snrexp)
+else:
+    from rts2 import snrexp
 
 class Filtros(scriptcomm.Rts2Comm):
     """Perform synchronized observations with two cameras with synchronized filter exchange.

@@ -71,5 +71,5 @@ should give; `zp1` the 1 s zeropoint, `s` the sky variance rate
 [ADU^2/s/px], and in parentheses where the conditions came from.  SNR well
 below the request means `--tmax` limited it.
 
-The calculator is `rts2/snrexp.py` (in the rts2 package; the script loads it
-from this checkout while the installed package predates it).
+The calculator is `rts2/snrexp.py` (in the rts2 package; the script always loads it
+from this checkout, as the installed package may carry an older one).
