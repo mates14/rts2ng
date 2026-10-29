@@ -3763,3 +3763,15 @@ each once; nightreport.html 12 times of 17 px with 0 px between them, a
 walk down the time column passing all 12 with no pixel on none. Both are
 page files only: a pull in MJ's checkout on each site puts them live, no
 release.
+
+## status.html, monitor.html: devices in rts2-mon's order (2026-10-29) [JS]
+
+The devices came in rts2-httpd's connection order (at SBT: C3 among the
+sensors, C1 and C2 at the end). Now both pages sort them as rts2-mon does
+by default (ORDER_TYPE, `sortConnType` in base/monitor/include/
+nmonitor.h): centrald first, then by device type, then by name -
+`sortLikeMon ()` in rts2status.js, from the `type` /api/status already
+sends, so no rts2-httpd change. Checked with SBT's live device list:
+centrald T0 C1 C2 C3 DOME KAFKA F1 F2 F3 BARTUPS CLOUD DISK_BART
+RAIN_BART RAIN_D50 SCH WEATHER_BART EXEC IMGP QUEUE, on both pages. Page
+files only: a pull in MJ's checkouts deploys it.

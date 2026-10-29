@@ -380,7 +380,7 @@ async function pollStatus () {
 		const res = await fetch ('api/status', { cache: 'no-store' });
 		if (!res.ok)
 			throw new Error (`api/status -> ${res.status}`);
-		devices = await res.json ();
+		devices = sortLikeMon (await res.json ());
 		lastOk = Date.now ();
 		connEl.className = 'conn-status conn-open';
 		connEl.textContent = 'live';

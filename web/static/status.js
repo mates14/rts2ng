@@ -64,7 +64,7 @@ async function poll () {
 			const res = await fetch ('api/status', { cache: 'no-store' });
 			if (!res.ok)
 				throw new Error (`api/status -> ${res.status}`);
-			render (await res.json ());
+			render (sortLikeMon (await res.json ()));
 			lastOk = Date.now ();
 			connEl.className = 'conn-status conn-open';
 			connEl.textContent = 'live';

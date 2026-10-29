@@ -50,3 +50,16 @@ function blockBadges (dev) {
 function stateText (dev) {
 	return dev.statestring.replace (BLOCK_RE, '').replace (/^ \| /, '');
 }
+
+// rts2-mon's order (its default ORDER_TYPE, sortConnType in
+// base/monitor/include/nmonitor.h): centrald first, then by device type,
+// then by name (strcmp's order, which < on these ASCII names is).
+function sortLikeMon (devices) {
+	return devices.slice ().sort ((a, b) => {
+		if ((a.name === 'centrald') !== (b.name === 'centrald'))
+			return a.name === 'centrald' ? -1 : 1;
+		if (a.type !== b.type)
+			return a.type - b.type;
+		return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+	});
+}
