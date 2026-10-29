@@ -4172,3 +4172,31 @@ mount inside, the roof closes in 7 s; mount at rest outside, `park` at 0,
 s later. The dummy's own park never ends without `move_fast`
 (`isParking ()` is `isMoving ()`, which waits for a target time a park
 does not set) - a bench limit, not the dome.
+
+## The script position follows the camera, not the script (2026-10-29) [JS]
+
+JS saw D50's monitor mark the first `E 5` of target 1109 (`filter=N for 3 {
+E 5 } filter=r for 6 { E 20 } ...`) for the first exposure only, then the
+next element while the other two ran. D50's log (2026-10-28 03:36): the
+executor sends an element while the camera still exposes the one before
+("value exposure change was queued" 0.2 s into the first exposure; filter
+and exposure for the second loop queued 0.1 s into the third `E 5`). The
+camera queues exposure and filter until it is free (`CAM_WORKING`), but
+`scriptPosition`/`scriptLen` were applied at once, so they showed where the
+script was, not what the camera did. The images were right.
+
+Both are now created with `CAM_WORKING` too, as `SCR_COMM` and `COMM_NUM`
+already were (`ScriptDevice`, whose only user is `Camera`): a position
+arriving while the camera works is applied with the exposure it belongs to,
+and the reset at a script's end after the last readout.
+
+Reproduced with rts2-scriptexec, camd-dummy with `--read-sleep 2` (C0 reads
+out in 1.2 s), a dummy filter wheel and target 1109's script, comparing the
+camera's `V scriptPosition` with its exposure starts: before, the third
+`E 5` started at 869.23 and `filter=r` was shown at 869.28 for the whole
+exposure; after, `E 5` stays through all three exposures and readouts and
+`E 20` is shown 0.3 s before the first 20 s exposure; the reset comes 0.04
+s after the last readout. A queued change logs "command end with note ...
+was queued" at DEBUG, two more lines per exposure on a camera run with
+`--debug`. D50's C0 (Andor) is built by hand on lascaux50 and needs a
+rebuild to get this.

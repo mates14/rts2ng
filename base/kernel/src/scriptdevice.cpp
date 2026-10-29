@@ -37,10 +37,17 @@ ScriptDevice::ScriptDevice (int in_argc, char **in_argv, int in_device_type, con
 	scriptStatus->addSelVal ("pause");
 	scriptStatus->addSelVal ("stop");
 
-	createValue (scriptPosition, "scriptPosition", "position within script", false, RTS2_VALUE_WRITABLE, 0);
+	// base note: queued while the camera works, as exposure and filter are.
+	// The script runs ahead of the camera - it sends the next element while
+	// the current exposure still runs, and the camera queues that element's
+	// exposure and filter; the position was applied at once, so rts2-mon and
+	// the monitor pages marked the next element (D50, 2026-10-28, target
+	// 1109: the first of three E 5 marked, then filter=r for the other two).
+	// Queued, it changes together with the exposure it belongs to.
+	createValue (scriptPosition, "scriptPosition", "position within script", false, RTS2_VALUE_WRITABLE, CAM_WORKING);
 	scriptPosition->setValueInteger (0);
 
-	createValue (scriptLen, "scriptLen", "length of the current script element", false, RTS2_VALUE_WRITABLE, 0);
+	createValue (scriptLen, "scriptLen", "length of the current script element", false, RTS2_VALUE_WRITABLE, CAM_WORKING);
 	scriptLen->setValueInteger (0);
 
 	createValue (elementPosition, "elementPosition", "position of element within the script", false, RTS2_VALUE_WRITABLE);
