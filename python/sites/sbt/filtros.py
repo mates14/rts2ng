@@ -223,7 +223,8 @@ class Filtros(scriptcomm.Rts2Comm):
         def compute():
             mags = self.target_magnitudes(sorted({f for fl in groups.values() for f in fl}))
             return snrexp.make_plan(groups, mags, self.snr, snrexp.target_airmass(self), reader(),
-                                    self.tmin, self.tmax, self.OVERHEAD_TIME, self.fallback_t)
+                                    self.tmin, self.tmax, self.OVERHEAD_TIME, self.fallback_t,
+                                    snrexp.twilight(self))
 
         obsid = self.getValueInteger('obsid', 'EXEC')
         key = f'{obsid}-{mode}' if obsid is not None and obsid >= 0 else f'pid{os.getpid()}'
@@ -234,7 +235,7 @@ class Filtros(scriptcomm.Rts2Comm):
             mine = snrexp.make_plan({self.camera: own}, self.target_magnitudes(own), self.snr,
                                     snrexp.target_airmass(self), reader(), self.tmin,
                                     max(min(self.tmax, self.tick - self.OVERHEAD_TIME), self.tmin),
-                                    fallback_t=self.fallback_t)
+                                    fallback_t=self.fallback_t, sun=snrexp.twilight(self))
             self.exptimes.update(mine['exptime'])
             plan['info'].update(mine['info'])
         self.exptime = max(self.exptimes[f'{self.camera}/{f}'] for f in own)

@@ -123,7 +123,7 @@ class Expose(scriptcomm.Rts2Comm):
         reader = snrexp.CondReader(TELESCOPE, lambda name: self.getValue(name, 'COND'))
         plan = snrexp.make_plan({self.camera: long}, self.mags, self.snr,
                                 snrexp.target_airmass(self), reader, self.tmin, self.tmax,
-                                fallback_t=self.exptime)
+                                fallback_t=self.exptime, sun=snrexp.twilight(self))
         for k, i in plan['info'].items():
             log('I', snrexp.describe(k, i))
         return {f: plan['exptime'][f'{self.camera}/{lf}'] for f, lf in zip(self.filters, long)}

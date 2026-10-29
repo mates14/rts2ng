@@ -13,6 +13,12 @@ ECSVs.  A filter without a fresh frame gets its zeropoint from the freshest
 transparency and its sky from another filter's, shifted by a typical sky
 colour.
 
+Each time is also capped so that the image does not saturate: the sky at
+the end of the exposure stays below SKY_MAX_FRAC of the saturation level,
+and the target's peak pixel plus sky below PEAK_MAX_FRAC of it.  In a
+rising twilight the sky is extrapolated from the frame it was measured on
+to the end of the planned exposure (~1 mag per degree of solar altitude).
+
 The target magnitude comes from the first of: the local ATLAS RefCat2
 (`atlas` command, g r i z), lcgen on hog (the latest photometry), a
 fallback given by the caller.
@@ -32,26 +38,31 @@ from base64 import b64encode
 
 PSF_AP2 = 1.5**2            # pipeline aperture: APERTURE^2 = FWHM^2 + 1.5^2
 MAGERR_K = 2.5 / math.log(10)
+SKY_MAX_FRAC = 0.5          # sky at most this fraction of the saturation level
+PEAK_MAX_FRAC = 0.8         # target peak + sky at most this fraction
+TWILIGHT_SLOPE = 0.42       # d log10(sky) / d(solar altitude) [1/deg], sky fit 2026-10
+SITE_LAT = 49.91            # Ondrejov, deg
 
 # Per telescope and camera: gain [e-/ADU, header GAIN, what the pipeline's
 # errors use], floor = BGSIGMA^2 at zero sky [ADU^2], bgk = d(BGSIGMA^2)/d(sky
-# ADU) [ADU], pix ["/px]; per filter (zp1 at airmass 1 on a clear night,
+# ADU) [ADU], pix ["/px], sat = saturation [ADU above bias; 16-bit ADCs, single
+# frames in phdb stay below ~50000]; per filter (zp1 at airmass 1 on a clear night,
 # extinction k, sky colour = SB - SB of SBT C2/Sloan_r).  The same numbers
 # as the COND configurations.
 TELESCOPES = {
     'SBT': {
-        'C1': dict(gain=1.6, floor=76.0, bgk=0.700, pix=3.12, filters={
+        'C1': dict(gain=1.6, floor=76.0, bgk=0.700, pix=3.12, sat=50000, filters={
             'Sloan_r': (18.38, 0.16, -0.16), 'Sloan_i': (17.53, 0.12, -0.17),
             'N': (19.75, 0.34, 0.12), 'halpha': (15.54, 0.10, 1.04), 'sii': (15.66, 0.10, 1.45)}),
-        'C2': dict(gain=1.6, floor=52.0, bgk=0.695, pix=3.12, filters={
+        'C2': dict(gain=1.6, floor=52.0, bgk=0.695, pix=3.12, sat=50000, filters={
             'Sloan_g': (18.60, 0.28, 0.29), 'Sloan_r': (18.36, 0.18, 0.0),
             'N': (19.68, 0.20, 0.25), 'oiii': (15.42, 0.25, 0.79),
             'B': (17.18, 0.30, 1.0)}),     # C2/B: one night (2026-10-26), k and colour guessed
-        'C3': dict(gain=1.5, floor=42.4, bgk=0.667, pix=3.83, filters={
+        'C3': dict(gain=1.5, floor=42.4, bgk=0.667, pix=3.83, sat=50000, filters={
             'B': (14.95, 0.37, 1.44), 'I': (14.82, 0.06, 0.18), 'N': (17.22, 0.13, 0.91)}),
     },
     'D50': {
-        'C0': dict(gain=0.81, floor=80.8, bgk=1.354, pix=1.188, filters={
+        'C0': dict(gain=0.81, floor=80.8, bgk=1.354, pix=1.188, sat=50000, filters={
             'Sloan_g': (22.82, 0.29, 1.14), 'Sloan_r': (22.77, 0.20, 0.74),
             'Sloan_i': (22.15, 0.13, 0.84), 'Sloan_z': (21.11, 0.16, 0.20),
             'N': (23.88, 0.26, 0.41)}),
@@ -107,11 +118,69 @@ def round_up(t, tmin, tmax):
     return float(tmax)
 
 
+def round_down(t, tmin=TIME_GRID[0]):
+    """Largest value of TIME_GRID at or below t (at least TIME_GRID[0])."""
+    best = TIME_GRID[0]
+    for g in TIME_GRID:
+        if g <= t + 1e-6:
+            best = g
+    return float(best)
+
+
+def twilight(comm, lat=SITE_LAT):
+    """(sun altitude [deg], its rate [deg/s]) from centrald, or (None, 0).
+
+    dh/dt = 15 deg/h cos(lat) sin(A), A the solar azimuth from the north
+    towards the east; RTS2 azimuths are south-based (A = sun_az + 180).
+    """
+    try:
+        alt = comm.getValueFloat('sun_alt', 'centrald')
+        az = comm.getValueFloat('sun_az', 'centrald')
+    except Exception:
+        return None, 0.0
+    if alt is None or az is None:
+        return None, 0.0
+    rate = 15.0 / 3600 * math.cos(math.radians(lat)) * math.sin(math.radians(az + 180))
+    return alt, rate
+
+
 class Conditions:
     """Conditions for one camera/filter at the target, and where they came from."""
 
-    def __init__(self, cam, zp1, s, fwhm, source):
+    def __init__(self, cam, zp1, s, fwhm, source, age=0.0):
         self.cam, self.zp1, self.s, self.fwhm, self.source = cam, zp1, s, fwhm, source
+        self.age = age          # seconds since the frame the sky was measured on
+        self.grow = 0.0         # sky growth [dex/s], set by set_twilight()
+
+    def set_twilight(self, sun_alt, sun_rate):
+        """Sky brightening with a rising Sun between -20 deg and the horizon."""
+        if sun_alt is not None and -20 < sun_alt < 5 and sun_rate > 0:
+            self.grow = TWILIGHT_SLOPE * sun_rate
+
+    def sky_rate(self, t):
+        """Sky [ADU/s/px] at the end of an exposure of t s starting now."""
+        return self.s / self.cam['bgk'] * 10**(self.grow * (self.age + t))
+
+    def max_time(self, mag=None):
+        """(longest exposure that does not saturate, 'sky' or 'star' - whichever limits it)"""
+        sat = self.cam.get('sat', 50000)
+        sigma = self.fwhm / 2.3548
+        peak = math.erf(0.5 / (math.sqrt(2) * sigma))**2      # flux fraction in the central pixel
+        f = 10**(-0.4 * (mag - self.zp1)) if mag is not None else 0.0
+        limits = [('sky', lambda t: self.sky_rate(t) * t - SKY_MAX_FRAC * sat)]
+        if f > 0:
+            limits.append(('star', lambda t: (f * peak + self.sky_rate(t)) * t - PEAK_MAX_FRAC * sat))
+        best = (math.inf, None)
+        for name, excess in limits:
+            if excess(TIME_GRID[-1]) <= 0:
+                continue
+            lo, hi = 0.0, float(TIME_GRID[-1])
+            for _ in range(60):
+                mid = (lo + hi) / 2
+                lo, hi = (mid, hi) if excess(mid) <= 0 else (lo, mid)
+            if lo < best[0]:
+                best = (lo, name)
+        return best
 
     def exptime(self, mag, snr):
         return exptime_for(mag, snr, self.zp1, self.s, self.fwhm, self.cam)
@@ -168,7 +237,7 @@ class CondReader:
             fwhm = own['fwhm'] or DEFAULT_SEEING / cam['pix']
             Xf = own['X'] if own['X'] else X
             return Conditions(cam, own['zp1'] - k * (X - Xf), own['bgv'], fwhm,
-                              f'own frame {own["age"]:.0f}s old')
+                              f'own frame {own["age"]:.0f}s old', own['age'])
         # zeropoint: reference at this airmass + the freshest transparency
         tr = self.value('transp')
         src = []
@@ -179,7 +248,7 @@ class CondReader:
             src.append('transp')
         zp1 = zpref - k * (X - 1) + tr
         # sky and seeing: from another fresh filter of this telescope
-        sky, seeing = None, None
+        sky, seeing, age = None, None, 0.0
         for c2 in [camera] + [c for c in self.cams if c != camera]:
             for f2, (_, _, col2) in self.cams[c2]['filters'].items():
                 o = self.fresh(c2, f2)
@@ -187,6 +256,7 @@ class CondReader:
                     continue
                 if sky is None and o['sky'] is not None:
                     sky = o['sky'] + (skycol - col2)
+                    age = o['age']
                     src.append(f'sky from {c2}/{f2}')
                 if seeing is None and o['fwhm']:
                     seeing = o['fwhm'] * self.cams[c2]['pix']
@@ -194,7 +264,7 @@ class CondReader:
             sky = DEFAULT_SKY + skycol
             src.append('default sky')
         s = cam['bgk'] * cam['pix']**2 * 10**(-0.4 * (sky - zp1))
-        return Conditions(cam, zp1, s, (seeing or DEFAULT_SEEING) / cam['pix'], ', '.join(src))
+        return Conditions(cam, zp1, s, (seeing or DEFAULT_SEEING) / cam['pix'], ', '.join(src), age)
 
 
 # ---------------------------------------------------------------------------
@@ -329,25 +399,34 @@ def target_airmass(comm, default=1.5):
 PLAN_DIR = '/tmp'
 
 
-def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0, fallback_t=None):
+def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0, fallback_t=None,
+              sun=(None, 0.0)):
     """Exposure time of every camera/filter in groups ({camera: [filters]}) and their tick.
 
     mags: {filter: (mag, origin)}.  Each time is rounded up to TIME_GRID and
     limited to [tmin, tmax]; a filter without a magnitude gets fallback_t
-    (or tmax).  The tick is the longest one plus overhead.
+    (or tmax).  Then it is cut (rounded down) to what does not saturate the
+    sky or the target, with the sky extrapolated in a rising twilight; sun is
+    twilight()'s output.  The tick is the longest one plus overhead.
     """
     exp, info = {}, {}
     for camera, filters in groups.items():
         for filt in filters:
             mag, origin = mags.get(filt, (None, None))
             c = reader.conditions(camera, filt, X)
+            c.set_twilight(*sun)
             if mag is None:
                 t, need = min(fallback_t or tmax, tmax), None
             else:
                 need = c.exptime(mag, snr)
                 t = round_up(need, tmin, tmax)
+            tsat, limit = c.max_time(mag)
+            cap = None
+            if t > tsat:
+                t, cap = round_down(tsat), limit
             exp[f'{camera}/{filt}'] = t
-            info[f'{camera}/{filt}'] = dict(mag=mag, origin=origin, need=need, t=t,
+            info[f'{camera}/{filt}'] = dict(mag=mag, origin=origin, need=need, t=t, cap=cap,
+                                           tsat=(None if math.isinf(tsat) else tsat),
                                            snr=(c.snr(mag, t) if mag is not None else None),
                                            cond=str(c))
     tick = (max(exp.values()) if exp else tmax) + overhead
@@ -359,7 +438,8 @@ def describe(key, i):
     mag = 'no magnitude' if i['mag'] is None else f"{i['origin']} {i['mag']:.2f}"
     need = '' if i['need'] is None else f" (needs {i['need']:.0f}s)"
     snr = '' if i['snr'] is None else f" SNR {i['snr']:.0f}"
-    return f"{key}: {mag}: {i['t']:g}s{need}{snr}, {i['cond']}"
+    cap = f" CUT to {i['t']:g}s: {i['cap']} would saturate at {i['tsat']:.0f}s" if i.get('cap') else ''
+    return f"{key}: {mag}: {i['t']:g}s{need}{snr}{cap}, {i['cond']}"
 
 
 def shared_plan(key, compute, ttl=900.0):
