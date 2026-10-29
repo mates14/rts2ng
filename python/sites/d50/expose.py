@@ -16,8 +16,9 @@ The mount may move meanwhile (centering), that does not end it.
 science frame, as T0.WOFFS=(rand(-D,D),rand(-D,D)) does in a script.  A
 value change from an exe script does not wait for the device, so an
 exposure queued right after it could start before T0 even raises its
-exposure block; the script therefore waits until T0 has applied the offset
-and no device of --block-devices blocks exposures.
+exposure block; the script therefore waits until T0 reports the offset.
+From then on the exposure command itself waits for centrald's exposure
+block, which covers the devices rts2.ini lists in blocked-by.
 """
 
 import argparse
@@ -37,7 +38,6 @@ except ImportError:
     _spec.loader.exec_module(snrexp)
 
 TELESCOPE = 'D50'
-BOP_EXPOSURE = 0x01000000      # status.h
 
 
 class Expose(scriptcomm.Rts2Comm):
@@ -45,11 +45,11 @@ class Expose(scriptcomm.Rts2Comm):
 
     def __init__(self, filters, snr=None, exptime=None, mag=None, fallback_mag=None,
                  mag_sources=('atlas', 'lcgen'), tmin=1, tmax=300, acquire=None,
-                 acquire_filter='N', dither=0.0, block_devices=('T0', 'W0')):
+                 acquire_filter='N', dither=0.0):
         super().__init__()
         self.filters = filters
         self.acquire, self.acquire_filter = acquire, acquire_filter
-        self.dither, self.block_devices = dither, tuple(block_devices)
+        self.dither = dither
         self.snr, self.exptime = snr, exptime
         self.mag, self.fallback_mag, self.mag_sources = mag, fallback_mag, tuple(mag_sources)
         self.tmin, self.tmax = tmin, tmax
@@ -68,29 +68,8 @@ class Expose(scriptcomm.Rts2Comm):
         next_t = self.getValueInteger('next', 'EXEC')
         return next_t is not None and next_t >= 0 and next_t != self.target
 
-    def blocked(self):
-        """True while a device of block_devices blocks exposures."""
-        for dev in self.block_devices:
-            try:
-                if self.getState(dev) & BOP_EXPOSURE:
-                    return True
-            except scriptcomm.Rts2NotActive:
-                raise
-            except Exception:
-                continue
-        return False
-
-    def wait_unblocked(self, timeout=120):
-        sleep(0.5)          # let the devices take the changes just sent
-        end = time() + timeout
-        while self.blocked():
-            if time() > end:
-                self.log('W', f"{self.name}: exposures still blocked after {timeout}s, exposing anyway")
-                return
-            sleep(0.5)
-
     def offset(self):
-        """Random dither, waiting until T0 has applied it."""
+        """Random dither, waiting until T0 has taken it (and so blocks exposures until it is done)."""
         dx, dy = (random.uniform(-self.dither, self.dither) for _ in range(2))
         self.setValue('woffs', f'{dx:.6f} {dy:.6f}', 'T0')
         end = time() + 30
@@ -110,7 +89,6 @@ class Expose(scriptcomm.Rts2Comm):
         self.setValue('exposure', t)
         if dither:
             self.offset()
-        self.wait_unblocked()
         try:
             image = self.exposure()
         except scriptcomm.Rts2NotActive:
@@ -190,8 +168,6 @@ def parse_arguments():
     parser.add_argument("--acquire-filter", default="N", help="filter of the acquisition frames")
     parser.add_argument("--dither", type=float, default=0.0,
                         help="random offset of each science frame, up to this many deg in RA and Dec")
-    parser.add_argument("--block-devices", default="T0,W0",
-                        help="devices whose exposure block an exposure waits for")
     args = parser.parse_args()
     if args.acquire:
         try:
@@ -214,8 +190,7 @@ if __name__ == '__main__':
                    fallback_mag=args.fallback_mag,
                    mag_sources=[s for s in args.mag_source.split(',') if s],
                    tmin=args.tmin, tmax=args.tmax, acquire=args.acquire,
-                   acquire_filter=args.acquire_filter, dither=args.dither,
-                   block_devices=[d for d in args.block_devices.split(',') if d])
+                   acquire_filter=args.acquire_filter, dither=args.dither)
         e.log('I', f"{e.name}: starts filters {''.join(args.filters)} "
                    + (f"snr {args.snr:g}" if args.snr else f"exp {args.exptime:g}s"))
         n = e.run()
