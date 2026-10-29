@@ -1185,8 +1185,8 @@
             const t = new Date().getTime();
             for (const cam of ['C1', 'C2', 'C3']) {
                 const c = cam.toLowerCase();
-                document.getElementById(c + '-image').src = `${cam}_small.jpg?t=${t}`;
-                document.getElementById(c + '-center').src = `${cam}_center.jpg?t=${t}`;
+                refreshImage(document.getElementById(c + '-image'), `${cam}_small.jpg`);
+                refreshImage(document.getElementById(c + '-center'), `${cam}_center.jpg`);
             }
         }
 
@@ -1337,7 +1337,7 @@
                     el.src = cam.live;
                 } else {
                     const src = equalizeWebcams ? cam.smallEq : cam.small;
-                    el.src = `${cam.host || '/webcam/'}${src}?t=${t}`;
+                    refreshImage(el, `${cam.host || '/webcam/'}${src}`);
                 }
             }
         }
@@ -2520,7 +2520,7 @@
         function guideLoop() {
             pollGuide()
                 .catch(e => console.error(e))
-                .finally(() => setTimeout(guideLoop, guideActive ? 1000 : 5000));
+                .finally(() => setTimeout(guideLoop, netMode === 'low' ? 30000 : netMode === 'idle' ? 60000 : guideActive ? 1000 : 5000));
         }
 
         function guideStats() {
@@ -2883,7 +2883,10 @@
                 }));
                 updateCameraStatus();
             }
-            setTimeout(cameraLoop, CAMERA_POLL_MS);
+            // traffic modes (see netMode): with the WebSocket the cameras' changes
+            // arrive by themselves, and a state change fetches the camera
+            setTimeout(cameraLoop, netMode !== 'live' ? 60000
+                : liveSocket && liveSocket.readyState === 1 ? 10000 : CAMERA_POLL_MS);
         }
 
         // The telescope's position is polled on its own, only TEL_ (about
@@ -2947,7 +2950,8 @@
                     }
                 }
             }
-            setTimeout(telLoop, Date.now() < telFastUntil ? TEL_FAST_MS : TEL_POLL_MS);
+            setTimeout(telLoop, netMode === 'low' ? 60000 : netMode === 'idle' ? 30000
+                : Date.now() < telFastUntil ? TEL_FAST_MS : TEL_POLL_MS);
         }
 
         // The bars move every frame from their start and end, not in the
@@ -2998,12 +3002,16 @@
         // the page works as before without the WebSocket. [JS 2026-10-29]
         const LIVE_CAMS = ['C1', 'C2', 'C3'];
         let liveSocketDelay = 5000;
+        let liveSocket = null;
         function startLiveUpdates() {
+            if (netMode !== 'live' || liveSocket)
+                return;
             let ws;
             try {
                 const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
                     + API_BASE.replace(/\/api$/, '') + '/ws';
                 ws = new WebSocket(url);
+                liveSocket = ws;
             } catch (e) {
                 setTimeout(startLiveUpdates, liveSocketDelay);
                 return;
@@ -3030,22 +3038,171 @@
                 }
             };
             ws.onclose = () => {
+                liveSocket = null;
+                if (netMode !== 'live')
+                    return;
                 setTimeout(startLiveUpdates, liveSocketDelay);
                 liveSocketDelay = Math.min(liveSocketDelay * 2, 60000);
             };
         }
-        startLiveUpdates();
+        // Traffic modes [JS 2026-10-29]. An open page loaded ~25 KB/s all the
+        // time (~90 MB an hour): camera images re-downloaded every 15 s whether
+        // or not they changed, webcams, polling, the guide camera at 1 s, the
+        // WebSocket. Now:
+        //  - an image is re-downloaded only when its Last-Modified (or ETag,
+        //    or length) changed - a HEAD request, a few hundred bytes. Images
+        //    from another site (headers not readable) reload as before.
+        //  - 'live': something is observed (an executor target, or a camera
+        //    exposing or reading out): WebSocket on, status 10 s, images 15 s,
+        //    guiding at its own rate
+        //  - 'idle': nothing observed: no WebSocket, status 60 s, images 60 s
+        //  - 'low': a slow link - small API answers over 2 s, or big downloads
+        //    under 30 KB/s (resource timing), or the browser's Save-Data or a
+        //    2G/3G connection: no WebSocket, status 60 s, webcams paused,
+        //    camera images 300 s; left after 60 s without slow signs
+        // The mode follows the data and the link by itself; a corner note
+        // shows it when it is not live.
+        let netMode = 'live';
+        const NET_DELAYS = {
+            status:  { live: 10000, idle: 60000, low: 60000 },
+            images:  { live: 15000, idle: 60000, low: 300000 },
+            webcams: { live: 15000, idle: 60000, low: null },
+            slow:    { live: 60000, idle: 300000, low: 900000 },
+        };
+        const imageKeys = {};
+        async function refreshImage(el, url) {
+            if (!el)
+                return;
+            let key = null;
+            // another site's headers are not readable here (CORS)
+            if (!/^https?:\/\//.test(url) || url.startsWith(location.origin)) {
+                try {
+                    const res = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+                    if (res.ok)
+                        key = res.headers.get('Last-Modified') || res.headers.get('ETag') || res.headers.get('Content-Length');
+                } catch (e) {}
+            }
+            if (key === null)
+                key = String(Date.now());
+            if (imageKeys[url] === key && el.getAttribute('src'))
+                return;
+            imageKeys[url] = key;
+            el.src = url + (url.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(key);
+        }
 
-        setInterval(() => updateStatus().catch(e => console.error(e)), 10000);
+        function observingNow() {
+            const exec = safeValue(systemData.EXEC, 'current', -1);
+            if (typeof exec === 'number' && exec >= 0)
+                return true;
+            return LIVE_CAMS.some(cam => {
+                const st = safeValue(systemData[cam], 'state', 0);
+                return typeof st === 'number' && (st & 0x017) !== 0;
+            });
+        }
+
+        // the link, from the page's own requests
+        const linkSamples = { latency: [], rate: [] };
+        let lastSlowSign = 0;
+        function noteSample(list, value) {
+            list.push({ t: Date.now(), v: value });
+            while (list.length > 8 || (list.length && Date.now() - list[0].t > 300000))
+                list.shift();
+        }
+        function median(list) {
+            const v = list.map(s => s.v).sort((a, b) => a - b);
+            return v.length ? v[Math.floor(v.length / 2)] : null;
+        }
+        try {
+            new PerformanceObserver(list => {
+                for (const e of list.getEntries()) {
+                    if (!e.transferSize || e.name.includes('/ws'))
+                        continue;
+                    if (e.transferSize < 8000 && e.responseStart > e.requestStart)
+                        noteSample(linkSamples.latency, e.responseStart - e.requestStart);
+                    else if (e.transferSize >= 20000 && e.responseEnd > e.responseStart)
+                        noteSample(linkSamples.rate, e.transferSize / (e.responseEnd - e.responseStart));
+                }
+            }).observe({ type: 'resource', buffered: true });
+        } catch (e) {}
+        function linkIsSlow() {
+            const c = navigator.connection;
+            if (c && (c.saveData || ['slow-2g', '2g', '3g'].includes(c.effectiveType)))
+                return true;
+            const lat = linkSamples.latency.length >= 3 ? median(linkSamples.latency) : null;
+            const rate = linkSamples.rate.length >= 2 ? median(linkSamples.rate) : null;
+            return (lat !== null && lat > 2000) || (rate !== null && rate < 30);
+        }
+
+        const netTasks = [];
+        function netTask(fn, delays) {
+            const task = { fn, delays, timer: null };
+            task.run = () => {
+                task.timer = null;
+                const d = task.delays[netMode];
+                if (d === null)
+                    return;
+                Promise.resolve().then(task.fn).catch(e => console.error(e));
+                task.timer = setTimeout(task.run, d);
+            };
+            task.start = first => {
+                if (task.timer)
+                    clearTimeout(task.timer);
+                const d = task.delays[netMode];
+                task.timer = d === null ? null : setTimeout(task.run, first !== undefined ? first : d);
+            };
+            netTasks.push(task);
+            task.start();
+        }
+
+        function setNetMode(mode) {
+            if (mode === netMode)
+                return;
+            netMode = mode;
+            let note = document.getElementById('net-mode');
+            if (!note) {
+                note = document.createElement('div');
+                note.id = 'net-mode';
+                note.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:50;padding:3px 8px;'
+                    + 'font-size:11px;border-radius:3px;background:var(--panel-bg);color:var(--text-muted);'
+                    + 'border:1px solid var(--border)';
+                document.body.appendChild(note);
+            }
+            note.textContent = mode === 'low' ? 'slow connection: webcams paused, slower refresh'
+                : mode === 'idle' ? 'nothing observed: slower refresh' : '';
+            note.style.display = mode === 'live' ? 'none' : '';
+            if (mode === 'live')
+                startLiveUpdates();
+            else if (liveSocket)
+                liveSocket.close();
+            // a mode that refreshes faster starts at once
+            for (const t of netTasks)
+                t.start(mode === 'live' ? 0 : undefined);
+        }
+
+        function evaluateNetMode() {
+            const now = Date.now();
+            if (linkIsSlow())
+                lastSlowSign = now;
+            if (netMode === 'low' && now - lastSlowSign < 60000)
+                return;
+            if (linkIsSlow()) {
+                setNetMode('low');
+                return;
+            }
+            setNetMode(observingNow() ? 'live' : 'idle');
+        }
+
+        startLiveUpdates();
+        netTask(() => updateStatus().then(evaluateNetMode), NET_DELAYS.status);
         // the state lines' seconds count between polls
         setInterval(updateCameraStatus, 1000);
-        setInterval(reloadWebcams, 15000);
-        setInterval(updateSentinelLed, 60000);
-        setInterval(reloadCameraImages, 15000);
-        setInterval(updateImageInfo, 15000);
-        setInterval(reloadCloudGraph, 60000);
-        setInterval(reloadGuideHistory, 60000);
-
+        setInterval(evaluateNetMode, 5000);
+        netTask(reloadWebcams, NET_DELAYS.webcams);
+        netTask(updateSentinelLed, { live: 60000, idle: 300000, low: 900000 });
+        netTask(reloadCameraImages, NET_DELAYS.images);
+        netTask(updateImageInfo, NET_DELAYS.images);
+        netTask(reloadCloudGraph, NET_DELAYS.slow);
+        netTask(reloadGuideHistory, NET_DELAYS.slow);
         window.addEventListener('load', init);
     </script>
 </body>

@@ -3815,3 +3815,41 @@ about 1 KB/s at SBT by day. Checked: the handshake on lascaux directly
 JS's browser on both pages, one long-lived connection from Apache to httpd
 receiving 0.5-2.2 KB every second (polling would come in 10 s bursts).
 Apache logs a WebSocket in access.log only when it closes.
+
+## Monitors: traffic modes, images only when changed (2026-10-29) [JS]
+
+An open SBT page loaded about 25 KB/s all the time (~90 MB an hour): the
+six camera previews (~226 KB) re-downloaded every 15 s with a `?t=` cache
+buster whether or not they changed, webcams (~60 KB / 15 s), the status
+poll (10 s), C1-C3 every 2 s and TEL_ every 2 s (dc1358f), the guide camera
+every 1 s while guiding, and the WebSocket (~1 KB/s). bart-monitor.html and
+d50-monitor.html now:
+
+- reload an image only when it changed: a HEAD request reads its
+  Last-Modified (else ETag, else length), a few hundred bytes; the image is
+  fetched with that as `?v=` only when it differs. Images from another site
+  (D50's webcams from lascaux) cannot have their headers read and reload as
+  before.
+- pick a mode by themselves (`netMode`, evaluated after each status poll
+  and every 5 s):
+  - live - an executor target, or a camera exposing or reading out:
+    WebSocket on, status 10 s, images 15 s, guide loop at its rate,
+    TEL_ 2 s / 0.5 s, cameras 10 s with the WebSocket connected, 2 s
+    without;
+  - idle - nothing observed: no WebSocket, status, images, webcams and
+    cameras 60 s, TEL_ 30 s, guide loop 60 s, records 5 min;
+  - low - a slow link: small API answers (TTFB) over 2 s or big downloads
+    under 30 KB/s (median of the page's own PerformanceObserver resource
+    timings), or the browser's Save-Data / 2G-3G (Network Information API,
+    Chromium only): no WebSocket, status 60 s, webcams paused, camera
+    previews 5 min, TEL_ and cameras 60 s, guide loop 30 s; left only after
+    60 s without slow signs.
+  A note in the bottom-right corner shows idle and low; live shows none.
+  Going live starts every task at once.
+
+Tested in headless Chromium against a mock (page, previews, webcams, an API
+whose mode is switched by a file, 2.5 s delayed answers for slow), 120 s
+each: SBT live 485 API requests (no WebSocket in the mock, so the 2 s
+loops), idle 59 (was 277), slow 59 and no webcam request; D50 live 365,
+idle and slow 49; each image downloaded once, then only HEADs. The return
+from low to live/idle (60 s without slow signs) was not run.
