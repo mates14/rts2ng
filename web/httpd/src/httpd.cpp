@@ -2573,6 +2573,10 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		int targetId = atoi (idStr);
 		std::string cameraStr (camera);
 		std::string script = wantDelete ? std::string () : getParam (connection, "script", "");
+		// A blank script is "use the default", which is no record at all:
+		// an empty one would override the default with nothing.
+		if (script.find_first_not_of (" \t\r\n") == std::string::npos)
+			wantDelete = true;
 
 		// Writes gated the same way target-save/scheduling-save are
 		// (STATUS.md task 6) - shares the "db-targets" permission token.

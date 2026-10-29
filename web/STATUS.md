@@ -3853,3 +3853,19 @@ each: SBT live 485 API requests (no WebSocket in the mock, so the 2 s
 loops), idle 59 (was 277), slow 59 and no webcam request; D50 live 365,
 idle and slow 49; each image downloaded once, then only HEADs. The return
 from low to live/idle (60 s without slow signs) was not run.
+
+## Target editor: a blank script deletes the record (2026-10-29) [JS]
+
+Pressing "default" in the How box deleted the camera's script record, but
+pressing Save afterwards (the box is empty then) stored `""` through
+`script-save`, and an empty script overrides the default (guider etc.)
+with nothing. Now Save with a blank (whitespace-only) box calls
+`script-delete`, and `rts2-httpd` turns a blank `script-save` into a
+delete as well, for any other client. A successful Save also clears the
+"default" button's active look. The How box hint now says so, and that
+a camera which should take no images on the target gets `sleep 1`.
+
+Built warning-free; not run against a database (none on this machine).
+Records already saved as `""` stay until they are cleared, either by
+pressing "default" for that camera or with
+`DELETE FROM scripts WHERE btrim(script) = '';`.

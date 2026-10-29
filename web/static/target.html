@@ -95,7 +95,9 @@
 				Per-camera observing script. Always per-telescope - D50 and SBT
 				don't share cameras, so nothing here is synced. <strong>[*]
 				default</strong> clears an override and falls back to that
-				camera's own configured default.
+				camera's own configured default. Saving an empty script does
+				the same. For a camera that should take no images on this
+				target, save <code>sleep 1</code>.
 			</p>
 			<div id="scripts-list"></div>
 		</section>

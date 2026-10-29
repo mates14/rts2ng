@@ -668,7 +668,7 @@ async function renderScriptsBox () {
 			const statusEl = document.createElement ('span');
 			statusEl.className = 'status-line script-row-status';
 
-			saveBtn.addEventListener ('click', () => saveScript (site, cam, input, statusEl));
+			saveBtn.addEventListener ('click', () => saveScript (site, cam, input, defaultBtn, hint, statusEl));
 			defaultBtn.addEventListener ('click', () => deleteScript (site, cam, input, defaultBtn, hint, statusEl));
 
 			row.append (nameEl, defaultBtn, saveBtn, input, statusEl);
@@ -677,13 +677,18 @@ async function renderScriptsBox () {
 	}
 }
 
-async function saveScript (site, camera, input, statusEl) {
+async function saveScript (site, camera, input, defaultBtn, hint, statusEl) {
+	// A blank script is not an override: delete the record so the camera
+	// gets its default, rather than storing "" (which would run nothing).
+	if (input.value.trim () === '')
+		return deleteScript (site, camera, input, defaultBtn, hint, statusEl);
 	try {
 		const r = await fetchJson (apiUrl (site, `api/db/script-save?id=${encodeURIComponent (currentId)}&camera=${encodeURIComponent (camera)}&script=${encodeURIComponent (input.value)}`));
 		if (!r.ok) {
 			setStatus (statusEl, false, r.body.error || `${r.status}`);
 			return;
 		}
+		defaultBtn.className = 'script-default-btn';
 		setStatus (statusEl, true, 'saved');
 	} catch (e) {
 		setStatus (statusEl, false, String (e));
