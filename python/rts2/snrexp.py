@@ -15,7 +15,11 @@ colour.
 
 Each time is also capped so that the image does not saturate: the sky at
 the end of the exposure stays below SKY_MAX_FRAC of the saturation level,
-and the target's peak pixel plus sky below PEAK_MAX_FRAC of it.  In a
+and the target's peak pixel plus sky below PEAK_MAX_FRAC of it.  A camera
+that can accumulate (D50's Andor: ACQMODE=2, ACCNUM sub-exposures summed
+on the chip with ~no readout time, saved as 32 bits) instead splits such an
+exposure into N sub-exposures that each stay below the limits, N being the
+smallest that reaches the SNR with N read-noise floors.  In a
 rising twilight the sky is extrapolated from the frame it was measured on
 to the end of the planned exposure (~1 mag per degree of solar altitude).
 
@@ -62,7 +66,7 @@ TELESCOPES = {
             'B': (14.95, 0.37, 1.44), 'I': (14.82, 0.06, 0.18), 'N': (17.22, 0.13, 0.91)}),
     },
     'D50': {
-        'C0': dict(gain=0.81, floor=80.8, bgk=1.354, pix=1.188, sat=50000, filters={
+        'C0': dict(gain=0.81, floor=80.8, bgk=1.354, pix=1.188, sat=50000, accumulate=True, filters={
             'Sloan_g': (22.82, 0.29, 1.14), 'Sloan_r': (22.77, 0.20, 0.74),
             'Sloan_i': (22.15, 0.13, 0.84), 'Sloan_z': (21.11, 0.16, 0.20),
             'N': (23.88, 0.26, 0.41)}),
@@ -82,6 +86,8 @@ MAG_FALLBACK = {
 }
 
 TIME_GRID = (1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 450, 600, 900)
+SUB_GRID = (0.1, 0.2, 0.3, 0.5) + TIME_GRID     # sub-exposures of an accumulation
+MAX_ACC = 1000
 DEFAULT_SKY = 19.5          # mag/"2, dark sky at Ondrejov (r)
 DEFAULT_SEEING = 5.0        # arcsec
 
@@ -118,10 +124,10 @@ def round_up(t, tmin, tmax):
     return float(tmax)
 
 
-def round_down(t, tmin=TIME_GRID[0]):
-    """Largest value of TIME_GRID at or below t (at least TIME_GRID[0])."""
-    best = TIME_GRID[0]
-    for g in TIME_GRID:
+def round_down(t, grid=TIME_GRID):
+    """Largest value of grid at or below t (at least grid[0])."""
+    best = grid[0]
+    for g in grid:
         if g <= t + 1e-6:
             best = g
     return float(best)
@@ -185,8 +191,13 @@ class Conditions:
     def exptime(self, mag, snr):
         return exptime_for(mag, snr, self.zp1, self.s, self.fwhm, self.cam)
 
-    def snr(self, mag, t):
-        return snr_of(mag, t, self.zp1, self.s, self.fwhm, self.cam)
+    def snr(self, mag, t, n=1):
+        """SNR of n accumulated sub-exposures of t s (n read-noise floors)."""
+        if n == 1:
+            return snr_of(mag, t, self.zp1, self.s, self.fwhm, self.cam)
+        F = n * t * 10**(-0.4 * (mag - self.zp1))
+        area = math.pi * (self.fwhm**2 + PSF_AP2)
+        return F / math.sqrt(F / self.cam['gain'] + area * n * (self.cam['floor'] + self.s * t))
 
     def __str__(self):
         return f'zp1={self.zp1:.2f} s={self.s:.2f} fwhm={self.fwhm:.2f} ({self.source})'
@@ -399,6 +410,33 @@ def target_airmass(comm, default=1.5):
 PLAN_DIR = '/tmp'
 
 
+def accumulation(c, mag, snr, t, tsat, tmax):
+    """(sub-exposure, n) for an accumulation whose sub-exposures stay below tsat.
+
+    Of the sub-exposure lengths that reach the SNR within tmax in total, the
+    one with the shortest total (then the fewest readouts); if none does,
+    the highest SNR within tmax.  Without a magnitude (mag None), n
+    sub-exposures adding up to about t.
+    """
+    best = None
+    for sub in (g for g in SUB_GRID if g <= tsat):
+        nmax = max(1, min(MAX_ACC, int(tmax / sub + 1e-9)))
+        if mag is None:
+            n = min(nmax, max(1, math.ceil(t / sub - 1e-9)))
+            key = (abs(n * sub - t), n)
+        else:
+            n = 1
+            while n < nmax and c.snr(mag, sub, n) < snr:
+                n += 1
+            reached = c.snr(mag, sub, n) >= snr
+            key = (0, n * sub, n) if reached else (1, -c.snr(mag, sub, n), n)
+        if best is None or key < best[0]:
+            best = (key, sub, n)
+    if best is None:
+        return SUB_GRID[0], 1
+    return best[1], best[2]
+
+
 def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0, fallback_t=None,
               sun=(None, 0.0)):
     """Exposure time of every camera/filter in groups ({camera: [filters]}) and their tick.
@@ -409,7 +447,7 @@ def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0, fallback_t
     sky or the target, with the sky extrapolated in a rising twilight; sun is
     twilight()'s output.  The tick is the longest one plus overhead.
     """
-    exp, info = {}, {}
+    exp, acc, info = {}, {}, {}
     for camera, filters in groups.items():
         for filt in filters:
             mag, origin = mags.get(filt, (None, None))
@@ -421,16 +459,22 @@ def make_plan(groups, mags, snr, X, reader, tmin, tmax, overhead=0.0, fallback_t
                 need = c.exptime(mag, snr)
                 t = round_up(need, tmin, tmax)
             tsat, limit = c.max_time(mag)
-            cap = None
+            cap, n = None, 1
             if t > tsat:
-                t, cap = round_down(tsat), limit
-            exp[f'{camera}/{filt}'] = t
-            info[f'{camera}/{filt}'] = dict(mag=mag, origin=origin, need=need, t=t, cap=cap,
-                                           tsat=(None if math.isinf(tsat) else tsat),
-                                           snr=(c.snr(mag, t) if mag is not None else None),
-                                           cond=str(c))
-    tick = (max(exp.values()) if exp else tmax) + overhead
-    return dict(exptime=exp, tick=tick, info=info, snr=snr, airmass=X)
+                cap = limit
+                if c.cam.get('accumulate'):
+                    t, n = accumulation(c, mag, snr, t, tsat, tmax)
+                else:
+                    t = round_down(tsat)
+            key = f'{camera}/{filt}'
+            exp[key] = t
+            acc[key] = n
+            info[key] = dict(mag=mag, origin=origin, need=need, t=t, n=n, cap=cap,
+                             tsat=(None if math.isinf(tsat) else tsat),
+                             snr=(c.snr(mag, t, n) if mag is not None else None),
+                             cond=str(c))
+    tick = (max(exp[k] * acc[k] for k in exp) if exp else tmax) + overhead
+    return dict(exptime=exp, acc=acc, tick=tick, info=info, snr=snr, airmass=X)
 
 
 def describe(key, i):
@@ -438,8 +482,14 @@ def describe(key, i):
     mag = 'no magnitude' if i['mag'] is None else f"{i['origin']} {i['mag']:.2f}"
     need = '' if i['need'] is None else f" (needs {i['need']:.0f}s)"
     snr = '' if i['snr'] is None else f" SNR {i['snr']:.0f}"
-    cap = f" CUT to {i['t']:g}s: {i['cap']} would saturate at {i['tsat']:.0f}s" if i.get('cap') else ''
-    return f"{key}: {mag}: {i['t']:g}s{need}{snr}{cap}, {i['cond']}"
+    if not i.get('cap'):
+        cap = ''
+    elif i.get('n', 1) > 1:
+        cap = f" ACCUMULATED: {i['cap']} would saturate at {i['tsat']:.1f}s"
+    else:
+        cap = f" CUT: {i['cap']} would saturate at {i['tsat']:.1f}s"
+    t = f"{i['n']}x{i['t']:g}s" if i.get('n', 1) > 1 else f"{i['t']:g}s"
+    return f"{key}: {mag}: {t}{need}{snr}{cap}, {i['cond']}"
 
 
 def shared_plan(key, compute, ttl=900.0):

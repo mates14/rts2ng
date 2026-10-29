@@ -12,6 +12,10 @@ the script ends at an exposure boundary once EXEC has another target as next.
 The mount may move meanwhile (centering), that does not end it.
 
 --acquire NxT takes N unfiltered frames of T s first, for the centering.
+When the sky (or the target) would saturate a frame of the planned length,
+the Andor accumulates: ACQMODE=2, ACCNUM=N, exposure = the sub-exposure;
+ACQMODE goes back to single scan for the filters that do not need it.
+
 --dither D offsets the mount by a random (-D..D, -D..D) deg before each
 science frame, as T0.WOFFS=(rand(-D,D),rand(-D,D)) does in a script.  A
 value change from an exe script does not wait for the device, so an
@@ -50,6 +54,7 @@ class Expose(scriptcomm.Rts2Comm):
         self.filters = filters
         self.acquire, self.acquire_filter = acquire, acquire_filter
         self.dither = dither
+        self.accumulating = False
         self.snr, self.exptime = snr, exptime
         self.mag, self.fallback_mag, self.mag_sources = mag, fallback_mag, tuple(mag_sources)
         self.tmin, self.tmax = tmin, tmax
@@ -83,9 +88,21 @@ class Expose(scriptcomm.Rts2Comm):
             sleep(0.2)
         self.log('W', f"{self.name}: T0 did not report offset {dx:.4f} {dy:.4f} in 30s")
 
-    def take(self, f, t, dither=False):
-        """One exposure in filter f for t s; True if an image came."""
+    def accumulate(self, n):
+        """Andor accumulation of n sub-exposures (n=1: back to a single scan)."""
+        if n > 1:
+            self.setValue('ACQMODE', 2)
+            self.setValue('ACCNUM', n)
+            self.accumulating = True
+        elif self.accumulating:
+            self.setValue('ACQMODE', 1)
+            self.setValue('ACCNUM', 1)
+            self.accumulating = False
+
+    def take(self, f, t, dither=False, n=1):
+        """One exposure in filter f for t s (n accumulated); True if an image came."""
         self.setValue('filter', f)
+        self.accumulate(n)
         self.setValue('exposure', t)
         if dither:
             self.offset()
@@ -106,9 +123,9 @@ class Expose(scriptcomm.Rts2Comm):
         self.waitMask('T0', scriptcomm.TEL_TRACKING, 300)
 
     def plan(self):
-        """{filter name: exposure time} for the next cycle."""
+        """{filter name: (exposure time, number of accumulated sub-exposures)} for the next cycle."""
         if not self.snr:
-            return {f: self.exptime for f in self.filters}
+            return {f: (self.exptime, 1) for f in self.filters}
         # with snr, self.exptime is the exposure of filters without any magnitude
         long = [snrexp.long_filter(f) for f in self.filters]
         log = lambda level, text: self.log(level, f"{self.name}: {text}")
@@ -126,7 +143,8 @@ class Expose(scriptcomm.Rts2Comm):
                                 fallback_t=self.exptime, sun=snrexp.twilight(self))
         for k, i in plan['info'].items():
             log('I', snrexp.describe(k, i))
-        return {f: plan['exptime'][f'{self.camera}/{lf}'] for f, lf in zip(self.filters, long)}
+        return {f: (plan['exptime'][f'{self.camera}/{lf}'], plan['acc'][f'{self.camera}/{lf}'])
+                for f, lf in zip(self.filters, long)}
 
     def run(self):
         """Cycles until the executor wants another target; images taken."""
@@ -140,11 +158,11 @@ class Expose(scriptcomm.Rts2Comm):
                     return n
                 n += self.take(self.acquire_filter, t)
         while True:
-            for f, t in self.plan().items():
+            for f, (t, acc) in self.plan().items():
                 if self.next_is_other():
                     self.log('I', f"{self.name}: next target queued, ending after {n} images")
                     return n
-                n += self.take(f, t, dither=self.dither > 0)
+                n += self.take(f, t, dither=self.dither > 0, n=acc)
 
 
 def parse_arguments():
