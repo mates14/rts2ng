@@ -430,7 +430,7 @@ def parse_arguments():
         "-e", "--exptime",
         type=positive_float,
         default=None,
-        help="exposure time [s] (120); with --snr, the one of filters without any magnitude (300)"
+        help="exposure time [s] (120); with --snr, the one of filters without any magnitude (300, at most --tmax)"
     )
 
     parser.add_argument(
@@ -472,8 +472,9 @@ def parse_arguments():
     parser.add_argument(
         "--tmax",
         type=positive_float,
-        default=300.0,
-        help="with --snr: longest exposure (the SNR may then not be reached)"
+        default=None,
+        help="with --snr: longest exposure, the SNR may then not be reached "
+             "(120 s, with -u 300 s)"
     )
 
     parser.add_argument(
@@ -507,7 +508,7 @@ if __name__ == '__main__':
                           narrow=args.narrow, snr=args.snr,
                           mag=args.mag, fallback_mag=args.fallback_mag,
                           mag_sources=[s for s in args.mag_source.split(',') if s],
-                          tmin=args.tmin, tmax=args.tmax)
+                          tmin=args.tmin, tmax=args.tmax or (300.0 if args.narrow else 120.0))
 
         # without -n: until the executor wants another target (next_is_other)
         total = num = args.number if args.number else float('inf')

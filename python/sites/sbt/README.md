@@ -37,8 +37,8 @@ synchronised run within the same script.
 | `-m/--mag` | target magnitude, `17.5` or `r=17.5,g=18.1` |
 | `--mag-source` | where to look it up, in order (`atlas,lcgen`) |
 | `-f/--fallback-mag` | magnitude when no source knows the target |
-| `-e` | with `--snr`: exposure of filters without any magnitude (300) |
-| `--tmin`, `--tmax` | limits of the computed times (5, 300 s) |
+| `-e` | with `--snr`: exposure of filters without any magnitude (300, at most `--tmax`) |
+| `--tmin`, `--tmax` | limits of the computed times (5 s; 120 s, with `-u` 300 s) |
 | `-n` | number of exposures (default: until the next target) |
 
 **Magnitude**, first found: `--mag`; the local ATLAS RefCat2 (`atlas`
