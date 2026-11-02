@@ -39,3 +39,7 @@ CLAUDE.local.md
 /dist/
 build-*/
 **/debian/fliusb-dkms/
+
+# buildme.sh -d keeps each original debian/changelog here while the build
+# stamps its version entry; restored on exit (or by the next run)
+**/debian/changelog.buildme-orig

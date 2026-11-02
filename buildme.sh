@@ -238,7 +238,21 @@ if [ $build_deb == 1 ] || [ $build_src == 1 ]; then
     # keeping the old one as "same version". Versions without the time
     # (0.1.0-20260917~d13, before 2026-10-20) sort below this format.
     # The changelog entry is temporary - every debian/changelog is restored on
-    # exit, so the committed changelogs stay untouched.
+    # exit, so the committed changelogs stay untouched. A build killed hard
+    # (SIGKILL, a dropped session) skips the EXIT trap and leaves the stamp
+    # behind with its .buildme-orig; it is undone here, before the tree is
+    # checked for uncommitted changes, or every later build would be
+    # ".dirty" (2026-10-27 build on u2604, found 2026-11-02).
+    restore_changelogs() {
+        local t
+        for t in base db web gui python; do
+            if [ -f "$t/debian/changelog.buildme-orig" ]; then
+                [ "$1" == stale ] && echo "==> $t/debian/changelog: restoring the stamp left by an interrupted build"
+                mv -f "$t/debian/changelog.buildme-orig" "$t/debian/changelog"
+            fi
+        done
+    }
+    restore_changelogs stale
     build_commit=
     if [ "$(git rev-parse --show-toplevel 2> /dev/null)" = "$(pwd -P)" ]; then
         build_commit=$(git rev-parse --short=7 HEAD)
@@ -260,14 +274,6 @@ if [ $build_deb == 1 ] || [ $build_src == 1 ]; then
             printf ' -- %s  %s\n\n' "$maint" "$(date -R)"
             cat "$cl.buildme-orig"
         } > "$cl"
-    }
-    restore_changelogs() {
-        local t
-        for t in base db web gui python; do
-            if [ -f "$t/debian/changelog.buildme-orig" ]; then
-                mv -f "$t/debian/changelog.buildme-orig" "$t/debian/changelog"
-            fi
-        done
     }
     trap restore_changelogs EXIT
 fi
