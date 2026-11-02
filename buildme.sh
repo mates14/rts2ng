@@ -290,13 +290,33 @@ if [ $build_deb == 1 ]; then
     # dpkg-buildpackage drops its output one level up from the source dir
     # (i.e. here, at the repo root) - collect it into the repo directory,
     # replacing any older build of the same package (a flat repo could hold
-    # several versions, but only the newest is ever wanted)
+    # several versions, but only the newest is ever wanted). Debian names
+    # the debug symbols *-dbgsym_*.deb, not .ddeb as Ubuntu does: they go to
+    # dist/meta/ too, or every publish carries ~150 MB nobody installs
+    # (2026-11-02) [MJ].
     for f in *.deb; do
         [ -e "$f" ] || continue
-        rm -f "$DIST_DIR/${f%%_*}"_*.deb
-        mv "$f" "$DIST_DIR/"
+        case "$f" in
+            *-dbgsym_*) d="$META_DIR" ;;
+            *)          d="$DIST_DIR" ;;
+        esac
+        rm -f "$d/${f%%_*}"_*.deb
+        mv "$f" "$d/"
     done
     mv *.ddeb *.buildinfo *.changes "$META_DIR/" 2>/dev/null || true
+    # Prune what no debian/control builds any more - debug packages from
+    # before they moved to meta/, and dropped packages (rts2-python-sbt,
+    # ef144e6) - or rsync --delete keeps publishing them forever.
+    known=" $(grep -h '^Package:' */debian/control | awk '{print $2}' | tr '\n' ' ') "
+    for f in "$DIST_DIR"/*.deb; do
+        [ -e "$f" ] || continue
+        p=$(basename "${f%%_*}")
+        case "$known" in
+            *" $p "*) ;;
+            *)  echo "==> Dropping $(basename "$f") from the repository"
+                rm -f "$f" ;;
+        esac
+    done
 
     # apt index: Packages (per-.deb SHA256) and Release (hashes of Packages).
     # Signed InRelease only if REPO_GPG_KEY is set; otherwise clients need
