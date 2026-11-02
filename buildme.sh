@@ -17,7 +17,7 @@ usage: $0 [-c] [-r] [-d] [-s] [module ...]
   -c      open ccmake on each module's build dir before building
   -r      start over: ask for the SDK paths again (previous answers
           prefilled) and wipe the build dirs
-  -d      build .deb packages, then offer to rsync dist/<os>/<codename>/
+  -d      build .deb packages, then rsync a signed dist/<os>/<codename>/
           to \$RTS2NG_UPLOAD (default lascaux.asu.cas.cz:public_html/rts2ng;
           a local copy when run on that host)
   -s      build source packages
@@ -239,7 +239,7 @@ if [ $build_deb == 1 ] || [ $build_src == 1 ]; then
     # (0.1.0-20260917~d13, before 2026-10-20) sort below this format.
     # The changelog entry is temporary - every debian/changelog is restored on
     # exit, so the committed changelogs stay untouched. A build killed hard
-    # (SIGKILL, a dropped session) skips the EXIT trap and leaves the stamp
+    # (a power failure, SIGKILL) skips the EXIT trap and leaves the stamp
     # behind with its .buildme-orig; it is undone here, before the tree is
     # checked for uncommitted changes, or every later build would be
     # ".dirty" (2026-10-27 build on u2604, found 2026-11-02).
@@ -340,13 +340,18 @@ fi
 
 # Publish the repository: dist/<os>/<codename>/ mirrors to
 # $RTS2NG_UPLOAD/<os>/<codename>/ (--delete, so packages dropped here
-# vanish there too). Asked only on a terminal - an unattended build never
-# publishes. The remote mkdir lets a new distribution go up without
+# vanish there too). Not asked: a -d build is meant for the sites, and
+# testing is done before, from a plain build tree or by test-installing at
+# another PC. A question left unanswered in a forgotten xterm kept the
+# changelogs stamped until a power failure (2026-10-27) [MJ]. Only a signed
+# repository goes up - --delete would remove the served InRelease and break
+# apt at the sites. The remote mkdir lets a new distribution go up without
 # preparing its directory by hand first. On the upload host itself (the
 # release build on lascaux) the copy is local: a user who got there by su
 # has no ssh key, and ssh to the same machine is not needed anyway.
-RTS2NG_UPLOAD="${RTS2NG_UPLOAD:-lascaux.asu.cas.cz:public_html/rts2ng}"
-if [ $build_deb == 1 ] && [ -t 0 ]; then
+if [ $build_deb == 1 ] && [ ! -f "$DIST_DIR/InRelease" ]; then
+    echo "==> Not published: $DIST_DIR is not signed (REPO_GPG_KEY unset)"
+elif [ $build_deb == 1 ]; then
     up_host="${RTS2NG_UPLOAD%%:*}"
     up_dir="${RTS2NG_UPLOAD#*:}/$ID/$VERSION_CODENAME"
     up_name="${up_host#*@}"
@@ -363,19 +368,11 @@ if [ $build_deb == 1 ] && [ -t 0 ]; then
             /*) ;;
             *)  up_dir="$HOME/$up_dir" ;;
         esac
-        read -p "Publish the packages to $up_dir/ (local)? [Y/n]: " ans
+        echo "==> Publishing to $up_dir/ (local)"
+        mkdir -p "$up_dir" && rsync -av --delete "$DIST_DIR/" "$up_dir/"
     else
-        read -p "Upload the packages to $up_host:$up_dir/? [Y/n]: " ans
+        echo "==> Uploading to $up_host:$up_dir/"
+        rsync -av --delete --rsync-path="mkdir -p '$up_dir' && rsync" \
+            "$DIST_DIR/" "$up_host:$up_dir/"
     fi
-    case "$ans" in
-        ""|[Yy]*)
-            if [ $up_local == 1 ]; then
-                mkdir -p "$up_dir" && rsync -av --delete "$DIST_DIR/" "$up_dir/"
-            else
-                rsync -av --delete --rsync-path="mkdir -p '$up_dir' && rsync" \
-                    "$DIST_DIR/" "$up_host:$up_dir/"
-            fi
-            ;;
-        *)  echo "==> Not uploaded" ;;
-    esac
 fi

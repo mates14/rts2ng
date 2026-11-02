@@ -97,10 +97,11 @@ machine that serves it, in MJ's account and MJ's checkout of master
 
 ```
 git pull --rebase
-./buildme.sh -d     # signs InRelease (REPO_GPG_KEY), then offers to publish
+./buildme.sh -d     # signs InRelease (REPO_GPG_KEY), then publishes
 ```
 
-Publishing copies `dist/<os>/<codename>/` into the served directory,
+Publishing (no question asked, only a signed repository [MJ 2026-11-02]) copies
+`dist/<os>/<codename>/` into the served directory,
 `~mates/public_html/rts2ng/<os>/<codename>/`; until then the sites still get
 the previous build. On lascaux the copy is local. Through `su` MJ's account
 has no GitHub key: pull with
