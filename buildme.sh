@@ -349,6 +349,7 @@ fi
 # preparing its directory by hand first. On the upload host itself (the
 # release build on lascaux) the copy is local: a user who got there by su
 # has no ssh key, and ssh to the same machine is not needed anyway.
+RTS2NG_UPLOAD="${RTS2NG_UPLOAD:-lascaux.asu.cas.cz:public_html/rts2ng}"
 if [ $build_deb == 1 ] && [ ! -f "$DIST_DIR/InRelease" ]; then
     echo "==> Not published: $DIST_DIR is not signed (REPO_GPG_KEY unset)"
 elif [ $build_deb == 1 ]; then
