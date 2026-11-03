@@ -4517,3 +4517,14 @@ run: needs C0's hand rebuild on lascaux50. To check there: a short
 `ACQMODE=3 KINNUM=5 E 1` and `ACQMODE=2 ACCNUM=5 E 1` on the same field:
 both BITPIX 32, EXPTIME 5, pixel levels alike; KINFILE 5 x the frame size.
 
+COADDS, same day [MJ]: processing needs to tell the new kinetic frames
+from the old averaged ones. `C0.BUILD` would do in practice (C0's running
+build of 2026-10-29 has no identity values, and any build from master
+that has them has the kinetic change too), but only by accident of
+history: a build between e468074 and d65206e would have BUILD and the old
+kinetic code, and a hand build's BUILD is a bare hash that cannot be
+ordered. So the Andor writes `COADDS` = `coaddedScans ()`, the scans
+summed into the frame (1 for a single scan), set in `setTiming ()` with
+the data type and EXPTIME. Rule for processing: `COADDS` present -> sum
+of COADDS scans; absent and ACQMODE 3 -> 16-bit average of KINNUM frames.
+

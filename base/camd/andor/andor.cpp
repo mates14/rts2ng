@@ -220,6 +220,11 @@ namespace rts2camd
       rts2core::ValueFloat * kinCycle;
       rts2core::ValueInteger * accNumber;
       rts2core::ValueInteger * kinNumber;
+      // base note: not in classic. Scans summed into the saved frame
+      // (coaddedScans ()); its presence in a FITS header marks a frame
+      // made since 2026-11-03, when a kinetic series became a sum like an
+      // accumulation (older kinetic frames are 16-bit averages)
+      rts2core::ValueInteger * coadds;
       rts2core::ValueBool * useFT;
       rts2core::ValueFloat * imgFreq;
 
@@ -886,6 +891,12 @@ Andor::setTiming ()
 
   setAccumulationDataType ();
 
+  if (coadds->getValueInteger () != coaddedScans ())
+    {
+      coadds->setValueInteger (coaddedScans ());
+      sendValueAll (coadds);
+    }
+
   // What the frame is the integration of, which for an accumulation is not the
   // scan length in "exposure".  EXPTIME follows this, and RTS2 halves EXPTIME to
   // place JD_HELIO - so leaving it at one scan would put the timestamp of a 250x
@@ -1535,6 +1546,10 @@ Camera (in_argc, in_argv)
   createValue (kinNumber, "KINNUM",
                "Number in kinetic series (acqMode=[3,4])", true,
                RTS2_VALUE_WRITABLE, CAM_WORKING);
+  createValue (coadds, "COADDS",
+               "number of scans summed into this frame (ACCNUM, or KINNUM x ACCNUM for a kinetic series)",
+               true, 0, CAM_WORKING);
+  coadds->setValueInteger (1);
   createValue (kinFile, "KINFILE",
                "Name of the kinetic series datafile (acqMode=3)", true,
                RTS2_VALUE_AUTOSAVE);
