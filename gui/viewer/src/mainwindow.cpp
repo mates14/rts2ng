@@ -697,7 +697,12 @@ void MainWindow::updateStatusPanel ()
 		if (!std::isnan (ccdSet))
 		{
 			text += QString (" / %1 °C").arg (ccdSet, 0, 'f', 1);
-			bool close = std::abs (ccdTemp - ccdSet) < 0.5;
+			// temp_stable (cameras on the shared Cooler, base/camd/include/
+			// cooler.h) says it with the camera's own tolerance and hold
+			// time; other cameras fall back to the 0.5 C band
+			bool close = state.values.contains ("temp_stable")
+				? state.values.value ("temp_stable") == 1
+				: std::abs (ccdTemp - ccdSet) < 0.5;
 			statusTempLabel->setStyleSheet (statusStyle (close));
 		}
 		statusTempLabel->setText (text);
@@ -715,6 +720,8 @@ void MainWindow::updateStatusPanel ()
 		statusVoltageLabel->setStyleSheet (statusStyle (v > 11.5 && v < 15.5));
 	}
 
+	// TEMPPWR is percent on every camera; gxccd sent the SDK's 0-1
+	// fraction before 2026-11-03, which showed here as "1 %"
 	if (state.values.contains ("TEMPPWR"))
 	{
 		double p = state.values.value ("TEMPPWR");

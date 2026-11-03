@@ -111,7 +111,8 @@ class Cooler
 		void createPower ();
 
 		/**
-		 * Report the cooler's power utilization, in percent.
+		 * Report the cooler's power utilization, in percent (0-100; an
+		 * SDK giving a fraction is scaled by the driver).
 		 */
 		void setPower (float percent);
 

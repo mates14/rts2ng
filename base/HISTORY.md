@@ -4379,3 +4379,12 @@ Bench: camd-dummy with `--server localhost:16170 --server
 the same drop as on lascaux right after the build line; after, none, and
 the local centrald link works (rts2-sendcmd `info`).
 
+## TEMPPWR in percent from gxccd (2026-11-03) [MJ]
+
+gxccd's `GV_POWER_UTILIZATION` is 0.0-1.0 (gxccd.h); the driver, as
+classic, published it unchanged as TEMPPWR "[%] utilization of cooling
+power" (lascaux: 0.69). fli's `FLIGetCoolerPower` gives percent, and the
+gui viewer, written against gxccd, printed percent and warned at >= 90,
+so it showed "1 %" and never warned. gxccd now multiplies by 100. FITS
+files before the next release have the fraction in TEMPPWR. (gui/STATUS.)
+

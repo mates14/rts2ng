@@ -1511,3 +1511,16 @@ full noble build puts all modules back in step.
 The signing failed: buildme.sh sourced GNUPGHOME from ~/.gnupg-repo.conf
 without exporting it, so gpg looked in ~/.gnupg. InRelease was signed by
 hand with the repo keyring; buildme.sh now exports GNUPGHOME.
+
+## Cooler power in percent, temperature colour from temp_stable (2026-11-03) [MJ]
+
+The viewer's status corner printed TEMPPWR as percent and flagged >= 90 %,
+but gxccd sent the SDK's 0-1 fraction (`GV_POWER_UTILIZATION`), so it
+showed "1 %" and the warning could not fire. base now sends percent from
+every camera (gxccd x100; fli's `FLIGetCoolerPower` already was percent,
+and is now TEMPPWR too), so the viewer code stays as it is; comments
+updated. The temperature label of the viewer and the stacker is green on
+`temp_stable` when the camera has it (base's shared Cooler: within
+temp_tol of CCD_SET for 2 min), else on the old 0.5 C band, which was red
+all the time cooling was off. Built here, not run against a camera.
+

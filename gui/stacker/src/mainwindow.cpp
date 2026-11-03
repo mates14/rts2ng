@@ -637,7 +637,12 @@ void MainWindow::updateStatusPanel ()
 		if (!std::isnan (ccdSet))
 		{
 			text += QString (" / %1 °C").arg (ccdSet, 0, 'f', 1);
-			statusTempLabel->setStyleSheet (gui::statusStyle (std::abs (ccdTemp - ccdSet) < 0.5));
+			// temp_stable from cameras on the shared Cooler (base/camd/
+			// include/cooler.h), else the 0.5 C band
+			bool close = state.values.contains ("temp_stable")
+				? state.values.value ("temp_stable") == 1
+				: std::abs (ccdTemp - ccdSet) < 0.5;
+			statusTempLabel->setStyleSheet (gui::statusStyle (close));
 		}
 		statusTempLabel->setText (text);
 	}

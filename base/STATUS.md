@@ -205,7 +205,9 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   100 C/min, practically immediate both ways; it is autosaved, so a site
   that set a gentler one keeps it. `temp_stable`: cooling on, the ramp at
   `CCD_SET`, `CCD_TEMP` within `temp_tol` for 120 s. Cooler power is
-  `TEMPPWR` on every camera (fli's was `COOL_PWR`). [MJ 2026-11-03]
+  `TEMPPWR`, in percent, on every camera (fli's was `COOL_PWR`; gxccd's
+  was the SDK's 0-1 fraction until 2026-11-03, older FITS have that).
+  [MJ 2026-11-03]
 - gxccd: a failed filter move is retried every 0.5 s for up to 15 s and
   never answered with `reinitCamera ()` (classic did not reinit either).
   The driver sends nothing of its own to a busy camera (`cameraBusy ()`:

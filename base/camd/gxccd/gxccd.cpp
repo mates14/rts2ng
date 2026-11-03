@@ -442,8 +442,11 @@ int GXCCD::info ()
 	ret = gxccd_get_value (camera, GV_ADC_GAIN, &val);
 	gain->setValueFloat (ret ? NAN : val);
 
+	// base note: the SDK gives 0.0-1.0; classic published that under
+	// "[%]", so TEMPPWR read 0.69 for 69 % (and the gui viewer showed
+	// "1 %"). Percent, as fli's and as the description says.
 	ret = gxccd_get_value (camera, GV_POWER_UTILIZATION, &val);
-	cooler->setPower (ret ? NAN : val);
+	cooler->setPower (ret ? NAN : val * 100.0);
 
 	ret = gxccd_get_value (camera, GV_SUPPLY_VOLTAGE, &val);
 	voltage->setValueFloat (ret ? NAN : val);
