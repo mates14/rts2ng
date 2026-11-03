@@ -315,7 +315,9 @@ int AWSmlab::initHardware ()
 	if (sensorTempHum2Enable->getValueBool())
 	{
 		createValue (tempOut, "TEMP_OUT", "temperature outside", true);
+		markEssential (tempOut);
 		createValue (humOut, "HUM_OUT", "humidity outside", true);
+		markEssential (humOut);
 		createValue (triggerHumBad, "HUM_TRIGBAD", "if HUM_OUT gets above this value, set bad weather", false, RTS2_VALUE_WRITABLE);
 		triggerHumBad->setValueDouble (triggerHumBadPO);
 		createValue (triggerHumGood, "HUM_TRIGGOOD", "if HUM_OUT drops below this value, drop bad weather flag", false, RTS2_VALUE_WRITABLE);
@@ -325,10 +327,12 @@ int AWSmlab::initHardware ()
 	{
 		createValue (tempPressure, "TEMP_BAR", "temperature inside, barometer sensor", false);
 		createValue (pressure, "PRESSURE", "atmospheric pressure", true);
+		markEssential (pressure);
 	}
 	if (sensorAnemoEnable->getValueBool())
 	{
 		createValue (windSpeed, "WIND_SPEED", "average wind speed during measure interval, [m/s]", true);
+		markEssential (windSpeed);
 		createValue (windSpeedMaxPeak, "WIND_SPEED_PEAK", "maximal peak wind speed during measure interval, [m/s]", true);
 		createValue (triggerWindBad, "WIND_TRIGBAD", "if WIND_SPEED gets above this value, set bad weather", false, RTS2_VALUE_WRITABLE);
 		triggerWindBad->setValueDouble (triggerWindBadPO);

@@ -95,9 +95,12 @@ D50WFUnit::D50WFUnit (int argc, char **argv): Sensor (argc, argv)
 	createValue (otaHumOut, "OTAhumOUT", "humidity [%] outside of optical tube", false);
 
 	createValue (otaTempMirrorAir, "OTAtempAIR", "temperature of the air in OTA, close to mirror", false);
+	markEssential (otaTempMirrorAir);
 	createValue (otaTempMirror, "OTAtempMIRROR", "temperature of primary mirror", false);
+	markEssential (otaTempMirror);
 
 	createValue (wfShutter, "WFshutter", "WF shutter/cover state", false, RTS2_VALUE_WRITABLE);
+	markEssential (wfShutter);
 	wfShutter->addSelVal ("CLOSED");
 	wfShutter->addSelVal ("OPEN");
 

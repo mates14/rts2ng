@@ -203,6 +203,7 @@ BartRain::BartRain (int argc, char **argv):SensorWeather (argc, argv)
 	rain_port = -1;
 
 	createValue (rain, "rain", "true if sensor detects rain", false);
+	markEssential (rain);
 	rain->setValueBool (false);
 
 	createValue (timeoutRain, "timeout_rain", "rain timeout in seconds", false, RTS2_VALUE_WRITABLE);

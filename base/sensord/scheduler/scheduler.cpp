@@ -172,11 +172,14 @@ Scheduler::Scheduler (int argc, char **argv):Sensor (argc, argv)
 	currentRun = NULL;
 
 	createValue (running, "running", "scheduler is running", false);
+	markEssential (running);
 	running->setValueBool (false);
 	createValue (pending, "pending", "another run is to start when this one ends", false);
+	markEssential (pending);
 	pending->setValueBool (false);
 	createValue (pendingReason, "pending_reason", "what asked for the pending run", false);
 	createValue (lastStart, "last_start", "start of the last run", false);
+	markEssential (lastStart);
 	createValue (lastEnd, "last_end", "end of the last run", false);
 	createValue (lastReason, "last_reason", "what started the last run", false);
 	createValue (runs, "runs", "number of runs since start", false);

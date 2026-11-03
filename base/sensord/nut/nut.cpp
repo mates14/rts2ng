@@ -285,6 +285,7 @@ int NUT::initHardware ()
 	try {
 		connNUT->getVal ("battery.charge", vf);
 		createValue (bcharge, "battery.charge", "battery charge", false);
+		markEssential (bcharge);
 	} catch (rts2core::Error &er) {
 		logStream (MESSAGE_DEBUG) << "battery.charge value does not exist" << sendLog;
 	}
@@ -292,6 +293,7 @@ int NUT::initHardware ()
 	try {
 		connNUT->getVal ("battery.runtime", vi);
 		createValue (bruntime, "battery.runtime", "time left for on-UPS operations", false);
+		markEssential (bruntime);
 	} catch (rts2core::Error &er) {
 		logStream (MESSAGE_DEBUG) << "battery.runtime value does not exist" << sendLog;
 	}
@@ -404,6 +406,7 @@ NUT::NUT (int argc, char **argv):SensorWeather (argc, argv)
 
   	createValue (model, "ups.model", "UPS mode", false);
 	createValue (upsstatus, "ups.status", "UPS status", false);
+	markEssential (upsstatus);
 
 	createValue (onbatterytimeout, "on_battery", "Till this time we are allowed to run even on battery", false);
 

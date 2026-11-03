@@ -37,12 +37,17 @@ Focusd::Focusd (int in_argc, char **in_argv):rts2core::Device (in_argc, in_argv,
 	temperatureNightOnly = nullptr;
 
 	createValue (position, "FOC_POS", "focuser position", true); // reported by focuser, use FOC_TAR to set the target position
+	markEssential (position);
 	createValue (target, "FOC_TAR", "focuser target position", true, RTS2_VALUE_WRITABLE);
+	markEssential (target);
 
 	createValue (defaultPosition, "FOC_DEF", "default target value", true, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
+	markEssential (defaultPosition);
 	createValue (filterOffset, "FOC_FILTEROFF", "offset related to actual filter", true, RTS2_VALUE_WRITABLE);
 	createValue (focusingOffset, "FOC_FOFF", "offset from focusing routine", true, RTS2_VALUE_WRITABLE);
+	markEssential (focusingOffset);
 	createValue (tempOffset, "FOC_TOFF", "temporary offset for focusing", true, RTS2_VALUE_WRITABLE);
+	markEssential (tempOffset);
 
 	createValue (speed, "foc_speed", "[steps/sec] speed of focuser movement", false);
 	speed->setValueDouble (0);
@@ -301,7 +306,10 @@ int Focusd::createTemperature (const char *val)
 	// constructor, before --temperature-variable calls this again; classic
 	// created it twice, and the daemon refused to start
 	if (temperature == nullptr)
+	{
 		createValue (temperature, "FOC_TEMP", "focuser temperature");
+		markEssential (temperature);
+	}
 	return 0;
 }
 

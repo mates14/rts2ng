@@ -149,6 +149,12 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   call `Device::beforeRun ()`. Camera marks exposure, IMAGETYP, OBJECT,
   binning, WINDOW, exposure_end, que_exp_num, last_image, average, and
   where they are created filter/FILTx, SHUTTER, CCD_TEMP, COOLING, CCD_SET.
+  Telescope, focuser and filter wheel mark theirs in the base class (TEL,
+  TEL_, ORI, OFFS, TRACKING, target_distance, MNT_FLIP; FOC_POS, FOC_TAR,
+  FOC_DEF, FOC_FOFF, FOC_TOFF, FOC_TEMP; filter), domes and sensors in the
+  driver (roof/limit switches, slit; the headline readings). A value
+  created after `beforeRun ()` (cloud4's TEMP_AMB) cannot be marked.
+  [MJ 2026-11-03]
 
 **Event loop**
 - Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
@@ -402,8 +408,6 @@ it, and say which classes you added.
   in every driver. Done: `Cooler` for dummy, gxccd, fli, andor. Left:
   connection health for serial/TCP/UDP
   devices; night-scheduled switches (gxccd's `WINDOW_HEATING_NIGHT`).
-  Also essential values for the other device types (teld, focusd, dome,
-  filterd); only the camera marks any so far.
 
 ## Open items
 

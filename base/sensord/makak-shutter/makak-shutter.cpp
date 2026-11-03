@@ -159,7 +159,9 @@ MakakShutter::MakakShutter (int argc, char **argv): Sensor (argc, argv)
 	numVal->setValueInteger (6);
 
 	createValue (temp, "temp", "temperature at the camera", false);
+	markEssential (temp);
 	createValue (humi, "humidity", "humidity [%] at the camera", false);
+	markEssential (humi);
 
 	createValue (heatingState, "heating", "State of lens heating", false);
 	heatingState->addSelVal ("manual-off");
@@ -174,6 +176,7 @@ MakakShutter::MakakShutter (int argc, char **argv): Sensor (argc, argv)
 	heatingSwitch->setValueInteger (0);
 
 	createValue (shutter, "shutter", "shutter/cover state", false, RTS2_VALUE_WRITABLE);
+	markEssential (shutter);
 	shutter->addSelVal ("CLOSED");
 	shutter->addSelVal ("OPEN");
 

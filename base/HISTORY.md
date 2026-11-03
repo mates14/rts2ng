@@ -4528,3 +4528,36 @@ summed into the frame (1 for a single scan), set in `setTiming ()` with
 the data type and EXPTIME. Rule for processing: `COADDS` present -> sum
 of COADDS scans; absent and ACQMODE 3 -> 16-bit average of KINNUM frames.
 
+## Essential values for every device type (2026-11-03) [MJ]
+
+Only the camera marked essential values; the rest listed in creation
+order. Now:
+- teld (base, one block at the end of the constructor, so in this order
+  rather than creation order): TEL, TEL_, ORI, OFFS, TRACKING (when the
+  mount has it), target_distance, MNT_FLIP;
+- focusd (base): FOC_POS, FOC_TAR, FOC_DEF, FOC_FOFF, FOC_TOFF, FOC_TEMP;
+- filterd (base): filter;
+- domes (driver; the Dome base holds only automation settings): d50
+  motor_state, roof_opened, roof_closed; bart south_roof_opened/closed
+  (the north ones are "not used"); zelio weather, emergency, sw_open/
+  sw_close or the left/right pairs, rain; perek2m SLIT, DOMESTAT, DOME_AZ;
+- sensors (driver): system free, night; nut battery.charge,
+  battery.runtime, ups.status (not on_battery, a time limit); cloud4
+  TEMP_DIFF, TEMP_SKY; bart-rain rain; aws-mlab TEMP_OUT, HUM_OUT,
+  PRESSURE, WIND_SPEED; d50-wfunit OTAtempAIR, OTAtempMIRROR, WFshutter;
+  makak-shutter temp, humidity, shutter; fram-weather windspeed, rain;
+  windrs WIND_AVG, WIND_DIR; external good_weather; scheduler running,
+  pending, last_start.
+Order only, no name or flag changes; makak's scripts are unaffected.
+cloud4's TEMP_AMB is created at the first reading, after the sort, so it
+stays at the end. Inserting the marks behind `createValue ()` put one
+under a braceless `if` in focusd (`-Wmisleading-indentation` caught it,
+braces added); a scan for marks after braceless conditionals found no
+other.
+
+Bench: teld-, focusd- and filterd-dummy, their dumps read off the socket:
+T9 TEL TEL_ ORI OFFS TRACKING target_distance after its constants
+(LATITUDE, LONGITUD, ALTITUDE); F9 FOC_POS ... FOC_TEMP after FOC_TYPE;
+W9 filter. Domes and sensors built only (no hardware here); hardened
+build clean.
+

@@ -50,6 +50,7 @@ External::External (int argc, char **argv):SensorWeather (argc, argv, 0)
 	createValue (updateTime, "update_time", "time of last update of device status");
 
 	createValue (goodWeather, "good_weather", "weather quality as set by external script", true, RTS2_VALUE_WRITABLE);
+	markEssential (goodWeather);
 	goodWeather->setValueBool (true);
 
 	createValue (weatherTimeout, "weather_timeout", "bad weather timeout", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);

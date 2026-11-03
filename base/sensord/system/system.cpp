@@ -229,12 +229,15 @@ System::System (int argc, char **argv):Sensor (argc, argv)
 
 	createValue (path, "path", "path being monitored", false);
 	createValue (freeSize, "free", "free disk space on ", false, RTS2_DT_BYTESIZE);
+	markEssential (freeSize);
 	createValue (history, "history", "history of free bytes (every 24h)", false); // , RTS2_DT_BYTESIZE);
 	createValue (nfree, "night", "number of expected nights till disk will get full", false);
+	markEssential (nfree);
 	createValue (bytesNight, "expected", "expected number of bytes per night (maximum from night diferences from last 10 nights)", false, RTS2_DT_BYTESIZE);
 
 	createValue (lastWrite, "last_write", "time of last write of system usage statistics", false);
 	createValue (loadavg, "load_avg", "system load average for 1, 5 and 15 minutes", false);
+	markEssential (loadavg);
 	addOption ('p', NULL, 1, "specifyed path being monitored");
 	addOption (OPT_STORAGE, "save", 1, "save data to given file");
 

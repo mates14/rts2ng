@@ -225,8 +225,10 @@ Cloud4::Cloud4 (int in_argc, char **in_argv):SensorWeather (in_argc, in_argv)
 	mrakConn = NULL;
 
 	createValue (tempDiff, "TEMP_DIFF", "temperature difference", true);
+	markEssential (tempDiff);
 	createValue (tempIn, "TEMP_IN", "temperature inside of the detector", true);
 	createValue (tempSky, "TEMP_SKY", "sky temperature computed from all available sensors", true);
+	markEssential (tempSky);
 	createValue (tempSky1, "TEMP_SKY1", "sky temperature (sensor 1)", false);
 
 	tempSky2 = tempAmb = NULL;

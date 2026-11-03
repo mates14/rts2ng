@@ -817,7 +817,9 @@ Zelio::Zelio (int argc, char **argv):Dome (argc, argv)
 
 	createValue (timeoutOccured, "timeout_occured", "on if timeout occured", false);
 	createValue (weather, "weather", "true if weather is (for some reason) believed to be fine", false);
+	markEssential (weather);
 	createValue (emergencyButton, "emergency", "state of emergency button", false);
+	markEssential (emergencyButton);
 
 	createValue (emergencyReset, "reset_emergency", "(re)set emergency state -cycle true/false to reset", false, RTS2_VALUE_WRITABLE);
 	emergencyReset->setValueBool (false);
@@ -1163,7 +1165,9 @@ void Zelio::createZelioValues ()
 	{
 		case ZELIO_SIMPLE:
 			createValue (swOpenLeft, "sw_open", "state of open switch", false);
+			markEssential (swOpenLeft);
 			createValue (swCloseLeft, "sw_close", "state of close switch", false);
+			markEssential (swCloseLeft);
 
 			createValue (motOpenLeft, "motor_open", "state of opening motor", false);
 			createValue (motCloseLeft, "motor_close", "state of closing motor", false);
@@ -1184,9 +1188,13 @@ void Zelio::createZelioValues ()
 		case ZELIO_COMPRESSOR_WOUTPLUGS:
 		case ZELIO_COMPRESSOR:
 			createValue (swOpenLeft, "sw_open_left", "state of left open switch", false);
+			markEssential (swOpenLeft);
 			createValue (swCloseLeft, "sw_close_left", "state of left close switch", false);
+			markEssential (swCloseLeft);
 			createValue (swCloseRight, "sw_close_right", "state of right close switch", false);
+			markEssential (swCloseRight);
 			createValue (swOpenRight, "sw_open_right", "state of right open switch", false);
+			markEssential (swOpenRight);
 
 			createValue (motOpenLeft, "motor_open_left", "state of left opening motor", false);
 			createValue (motCloseLeft, "motor_close_left", "state of left closing motor", false);
@@ -1263,6 +1271,7 @@ void Zelio::createZelioValues ()
 	if (haveRainSignal)
 	{
 		createValue (rain, "rain", "state of rain sensor", false);
+		markEssential (rain);
 		createValue (openingIgnoreRain, "opening_ignore", "ignore rain during opening", false);
 		createValue (ignoreRain, "ignore_rain", "whenever rain is ignored (know issue with interference between dome and rain sensor)", false, RTS2_VALUE_WRITABLE);
 	}

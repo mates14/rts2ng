@@ -28,6 +28,7 @@ using namespace rts2filterd;
 Filterd::Filterd (int in_argc, char **in_argv, const char *defName):rts2core::Device (in_argc, in_argv, DEVICE_TYPE_FW, defName)
 {
 	createValue (filter, "filter", "used filter", false, RTS2_VALUE_WRITABLE);
+	markEssential (filter);
 	defaultFilter = nullptr;
 	arg_defaultFilter = nullptr;
 	daytimeFilter = nullptr;

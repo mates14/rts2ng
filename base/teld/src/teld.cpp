@@ -447,6 +447,17 @@ Telescope::Telescope (int in_argc, char **in_argv, bool diffTrack, bool hasTrack
 
 	moveInfoCount = 0;
 	moveInfoMax = 100;
+
+	// base note: what an operator looks for first goes to the top of the
+	// list (Daemon::sortValuesForDisplay); in this order, not creation order
+	markEssential (telRaDec);
+	markEssential (telAltAz);
+	markEssential (oriRaDec);
+	markEssential (offsRaDec);
+	if (tracking)
+		markEssential (tracking);
+	markEssential (targetDistance);
+	markEssential (telFlip);
 }
 
 Telescope::~Telescope (void)

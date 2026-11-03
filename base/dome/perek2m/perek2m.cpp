@@ -161,10 +161,13 @@ Perek2m::Perek2m (int argc, char **argv):Dome (argc, argv, DEVICE_TYPE_DOME, tru
 	createValue (oilState, "OIL", "oil system", true);
 	createValue (telState, "TELSTATE", "telescope state (TCS)", false);
 	createValue (slitState, "SLIT", "dome slit", true);
+	markEssential (slitState);
 	createValue (tubeState, "TUBEFLAP", "tube flap", true);
 	createValue (mirrorState, "MIRRFLAP", "mirror flap", true);
 	createValue (domeState, "DOMESTAT", "dome rotation", true);
+	markEssential (domeState);
 	createValue (domeAz, "DOME_AZ", "[deg] dome azimuth", true, RTS2_DT_DEGREES);
+	markEssential (domeAz);
 
 	createValue (slitOpen, "slit_open", "slit: open (DOSO)", false, RTS2_VALUE_WRITABLE);
 	createValue (tubeOpen, "tube_flap_open", "tube flap: open (FTOC)", false, RTS2_VALUE_WRITABLE);

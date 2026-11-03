@@ -148,7 +148,9 @@ WindRS::WindRS (int argc, char **argv):SensorWeather (argc, argv)
 	windLimitAvg = NULL;
 
 	createValue (windAvg, "WIND_AVG", "[m/s] average wind speed over last N minutes", false);
+	markEssential (windAvg);
 	createValue (windDir, "WIND_DIR", "wind direction (deg)", false, RTS2_DT_DEGREES);
+	markEssential (windDir);
 	createValue (windLimitAvg, "AVG_LIMIT", "[m/s]maximum safe average windspeed", false, RTS2_VALUE_WRITABLE);
 	windLimitAvg->setValueFloat (LUDICROUS_SPEED);
 

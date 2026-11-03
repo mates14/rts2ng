@@ -51,7 +51,9 @@ int FramWeather::init ()
 FramWeather::FramWeather (int argc, char **argv):SensorWeather (argc, argv)
 {
 	createValue (windSpeed, "windspeed", "current measured windspeed", false);
+	markEssential (windSpeed);
 	createValue (rain, "rain", "true it it is raining", false);
+	markEssential (rain);
 	createValue (watch, "watch", "connection watch status", false);
 	watch->addSelVal ("WATCH");
 	watch->addSelVal ("UNKNOW");

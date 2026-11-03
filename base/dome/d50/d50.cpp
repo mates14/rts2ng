@@ -153,6 +153,7 @@ D50::D50 (int argc, char **argv):Ford (argc, argv)
 
 	createValue (sw_state, "sw_state", "state of dome switches", false, RTS2_DT_HEX);
 	createValue (domeMotorState, "motor_state", "dome-motor state", false);
+	markEssential (domeMotorState);
 	domeMotorState->addSelVal ("off");
 	domeMotorState->addSelVal ("opening (moving)");
 	domeMotorState->addSelVal ("closing (moving)");
@@ -163,9 +164,11 @@ D50::D50 (int argc, char **argv):Ford (argc, argv)
 	domeMotorStateClosing->addSelVal ("---");
 	domeMotorStateClosing->addSelVal ("CLOSING");
 	createValue (domeSwitchOpened, "roof_opened", "switch on south roof, opened state", false, RTS2_DT_ONOFF);
+	markEssential (domeSwitchOpened);
 	domeSwitchOpened->addSelVal ("---");
 	domeSwitchOpened->addSelVal ("OPENED");
 	createValue (domeSwitchClosed, "roof_closed", "switch on south roof, closed state", false, RTS2_DT_ONOFF);
+	markEssential (domeSwitchClosed);
 	domeSwitchClosed->addSelVal ("---");
 	domeSwitchClosed->addSelVal ("CLOSED");
 

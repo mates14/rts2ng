@@ -135,9 +135,11 @@ Bart::Bart (int argc, char **argv):Ford (argc, argv)
 	domeMotorDirection->addSelVal ("opening (off)");
 	domeMotorDirection->addSelVal ("closing (on)");
 	createValue (domeSouthSwitchOpened, "south_roof_opened", "switch on south roof, opened state", false, RTS2_DT_ONOFF);
+	markEssential (domeSouthSwitchOpened);
 	domeSouthSwitchOpened->addSelVal ("---");
 	domeSouthSwitchOpened->addSelVal ("OPENED");
 	createValue (domeSouthSwitchClosed, "south_roof_closed", "switch on south roof, closed state", false, RTS2_DT_ONOFF);
+	markEssential (domeSouthSwitchClosed);
 	domeSouthSwitchClosed->addSelVal ("---");
 	domeSouthSwitchClosed->addSelVal ("CLOSED");
 	// base note: the north switches are wired (BART logs show their bits) but their
