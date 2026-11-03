@@ -1240,13 +1240,17 @@
             };
             // COND's dew warning (throughput lost against Makak): this
             // telescope's dew/dew_src, the other's from its snapshot as
-            // dew_remote/dew_remote_src ('host: cameras', 'n/a' when unknown)
+            // dew_remote/dew_remote_src ('host: cameras'). Yes or No only
+            // with a frame compared against Makak in the last 30 min
+            // (dew_age, dew_remote_age), "-" otherwise: by day, with the
+            // dome closed or Makak silent there is nothing to say either way.
             const dewStr = label => {
                 const own = label === 'D50';
                 const on = safeValue(systemData.COND, own ? 'dew' : 'dew_remote', null);
                 const src = String(safeValue(systemData.COND, own ? 'dew_src' : 'dew_remote_src', ''));
-                if (on === null || (!own && src === 'n/a'))
-                    return `<span class="warn">N/A (${label})</span>`;
+                const age = numOrNull(safeValue(systemData.COND, own ? 'dew_age' : 'dew_remote_age', null));
+                if (on === null || age === null || age > 1800)
+                    return `- (${label})`;
                 return on == 1 ? `<span class="error">YES (${label}: ${src.replace(/^[^:]*: /, '')})</span>`
                     : `<span class="good">No (${label})</span>`;
             };
