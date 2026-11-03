@@ -4388,3 +4388,26 @@ gui viewer, written against gxccd, printed percent and warned at >= 90,
 so it showed "1 %" and never warned. gxccd now multiplies by 100. FITS
 files before the next release have the fraction in TEMPPWR. (gui/STATUS.)
 
+## Release 86139ea at the sites; temp_stable on unpolled cameras (2026-11-03) [MJ]
+
+lascaux (BART): no EAGAIN drop at the 19:04 restart (three at 18:47).
+After the restart centrald went HARD OFF night, autocooling switched the
+cameras off (TETAR 50, chips -20 -> -13 within a minute), standby at
+19:05:06 switched them back on; the ramp waited for the 15 s gxccd busy
+time after the "stop" state, then all three settled, temp_stable 1. Same
+as classic apart from the new values.
+
+D50: C1 (gxccd) has the identity values, `HW_VER fw a.2.0` (the camera
+sets `GBP_HEX_VERSION_NUMBER`), and no cooler (`COOLING` stays unknown,
+as before). C0 is still the hand-built andor of 2026-10-29: no identity
+values, no ordering, no connection fix until rebuilt on lascaux50.
+
+flores (FLI, perek2m): identity values (`SDK_VER` "Software Development
+Library for Linux 1.104", `HW_VER` "hw 258, fw 534"), cooling at -30 from
+nightcool, no TEMPPWR (`FLIGetCoolerPower` fails on this camera). But
+temp_stable stayed 0 at -30.3 against -30: no client asks the camera for
+info () there (last one 320 s before), and the check ran only in
+`Camera::info ()`. fli (and andor) read the temperature every 2 s through
+`addTempCCDHistory ()`; that now runs the check too. Not tested on a
+camera yet; flores will show it with the next release.
+

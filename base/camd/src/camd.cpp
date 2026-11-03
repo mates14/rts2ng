@@ -1581,6 +1581,10 @@ void Camera::addTempCCDHistory (float temp)
 	sendValueAll (tempCCDHistory);
 	tempCCD->setValueFloat (tempCCDHistory->getValueFloat ());
 	sendValueAll (tempCCD);
+	// temp_stable follows CCD_TEMP: a camera nobody asks for info ()
+	// (flores, no httpd) refreshes CCD_TEMP only here
+	if (cooler)
+		cooler->checkStable ();
 }
 
 void Camera::deviceReady (rts2core::Connection * conn)

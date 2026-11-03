@@ -140,7 +140,8 @@ class Cooler
 		float getSetPoint () { return tempTarget->getValueFloat (); }
 
 		/**
-		 * Update temp_stable from CCD_TEMP; Camera::info () calls it.
+		 * Update temp_stable from CCD_TEMP; called wherever CCD_TEMP is
+		 * refreshed: Camera::info () and Camera::addTempCCDHistory ().
 		 */
 		void checkStable ();
 
