@@ -390,6 +390,28 @@ int GXCCD::initValues ()
 		return -1;
 	ccdChipType->setValueCharArr (buf);
 
+	// library and firmware versions; firmware (and flash) are optional
+	// in the SDK, a camera that does not report them leaves them out
+	auto gxVersion = [this] (int major, bool hex) -> std::string
+	{
+		int v[3];
+		for (int i = 0; i < 3; i++)
+			if (gxccd_get_integer_parameter (camera, major + i, &v[i]))
+				return std::string ();
+		char vb[64];
+		snprintf (vb, sizeof (vb), hex ? "%x.%d.%d" : "%d.%d.%d", v[0], v[1], v[2]);
+		return std::string (vb);
+	};
+	std::string sdk = gxVersion (GIP_DRIVER_MAJOR, false);
+	if (!sdk.empty ())
+		setSdkVersion ("gxccd " + sdk);
+	bool fwHex = false;
+	gxccd_get_boolean_parameter (camera, GBP_HEX_VERSION_NUMBER, &fwHex);
+	std::string fw = gxVersion (GIP_FIRMWARE_MAJOR, fwHex);
+	std::string flash = gxVersion (GIP_FLASH_MAJOR, false);
+	if (!fw.empty () || !flash.empty ())
+		setHwVersion ((fw.empty () ? "" : "fw " + fw) + (fw.empty () || flash.empty () ? "" : ", ") + (flash.empty () ? "" : "flash " + flash));
+
 	int ival;
 	ret = gxccd_get_integer_parameter (camera, GIP_CAMERA_ID, &ival);
 	if (ret)

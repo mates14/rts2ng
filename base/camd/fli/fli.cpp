@@ -638,6 +638,13 @@ int Fli::initHardware ()
 			break;
 	}
 	ccdChipType->setValueCharArr (buf);
+
+	// CCD_TYPE/CCD_SER above already carry the revisions (classic format);
+	// HW_VER/SDK_VER give them under the names every driver uses
+	snprintf (buf2, 150, "hw %li, fw %li", hwrev, fwrev);
+	setHwVersion (buf2);
+	if (FLIGetLibVersion (buf, 100) == 0)
+		setSdkVersion (buf);
 	// example: "CCD47-10",... - For old CCDs (maxCam, IMG) this gives reasonable ChipType, maybe this will not be so perfect for newer types...
 
 	free (buf);

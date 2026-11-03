@@ -1653,6 +1653,23 @@ Andor::initAndorID ()
   checkRet ("initAndorID()", "GetCameraSerialNumber()");
   serialNumber->setValueInteger (serNum);
 
+  // SDK and firmware versions; informational only, so a failing call just
+  // leaves the value out
+  char verbuf[64];
+  if (GetVersionInfo (AT_SDKVersion, verbuf, sizeof (verbuf)) == DRV_SUCCESS)
+    {
+      std::string sdk = std::string ("Andor SDK ") + verbuf;
+      if (GetVersionInfo (AT_DeviceDriverVersion, verbuf, sizeof (verbuf)) == DRV_SUCCESS)
+        sdk += std::string (", driver ") + verbuf;
+      setSdkVersion (sdk);
+    }
+  unsigned int pcb, decode, d1, d2, fwVer, fwBuild;
+  if (GetHardwareVersion (&pcb, &decode, &d1, &d2, &fwVer, &fwBuild) == DRV_SUCCESS)
+    {
+      snprintf (verbuf, sizeof (verbuf), "fw %u.%u, pcb %u, decode %u", fwVer, fwBuild, pcb, decode);
+      setHwVersion (verbuf);
+    }
+
   // XXX Missing: the 1024x1024 iXon uses CCD201-20, the 512x512 uses
   // CCD97-00, any other cases could be later fixed here within a case, as
   // Andor does not reveal the CCD type via the API

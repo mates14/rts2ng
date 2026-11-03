@@ -374,7 +374,35 @@ class Device:public Daemon
 
 		virtual void initLockFile () { setLockFile (std::string (getLockPrefix ()) + std::string (device_name)); }
 
+		/**
+		 * Version of the vendor library (SDK) the driver runs on. Shown
+		 * among the identity values at the top of the value list
+		 * (SDK_VER) and written to FITS. Call it from initHardware ();
+		 * calling it again on a re-initialisation updates the value.
+		 */
+		void setSdkVersion (const std::string &v) { setIdentityValue (sdkVersion, "SDK_VER", "version of the vendor library the driver uses", v); }
+
+		/**
+		 * Firmware/hardware revision of the connected device (HW_VER).
+		 * Same rules as setSdkVersion ().
+		 */
+		void setHwVersion (const std::string &v) { setIdentityValue (hwVersion, "HW_VER", "firmware/hardware revision of the connected device", v); }
+
 	private:
+		// base note: identity values (DRIVER, BUILD, LINKED, and SDK_VER/HW_VER
+		// when the driver sets them) are not in classic. They are constant
+		// values, which every daemon sends right after infotime/uptime and
+		// before its other values, so they head the list in every client.
+		// DEVPREFIX, because otherwise each device's BUILD would overwrite
+		// the camera's in the FITS header.
+		ValueString *driverName;
+		ValueString *buildId;
+		ValueTime *linkTime;
+		ValueString *sdkVersion;
+		ValueString *hwVersion;
+
+		void setIdentityValue (ValueString *&val, const char *name, const char *desc, const std::string &v);
+
 		std::list <HostString> centraldHosts;
 
 		// device current full BOP state

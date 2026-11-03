@@ -24,6 +24,10 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <cmath>
+#include <cstring>
+#include <ctime>
 
 #include "status.h"
 #include "device.h"
@@ -544,6 +548,26 @@ Device::Device (int in_argc, char **in_argv, int in_device_type, const char *def
 
 	multidevPart = false;
 
+	// Identity, see the base note at the declaration (device.h). The
+	// executable's mtime is the link time (dpkg keeps it from the build);
+	// BASE_GIT_DESCRIBE is only as fresh as the last cmake configure, so
+	// the two together say what is running.
+	createConstValue (driverName, "DRIVER", "driver executable", true, RTS2_VALUE_DEVPREFIX);
+	const char *exe = (in_argc > 0 && in_argv[0] != nullptr) ? in_argv[0] : "";
+	const char *slash = strrchr (exe, '/');
+	driverName->setValueCharArr (slash ? slash + 1 : exe);
+
+	createConstValue (buildId, "BUILD", "git describe of the source (configure time)", true, RTS2_VALUE_DEVPREFIX);
+	buildId->setValueCharArr (BASE_GIT_DESCRIBE);
+
+	createConstValue (linkTime, "LINKED", "time the driver executable was linked", true, RTS2_VALUE_DEVPREFIX);
+	struct stat st;
+	if (stat ("/proc/self/exe", &st) == 0)
+		linkTime->setValueDouble (st.st_mtime);
+
+	sdkVersion = nullptr;
+	hwVersion = nullptr;
+
 	// now add options..
 	addOption (OPT_NOAUTH, "noauth", 0, "allow unauthorized connections");
 	addOption (OPT_NOTCHECKNULL, "notcheck", 0, "ignore if some recomended values are not set");
@@ -1037,6 +1061,25 @@ void Device::sendFullStateInfo (Connection * conn)
 	sendBopMessage (getState (), fullBopState, conn);
 }
 
+void Device::setIdentityValue (ValueString *&val, const char *name, const char *desc, const std::string &v)
+{
+	if (val == nullptr)
+	{
+		createConstValue (val, name, desc, true, RTS2_VALUE_DEVPREFIX);
+		val->setValueString (v);
+		// normally called from initHardware (), before any client
+		// connected; a later first call must announce the new value itself
+		for (connections_t::iterator iter = getConnections ()->begin (); iter != getConnections ()->end (); iter++)
+			val->sendMetaInfo (*iter);
+		val->resetNeedSend ();
+		return;
+	}
+	if (v == val->getValueString ())
+		return;
+	val->setValueString (v);
+	sendValueAll (val);
+}
+
 int Device::init ()
 {
 	int ret;
@@ -1059,6 +1102,17 @@ int Device::init ()
 		conn_master->init ();
 		addCentraldConnection (conn_master, true);
 	}
+
+	char linked[64] = "unknown";
+	if (!std::isnan (linkTime->getValueDouble ()))
+	{
+		time_t t = (time_t) linkTime->getValueDouble ();
+		struct tm tm;
+		gmtime_r (&t, &tm);
+		strftime (linked, sizeof (linked), "%Y-%m-%dT%H:%M:%SZ", &tm);
+	}
+	logStream (MESSAGE_INFO) << driverName->getValue () << ": build " << buildId->getValue ()
+		<< ", linked " << linked << sendLog;
 
 	return initHardware ();
 }
