@@ -163,9 +163,6 @@ GXCCD::GXCCD (int argc, char **argv):Camera (argc, argv)
 	createFilter ();
 	createTempAir ();
 	createTempCCD ();
-	// 50 C: the camera has no cooler switch, cooling off leaves it
-	// regulated warm (as classic did)
-	createCooler (this, 50.0);
 
 	createValue (voltage, "VOLTAGE", "[V] current voltage of the camera power supply", true);
 	createValue (gain, "GAIN", "[e-ADU] gain", true);
@@ -242,8 +239,14 @@ int GXCCD::initHardware ()
 		// This way this is not functional (because of the need of parsing CLI parameters, function createFilter () has to be called much sooner).	// When needed, this could be solved the same way I did the "hasCooling" problem... However, it is not necessary in this case, as filters are only taken into account when specified on commandline...
 		//createFilter ();
 	}*/
+	// base note: classic created the cooling values for every camera and
+	// refused them on one without a cooler (makak's G1-2000, D50's C1),
+	// which then showed COOLING "unknown" and CCD_SET NAN. Now an uncooled
+	// camera has only CCD_TEMP and CCD_AIR. 50 C: no cooler switch, cooling
+	// off leaves it regulated warm (as classic did).
 	gxccd_get_boolean_parameter (camera, GBP_COOLER, &val);
-	cooler->setAvailable (val);
+	if (val)
+		createCooler (this, 50.0);
 	gxccd_get_boolean_parameter (camera, GBP_FAN, &val);
 	if (val)
 	{
@@ -272,7 +275,7 @@ int GXCCD::initHardware ()
 		desiredNightWindowHeating->setValueInteger (desiredNightHeatingInitValue);
 	}
 	gxccd_get_boolean_parameter (camera, GBP_POWER_UTILIZATION, &val);
-	if (val)
+	if (val && cooler)
 	{
 		cooler->createPower ();
 	}
@@ -445,8 +448,11 @@ int GXCCD::info ()
 	// base note: the SDK gives 0.0-1.0; classic published that under
 	// "[%]", so TEMPPWR read 0.69 for 69 % (and the gui viewer showed
 	// "1 %"). Percent, as fli's and as the description says.
-	ret = gxccd_get_value (camera, GV_POWER_UTILIZATION, &val);
-	cooler->setPower (ret ? NAN : val * 100.0);
+	if (cooler)
+	{
+		ret = gxccd_get_value (camera, GV_POWER_UTILIZATION, &val);
+		cooler->setPower (ret ? NAN : val * 100.0);
+	}
 
 	ret = gxccd_get_value (camera, GV_SUPPLY_VOLTAGE, &val);
 	voltage->setValueFloat (ret ? NAN : val);
@@ -870,7 +876,7 @@ int GXCCD::reinitCamera ()
 
 	// base note: classic sent TETAR also while it was still NAN (cooling
 	// never started); there is nothing to restore then
-	if (!std::isnan (cooler->getSetPoint ()))
+	if (cooler && !std::isnan (cooler->getSetPoint ()))
 	{
 		ret = gxccd_set_temperature (camera, cooler->getSetPoint ());
 		if (ret)

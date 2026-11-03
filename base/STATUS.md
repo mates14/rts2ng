@@ -193,6 +193,13 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   it was refused for the whole readout (2.6 s on C3) or, with the reinit,
   wedged the camera (HISTORY, "An exposure whose client left ends at
   once"). [JS 2026-10-27]
+- A camera without a cooler has only `CCD_TEMP` and `CCD_AIR`; the
+  cooling set exists only where the driver creates a `Cooler`, which it
+  may do as late as `initHardware ()` (gxccd: when `GBP_COOLER`; makak's
+  G1-2000 and D50's C1 have none). `-c` and `--no-autocooling` belong to
+  Camera and are applied whenever the cooling values appear; on a camera
+  without them `-c` is ignored with a warning. fli always has a cooler
+  (libfli cannot tell). [MJ 2026-11-03]
 - Cooled cameras regulate through `Cooler` (`camd/include/cooler.h`,
   `Camera::createCooler ()`); the driver implements only
   `CoolerHardware`: `coolerSetPoint ()`, optionally `coolerPower ()` and

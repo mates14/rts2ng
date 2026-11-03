@@ -96,14 +96,6 @@ class Cooler
 		Cooler (Camera *_camera, CoolerHardware *_hw, float _offTemp);
 
 		/**
-		 * For drivers that learn only in initHardware () whether the camera
-		 * has a cooler (gxccd). An unavailable cooler refuses COOLING and
-		 * CCD_SET changes.
-		 */
-		void setAvailable (bool a) { available = a; }
-		bool isAvailable () { return available; }
-
-		/**
 		 * Create TEMPPWR, for cameras that report the cooler's power. Call
 		 * it before the device starts serving (constructor or
 		 * initHardware ()).
@@ -152,7 +144,6 @@ class Cooler
 		Camera *camera;
 		CoolerHardware *hw;
 		float offTemp;
-		bool available;
 
 		rts2core::ValueFloat *tempRamp;
 		rts2core::ValueFloat *tempTarget;

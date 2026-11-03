@@ -601,6 +601,7 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 	// other options..
 	addOption (OPT_RTS2_COOLING, "no-autocooling", 0, "when set, RTS2 did not switch cooling off at the end of night");
+	addOption ('c', nullptr, 1, "night cooling temperature (cameras with a cooler)");
 	addOption (OPT_COMMENTS, "add-comments", 1, "add given number of comment fields");
 	addOption (OPT_HISTORIES, "add-history", 1, "add given number of history fields");
 	addOption (OPT_FOCUS, "focdev", 1, "name of focuser device, which will be granted to do exposures without priority");
@@ -845,6 +846,7 @@ int Camera::processOption (int in_opt)
 			comments = atoi (optarg);
 			break;
 		case OPT_RTS2_COOLING:
+			optNoAutocooling = true;
 			if (rts2ControlCooling != nullptr)
 				rts2ControlCooling->setValueBool (false);
 			break;
@@ -874,9 +876,9 @@ int Camera::processOption (int in_opt)
 			exposure->setValueCharArr (optarg);
 			break;
 		case 'c':
-			if (nightCoolTemp == nullptr)
-				return rts2core::ScriptDevice::processOption (in_opt);
-			nightCoolTemp->setValueCharArr (optarg);
+			optNightCool = atof (optarg);
+			if (nightCoolTemp != nullptr)
+				nightCoolTemp->setValueFloat (optNightCool);
 			break;
 		case OPT_WCS_MULTI:
 			if (strlen (optarg) != 1 || optarg[0] < 'A' || optarg[0] > 'Z')
@@ -1659,6 +1661,13 @@ void Camera::postEvent (rts2core::Event * event)
 			return;
 	}
 	rts2core::ScriptDevice::postEvent (event);
+}
+
+void Camera::beforeRun ()
+{
+	if (!std::isnan (optNightCool) && nightCoolTemp == nullptr)
+		logStream (MESSAGE_WARNING) << "camera has no cooler, -c " << optNightCool << " ignored" << sendLog;
+	rts2core::ScriptDevice::beforeRun ();
 }
 
 int Camera::idle ()

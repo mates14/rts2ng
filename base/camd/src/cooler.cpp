@@ -30,7 +30,6 @@ Cooler::Cooler (Camera *_camera, CoolerHardware *_hw, float _offTemp)
 	camera = _camera;
 	hw = _hw;
 	offTemp = _offTemp;
-	available = true;
 	power = nullptr;
 	stableSince = NAN;
 
@@ -65,8 +64,6 @@ void Cooler::setPower (float percent)
 
 int Cooler::setTarget (float temp)
 {
-	if (!available)
-		return -2;
 	camera->tempSet->setValueDouble (temp);
 	camera->sendValueAll (camera->tempSet);
 	if (camera->coolingOnOff->getValueBool ())
@@ -76,9 +73,6 @@ int Cooler::setTarget (float temp)
 
 int Cooler::switchCooling (bool on)
 {
-	if (!available)
-		return -2;
-
 	if (on)
 	{
 		if (std::isnan (camera->tempSet->getValueFloat ()))
@@ -171,7 +165,7 @@ void Cooler::checkStable ()
 {
 	float set = camera->tempSet->getValueFloat ();
 	float ccd = camera->tempCCD ? camera->tempCCD->getValueFloat () : NAN;
-	bool within = available && camera->coolingOnOff->getValueBool ()
+	bool within = camera->coolingOnOff->getValueBool ()
 		&& tempTarget->getValueFloat () == set
 		&& fabs (ccd - set) <= tolerance->getValueFloat ();
 

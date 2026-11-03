@@ -224,6 +224,12 @@ class Camera:public rts2core::ScriptDevice
 		}
 
 		/**
+		 * Warns about -c on a camera that turned out to have no cooling
+		 * values, then Device::beforeRun () (checks, value order).
+		 */
+		virtual void beforeRun ();
+
+		/**
 		 * Called before night stars. Can be used to hook in preparing camera for night.
 		 */
 		virtual void beforeNight ()
@@ -946,11 +952,18 @@ class Camera:public rts2core::ScriptDevice
 		 *
 		 * @param offTemp [C] setpoint that cooling off ramps to
 		 */
-		void createCooler (CoolerHardware *hw, float offTemp) { cooler = new Cooler (this, hw, offTemp); }
+		void createCooler (CoolerHardware *hw, float offTemp) { if (cooler == nullptr) cooler = new Cooler (this, hw, offTemp); }
 
 		// base note: not in classic, see cooler.h; nullptr for cameras
 		// without it (uncooled, or andor, which still has its own ramp)
 		Cooler *cooler;
+
+		// base note: -c and --no-autocooling are kept here and applied by
+		// createTempSet (); classic registered -c in createTempSet (), so a
+		// driver creating the cooling values only in initHardware () - after
+		// the options are parsed - could not take it
+		float optNightCool = NAN;
+		bool optNoAutocooling = false;
 
 		void createTempSet ()
 		{
@@ -960,9 +973,11 @@ class Camera:public rts2core::ScriptDevice
 			markEssential (tempSet);
 			createValue (nightCoolTemp, "nightcool", "night cooling temperature", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 			createValue (rts2ControlCooling, "autocooling", "turn off cooling after night", false, RTS2_VALUE_WRITABLE);
-			rts2ControlCooling->setValueBool (true);
-			nightCoolTemp->setValueFloat (NAN);
-			addOption ('c', nullptr, 1, "night cooling temperature");
+			// -c and --no-autocooling are Camera's options, parsed before or
+			// after this runs (a driver that knows only in initHardware ()
+			// whether the camera has a cooler creates it there)
+			rts2ControlCooling->setValueBool (!optNoAutocooling);
+			nightCoolTemp->setValueFloat (optNightCool);
 		}
 
 		/**

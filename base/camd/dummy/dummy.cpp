@@ -38,6 +38,7 @@
 #define OPT_READSLEEP    OPT_LOCAL + 7
 #define OPT_FRAMETRANS   OPT_LOCAL + 8
 #define OPT_GENTYPE      OPT_LOCAL + 9
+#define OPT_NO_COOLER    OPT_LOCAL + 10
 
 namespace rts2camd
 {
@@ -132,6 +133,7 @@ class Dummy:public Camera, public CoolerHardware
 			addOption (OPT_DATA_SIZE, "datasize", 1, "size of data block transmitted over TCP/IP");
 			addOption (OPT_CHANNELS, "channels", 1, "number of data channels");
 			addOption (OPT_REMOVE_TEMP, "no-temp", 0, "do not show temperature related fields");
+			addOption (OPT_NO_COOLER, "no-cooler", 0, "simulate a camera without a cooler (only CCD_TEMP and CCD_AIR)");
 			addOption (OPT_GENTYPE, "gentype", 1, "data generation algorithm");
 		}
 
@@ -170,6 +172,9 @@ class Dummy:public Camera, public CoolerHardware
 				case OPT_REMOVE_TEMP:
 					showTemp = false;
 					break;
+				case OPT_NO_COOLER:
+					hasCooler = false;
+					break;
 				case OPT_GENTYPE:
 					genType->setValueInteger (atoi (optarg));
 					break;
@@ -181,8 +186,9 @@ class Dummy:public Camera, public CoolerHardware
 		virtual int initHardware ()
 		{
 			if (showTemp)
-			{
 				createTempAir ();
+			if (showTemp && hasCooler)
+			{
 				// base note: classic set CCD_TEMP to CCD_SET plus noise; the
 				// shared Cooler is simulated instead (info ())
 				createCooler (this, AMBIENT);
@@ -351,6 +357,7 @@ class Dummy:public Camera, public CoolerHardware
 		long dataSize;
 
 		bool showTemp;
+		bool hasCooler = true;
 
 		// the simulated cooler
 		static constexpr float AMBIENT = 20.0;

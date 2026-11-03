@@ -4411,3 +4411,36 @@ info () there (last one 320 s before), and the check ran only in
 `addTempCCDHistory ()`; that now runs the check too. Not tested on a
 camera yet; flores will show it with the next release.
 
+## Cameras without a cooler: CCD_TEMP and CCD_AIR only (2026-11-03) [MJ]
+
+MJ: uncooled cameras (guiders, utility cameras) are a different kind and
+should look different, with only CCD_TEMP and CCD_AIR. gxccd created the
+cooling values for every camera and refused them on one without a cooler:
+makak's C0 (G1-2000) showed COOLING 2 (unknown), CCD_SET nan, TETAR nan,
+TERAMP, nightcool, autocooling; D50's C1 the same. FITS got COOLING and
+CCD_SET too.
+
+gxccd creates the Cooler in `initHardware ()`, only when `GBP_COOLER`;
+`Cooler::setAvailable ()` is gone. The obstacle was `-c`: classic
+registered it in `createTempSet ()`, so a driver creating the cooling
+values after option parsing could not take it. Camera now always takes
+`-c` and `--no-autocooling`, keeps them (`optNightCool`,
+`optNoAutocooling`), and `createTempSet ()` applies them, before or after
+the parse (andor still creates them in its constructor). `-c` on a camera
+without cooling values is warned about in `Camera::beforeRun ()`; before,
+an uncooled camera given `-c` refused to start ("invalid option"). fli
+keeps its cooler in the constructor: libfli has no cooler query. The
+dummy has `--no-cooler`.
+
+makak: its scripts and python/sites/makak use none of the cooling values;
+its FITS headers lose COOLING and CCD_SET (unknown/nan so far). Its C0 runs
+without `-c`.
+
+Bench: camd-dummy C8 `--no-cooler -c -20` and C9 `-c -20` side by side:
+C8 has CCD_TEMP and CCD_AIR only (87 values, C9 97), logs "camera has no
+cooler, -c -20 ignored", went through centrald's day -> night (HARD OFF,
+afterNight) and took an image with CCD_TEMP/CCD_AIR and no
+CCD_SET/COOLING in the header; C9 got nightcool -20 from `-c` with its
+Cooler created in `initHardware ()`. andor compiled; hardened build clean.
+gxccd not run on a camera.
+
