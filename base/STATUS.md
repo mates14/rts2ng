@@ -203,10 +203,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - Cooled cameras regulate through `Cooler` (`camd/include/cooler.h`,
   `Camera::createCooler ()`); the driver implements only
   `CoolerHardware`: `coolerSetPoint ()`, optionally `coolerPower ()` and
-  `coolerBusy ()`. dummy, gxccd and fli use it; andor still has its own
-  ramp (STATUS, "Agreed but not done"). Cooling off ramps to the driver's
-  off temperature (gxccd 50 C, fli 40 C: no cooler switch, they stay
-  regulated warm) and then calls `coolerPower (false)`; it does not touch
+  `coolerBusy ()`. dummy, gxccd, fli and andor use it. Cooling off ramps
+  to the driver's off temperature (gxccd 50 C, fli 40 C: no cooler switch,
+  they stay regulated warm; andor 20 C, then `CoolerOFF ()`) and then
+  calls `coolerPower (false)`; it does not touch
   `CCD_SET`, so cooling on returns to it (gxccd used to overwrite it with
   50, and COOLING on by hand then cooled to 50). `TERAMP` defaults to
   100 C/min, practically immediate both ways; it is autosaved, so a site
@@ -390,10 +390,8 @@ it, and say which classes you added.
   on purpose until all mounts in use are ported; `GEM` and `Fork` are
   faithful classic ports for now.
 - **Shared device parts.** [MJ 2026-11-03] Components instead of copies
-  in every driver. Done: `Cooler` for dummy, gxccd, fli. Left: andor onto
-  `Cooler` (its `TE_RAMP`, `TCSTATUS`, immediate `CoolerOFF ()` and
-  `afterNight ()`), after gxccd has run on it at FRAM for a while, since
-  C0 can only be checked at D50; connection health for serial/TCP/UDP
+  in every driver. Done: `Cooler` for dummy, gxccd, fli, andor. Left:
+  connection health for serial/TCP/UDP
   devices; night-scheduled switches (gxccd's `WINDOW_HEATING_NIGHT`).
   Also essential values for the other device types (teld, focusd, dome,
   filterd); only the camera marks any so far.

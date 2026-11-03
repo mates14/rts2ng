@@ -4444,3 +4444,35 @@ CCD_SET/COOLING in the header; C9 got nightcool -20 from `-c` with its
 Cooler created in `initHardware ()`. andor compiled; hardened build clean.
 gxccd not run on a camera.
 
+## andor on the shared Cooler (2026-11-03) [MJ]
+
+MJ asked to finish the cooler with andor rather than wait for gxccd at
+FRAM: gxccd has run on it at BART and fli at flores since today's
+release, and C0 is rebuilt by hand anyway.
+
+andor's own ramp (`EVENT_TE_RAMP`, `TE_RAMP_SPEED` 100 C/min, TERAMP,
+TETAR), `setCoolTemp ()` and `switchCooling ()` are gone; it implements
+`coolerSetPoint ()` (`SetTemperature ((int) t)`, as before) and
+`coolerPower ()` (`CoolerON ()`/`CoolerOFF ()`); off temperature 20 C.
+TCSTATUS (the camera's own TEC status) and the 2 s temperature history
+stay; temp_stable comes on top. Behaviour changes against classic:
+- `afterNight ()` switched the cooler off whatever `autocooling` said,
+  set 20 C and wrote +50 into CCD_SET. Now `Camera::afterNight ()`:
+  cooling off only with autocooling (D50 runs without
+  `--no-autocooling`, so as before), ramp to 20 C, then `CoolerOFF ()`;
+  CCD_SET stays. The shutter is still closed.
+- Cooling on with CCD_SET unset falls back to nightcool (classic andor
+  did not).
+- `initCooling ()` (CCD_SET limits -100..40 C) was defined and never
+  called; `initHardware ()` calls it. C0's -50 is inside.
+- TERAMP is autosaved (classic andor's was not).
+Also the old `asprintf ()` in the kinetic-series file name (unchecked, a
+failure left the name uninitialized; the one warning of the andor build)
+is an `snprintf ()` into a fixed buffer.
+
+Built against the SDK in ~/andor, plain and with dpkg-buildflags, no
+warnings. Not run: C0 can only be checked at D50 after the hand rebuild
+on lascaux50. What to look at there: COOLING/CCD_SET/TETAR -50 at night
+start, TCSTATUS STABILIZED and temp_stable 1 together, and at day
+TETAR 20 then TCSTATUS OFF.
+

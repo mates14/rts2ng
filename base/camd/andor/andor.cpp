@@ -61,9 +61,6 @@
 //That's root for andor2.77
 #define ANDOR_ROOT          (char *) "/usr/local/etc/andor"
 
-#define EVENT_TE_RAMP         RTS2_LOCAL_EVENT + 678
-#define TE_RAMP_INTERVAL 60     // in seconds
-#define TE_RAMP_SPEED 100       // in degrees/minute
 
 #define IXON_DEFAULT_GAIN   100
 #define IXON_MAX_GAIN       300
@@ -129,7 +126,7 @@ namespace rts2camd
      * @author Petr Kubanek <petr@kubanek.net>
      *
      */
-  class Andor:public Camera
+  class Andor:public Camera, public CoolerHardware
   {
 
   public:
@@ -148,13 +145,15 @@ namespace rts2camd
     int setVSSpeed (int in_vsspeed);
 
   private:
-      virtual void postEvent (rts2core::Event * event);
     //              virtual bool supportFrameTransfer ();
 
     // callback functions for Camera alone
     virtual int info ();
     virtual int scriptEnds ();
-    virtual int setCoolTemp (float new_temp);
+    // base note: temperature regulation is Camera's Cooler (cooler.h); the
+    // driver sends the setpoint and switches the cooler
+    virtual int coolerSetPoint (float temp);
+    virtual int coolerPower (bool on);
     virtual void afterNight ();
     void initCooling ();
 
@@ -174,7 +173,6 @@ namespace rts2camd
 
     void temperatureCheck ();
 
-    virtual int switchCooling (bool cooling);
     virtual int startExposure ();
     virtual int stopExposure ();
     virtual long isExposing ();
@@ -263,8 +261,6 @@ namespace rts2camd
     int initAndorValues ();
 
     // TEMP control
-      rts2core::ValueFloat * tempRamp;
-      rts2core::ValueFloat * tempTarget;
       rts2core::ValueSelection * tempStatus;
 #ifdef TEMP_SAFETY
       rts2core::ValueSelection * tempSafety;
@@ -304,16 +300,17 @@ Andor::startExposure ()
     case ACQMODE_KINETIC:
       //                        dataChannels->setValueInteger (kinNumber->getValueInteger ());
       //          startExposureConnImageData ();
-      char *outfile;
+      // base note: classic used asprintf () without checking it, and a
+      // failure left outfile uninitialized
+      char outfile[64];
       struct tm st;
 
       gmtime_r (&s, &st);
-      asprintf (&outfile, "/var/tmp/kin-%04d%02d%02d%02d%02d%02d.out",
+      snprintf (outfile, sizeof (outfile), "/var/tmp/kin-%04d%02d%02d%02d%02d%02d.out",
                 st.tm_year + 1900, st.tm_mon + 1, st.tm_mday,
                 st.tm_hour, st.tm_min, st.tm_sec);
       kinFile->setValueCharArr (outfile);
       kinSeriesTarget = fopen (outfile, "w");
-      free (outfile);
       if (!kinSeriesBuffer)
         kinSeriesBuffer =
           (uint64_t *) calloc (chipUsedSize (), sizeof (uint64_t));
@@ -1215,9 +1212,9 @@ Andor::setADCMode (int requestedMode)
 /*
  * TEMPERATURE CONTROL
  *
- * Ramping implemented to maintain user-level compatibility with other drivers, but not really necessary, as Andor thinks for
- * us and where needed, implemented in camera. If you are oversupersticious, change the value #define TE_RAMP_SPEED or TERAMP
- * in modefile/monitor/anyothertool to whatever you desire (like 0.06 if you want the cooling process to last for 24h)
+ * The ramp is Camera's Cooler (cooler.h), shared with the other drivers; not really necessary, as Andor thinks for
+ * us and where needed, implemented in camera. If you are oversupersticious, set TERAMP (default 100 C/min)
+ * in the defaults file/monitor/anyothertool to whatever you desire (like 0.06 if you want the cooling process to last for 24h)
  */
 
 int
@@ -1288,49 +1285,6 @@ Andor::temperatureCheck ()
     return;
 
   addTempCCDHistory (getTemp ());
-}
-
-void
-Andor::postEvent (rts2core::Event * event)
-{
-  float change = 0;
-  int status;
-
-  switch (event->getType ())
-    {
-    case EVENT_TE_RAMP:
-      if (std::isnan (tempTarget->getValueFloat ()))
-        {
-          if (std::isnan (tempCCD->getValueFloat ()))
-            {
-              addTimer (10, event);     // give info () time to get tempCCD
-              return;
-            }
-          else
-            tempTarget->setValueFloat (tempCCD->getValueFloat ());
-        }
-      if (tempTarget->getValueFloat () < tempSet->getValueFloat ())
-        change = tempRamp->getValueFloat () * TE_RAMP_INTERVAL / 60.;
-      else if (tempTarget->getValueFloat () > tempSet->getValueFloat ())
-        change = -1 * tempRamp->getValueFloat () * TE_RAMP_INTERVAL / 60.;
-      if (change != 0)
-        {
-          tempTarget->setValueFloat (tempTarget->getValueFloat () + change);
-          if (fabs (tempTarget->getValueFloat () - tempSet->getValueFloat ())
-              < fabs (change))
-            tempTarget->setValueFloat (tempSet->getValueFloat ());
-          sendValueAll (tempTarget);
-          if ((status =
-               SetTemperature ((int) tempTarget->getValueFloat ())) !=
-              DRV_SUCCESS)
-            logStream (MESSAGE_ERROR) << "postEvent: SetTemperature error=" <<
-              status << sendLog;
-          addTimer (TE_RAMP_INTERVAL, event);
-          return;
-        }
-      break;
-    }
-  Camera::postEvent (event);
 }
 
 float
@@ -1406,42 +1360,27 @@ Andor::getTemp ()
 }
 
 int
-Andor::switchCooling (bool cooling)
+Andor::coolerSetPoint (float temp)
 {
-  int ret;
-
-  if (cooling)
+  int ret = SetTemperature ((int) temp);
+  if (ret != DRV_SUCCESS)
     {
-      if ((ret = CoolerON ()) != DRV_SUCCESS)
-        {
-          logStream (MESSAGE_ERROR) << "switchCooling: CoolerON error=" << ret
-            << sendLog;
-          return -1;
-        }
-    }
-  else if ((ret = CoolerOFF ()) != DRV_SUCCESS)
-    {
-      logStream (MESSAGE_ERROR) << "switchCooling: CoolerOFF error=" << ret <<
-        sendLog;
+      logStream (MESSAGE_ERROR) << "coolerSetPoint: SetTemperature error=" << ret << sendLog;
       return -1;
     }
-
-  Camera::switchCooling (cooling);
-
-  return ret;
+  return 0;
 }
 
 int
-Andor::setCoolTemp (float new_temp)
+Andor::coolerPower (bool on)
 {
-  if (coolingOnOff->getValueBool () || new_temp == 40.0)
+  int ret = on ? CoolerON () : CoolerOFF ();
+  if (ret != DRV_SUCCESS)
     {
-      deleteTimers (EVENT_TE_RAMP);
-      tempTarget->setValueFloat (tempCCD->getValueFloat ());
-      addTimer (1, new rts2core::Event (EVENT_TE_RAMP));
-      // temperature will be changed in postEvent() one second later
+      logStream (MESSAGE_ERROR) << "coolerPower: " << (on ? "CoolerON" : "CoolerOFF") << " error=" << ret << sendLog;
+      return -1;
     }
-  return Camera::setCoolTemp (new_temp);
+  return 0;
 }
 
 /***************************/
@@ -1456,12 +1395,14 @@ Andor::info ()
   return Camera::info ();
 }
 
+// base note: classic switched the cooler off here whatever autocooling
+// said, set 20 C and overwrote CCD_SET with +50 (which kept its own ramp
+// from cooling again). Now Camera::afterNight () switches cooling off when
+// autocooling is set, through the Cooler: ramp to 20 C, then CoolerOFF ().
 void
 Andor::afterNight ()
 {
-  CoolerOFF ();
-  SetTemperature (20);
-  tempSet->setValueDouble (+50);
+  Camera::afterNight ();
   closeShutter ();
 }
 
@@ -1476,13 +1417,9 @@ Camera (in_argc, in_argv)
    * apart of that, these functions are weird .h "inlines", they get compiled each time the .h is used
    */
   createTempCCD ();
-  createTempSet ();
+  // 20 C: cooling off ramps there, then CoolerOFF ()
+  createCooler (this, 20.0);
   createTempCCDHistory ();
-
-  createValue (tempRamp, "TERAMP", "[C/min] temperature ramping", false,
-               RTS2_VALUE_WRITABLE);
-  tempRamp->setValueFloat (TE_RAMP_SPEED);
-  createValue (tempTarget, "TETAR", "[C] current target temperature", false);
 
   // this is not necessary here, but if I dont, it would appear away from the rest of TE related stuff
   createValue (tempStatus, "TCSTATUS", "Thermoelectric cooling status",
@@ -1927,6 +1864,10 @@ Andor::initHardware ()
   sleep (2);                    //sleep to allow initialization to complete
 
   SetCoolerMode (1);            // maintain temperature after shutdown
+
+  // base note: classic defined initCooling () (CCD_SET limits -100..40 C,
+  // as fli) but never called it
+  initCooling ();
 
   cap.ulSize = sizeof (AndorCapabilities);
   ret = GetCapabilities (&cap);
