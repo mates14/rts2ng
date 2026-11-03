@@ -10,8 +10,11 @@ so SNR(t) is a quadratic in t with a closed-form solution.  The conditions
 (zp1 = zeropoint for 1 s, s = sky variance rate, FWHM) come from the COND
 device, which publishes them per camera/filter from the newest pipeline
 ECSVs.  A filter without a fresh frame gets its zeropoint from the freshest
-transparency and its sky from another filter's, shifted by a typical sky
-colour.
+transparency.  The sky at the target is a sky model (Sun, Moon, light
+pollution, airglow) plus the departure from it of the freshest measured sky:
+the filter's own frame, another filter of the telescope, or the Makak sky
+monitor; filters without a model take another filter's sky, shifted by a
+typical sky colour.
 
 Each time is also capped so that the image does not saturate: the sky at
 the end of the exposure stays below SKY_MAX_FRAC of the saturation level,
@@ -90,6 +93,30 @@ SUB_GRID = (0.1, 0.2, 0.3, 0.5) + TIME_GRID     # sub-exposures of an accumulati
 MAX_ACC = 1000
 DEFAULT_SKY = 19.5          # mag/"2, dark sky at Ondrejov (r)
 DEFAULT_SEEING = 5.0        # arcsec
+SITE_LON = 14.7836          # Ondrejov, deg east
+
+# Sky model per camera/filter (and Makak), clear-equivalent SB [mag/"2], fitted
+# on phdb 2026-05..10 (Makak on its noise sky, floor from the chip temperature):
+# flux relative to SB=20 = dark + light pollution + moon (Krisciunas & Schaefer
+# 1991) + twilight, see sky_model_sb().  Alone it is off by a per-night constant
+# (0.1-0.25 mag), so it is used differentially: the sky at the target is the
+# model there plus the departure from the model of the freshest measured sky,
+# own frame first, then another filter of the telescope, then Makak (which tracks
+# the nightly offsets of g and r best, of i and z less).
+SKY_PARAMS = ('dark', 'lp', 'lp_Xpow', 'lp_dir', 'lp_az', 'moon', 'mie', 'twi', 'twi_slope', 'twi_dir')
+SKY_MODEL = {
+    'C1/Sloan_r': (0.09349, -1.619, 3.277, 2.422, 295.2, 1.565, 1.499, 5.707, 0.444, 1.298),
+    'C1/Sloan_i': (0.1891, -2.256, 3.136, 3, 287.1, 1.616, 1.677, 6.177, 0.4483, 0.7365),
+    'C2/Sloan_g': (-0.557, -0.6395, 2.247, 0.4627, 294.8, 1.653, 1.058, 5.819, 0.4209, 0.5078),
+    'C2/Sloan_r': (-0.06952, -0.6918, 2.732, 0.6983, 294.5, 1.543, 1.458, 5.121, 0.4044, 1.708),
+    'C0/Sloan_g': (-0.4649, -1.927, 4.057, 1.82, 297.6, 1.483, 0.4165, 3.75, 0.3004, 3),
+    'C0/Sloan_r': (-0.2277, -1.052, 3.577, 0.831, 328.7, 1.407, 0.8296, 3.637, 0.3119, 3),
+    'C0/Sloan_i': (-0.07552, -1.954, 4.007, 1.56, 303.1, 1.333, 1.203, 5.175, 0.4292, 3),
+    'C0/Sloan_z': (-5, 0.3327, 1.318, 0.06496, 314, 1.24, 1.045, 5.866, 0.4709, 3),
+    'MK/N': (-4.9, -0.3031, 5, 3, 269.1, 1.491, 0.8988, 4.997, 0.3882, 0.8189),
+}
+# Makak (MK/N in COND, a fixed camera): clear-equivalent SB = MK_ZREF + sky - zp1
+MK_ZREF, MK_K, MK_MAX_AGE = 16.17, 0.20, 900.0
 
 
 def long_filter(f):
@@ -148,6 +175,69 @@ def twilight(comm, lat=SITE_LAT):
         return None, 0.0
     rate = 15.0 / 3600 * math.cos(math.radians(lat)) * math.sin(math.radians(az + 180))
     return alt, rate
+
+
+def sun_moon(t):
+    """Geocentric (ra, dec) [deg] of the Sun and the Moon at unix time t, low precision
+    (Sun ~0.01 deg, Moon ~0.3 deg)."""
+    d = t / 86400.0 - 10957.5                   # days since J2000.0
+    r = math.radians
+    eps = r(23.439 - 4e-7 * d)
+    g = r(357.529 + 0.98560028 * d)
+    sun = (r(280.459 + 0.98564736 * d + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g)), 0.0)
+    M, F, D = r(134.963 + 13.064993 * d), r(93.272 + 13.229350 * d), r(297.850 + 12.190749 * d)
+    moon = (r(218.316 + 13.176396 * d + 6.289 * math.sin(M) + 1.274 * math.sin(2 * D - M)
+              + 0.658 * math.sin(2 * D) + 0.214 * math.sin(2 * M) - 0.186 * math.sin(g) - 0.114 * math.sin(2 * F)),
+            r(5.128 * math.sin(F) + 0.280 * math.sin(M + F) + 0.278 * math.sin(M - F) + 0.173 * math.sin(2 * D - F)))
+    out = []
+    for lon, lat in (sun, moon):
+        ra = math.atan2(math.sin(lon) * math.cos(eps) - math.tan(lat) * math.sin(eps), math.cos(lon))
+        dec = math.asin(math.sin(lat) * math.cos(eps) + math.cos(lat) * math.sin(eps) * math.sin(lon))
+        out.append((math.degrees(ra) % 360, math.degrees(dec)))
+    return out
+
+
+def altaz(ra, dec, t, lat=SITE_LAT, lon=SITE_LON):
+    """(alt, az north-based) [deg] of ra, dec [deg] at unix time t."""
+    lst = 280.46061837 + 360.98564736629 * (t / 86400.0 - 10957.5) + lon
+    h, d, p = math.radians(lst - ra), math.radians(dec), math.radians(lat)
+    alt = math.asin(math.sin(p) * math.sin(d) + math.cos(p) * math.cos(d) * math.cos(h))
+    az = math.atan2(math.sin(h), math.cos(h) * math.sin(p) - math.tan(d) * math.cos(p))
+    return math.degrees(alt), (math.degrees(az) + 180) % 360
+
+
+def _sep(alt1, az1, alt2, az2):
+    a1, a2, da = math.radians(alt1), math.radians(alt2), math.radians(az1 - az2)
+    c = math.sin(a1) * math.sin(a2) + math.cos(a1) * math.cos(a2) * math.cos(da)
+    return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+def sky_geometry(alt, az, t):
+    """Sun/Moon geometry for a pointing (alt, az north-based) at unix time t."""
+    (sra, sdec), (mra, mdec) = sun_moon(t)
+    salt, saz = altaz(sra, sdec, t)
+    malt, maz = altaz(mra, mdec, t)
+    malt -= 0.95 * math.cos(math.radians(malt))         # lunar parallax
+    elong = _sep(sdec, sra, mdec, mra)                  # same formula on the equatorial sphere
+    return dict(alt=alt, az=az, sunalt=salt, sunsep=_sep(alt, az, salt, saz),
+                moonalt=malt, moonsep=_sep(alt, az, malt, maz), phase=180 - elong)
+
+
+def sky_model_sb(key, d, k):
+    """Model clear-equivalent sky [mag/"2] of key ('C1/Sloan_r', 'MK/N') for geometry d, extinction k."""
+    p = dict(zip(SKY_PARAMS, SKY_MODEL[key]))
+    xvr = lambda alt: 1 / math.sqrt(1 - 0.96 * math.sin(math.radians(90 - alt))**2)
+    X = xvr(d['alt'])
+    flux = 10**p['dark'] * X * 10**(-0.4 * k * (X - 1))
+    flux += 10**p['lp'] * X**p['lp_Xpow'] * math.exp(p['lp_dir'] * math.cos(math.radians(d['az'] - p['lp_az'])))
+    if d['moonalt'] > 0:
+        a, rho = abs(d['phase']), d['moonsep']
+        frho = 1.06 + math.cos(math.radians(rho))**2 + 10**p['mie'] * 10**(-rho / 40)
+        flux += (10**p['moon'] * 10**(-0.4 * (0.026 * a + 4e-9 * a**4)) * frho
+                 * 10**(-0.4 * k * xvr(d['moonalt'])) * (1 - 10**(-0.4 * k * X)))
+    flux += 10**max(-30.0, min(30.0, p['twi'] + p['twi_slope'] * d['sunalt'])) \
+        * math.exp(p['twi_dir'] * math.cos(math.radians(d['sunsep'])))
+    return 20 - 2.5 * math.log10(flux)
 
 
 class Conditions:
@@ -214,9 +304,11 @@ def _num(x):
 class CondReader:
     """COND values of one telescope through a getter, get(value_name) -> str or None."""
 
-    def __init__(self, telescope, get, max_age=1800.0):
+    def __init__(self, telescope, get, max_age=1800.0, radec=(None, None), now=None):
         self.cams = TELESCOPES[telescope]
         self.get, self.max_age = get, max_age
+        self.radec = radec          # target (ra, dec) [deg], for the sky model
+        self.now = now or time.time()
         self.cache = {}
 
     def value(self, name):
@@ -233,17 +325,66 @@ class CondReader:
         age = self.value(f'{p}_age')
         if age is None or age > self.max_age:
             return None
-        d = {f: self.value(f'{p}_{f}') for f in ('zp1', 'bgv', 'fwhm', 'X', 'sky')}
+        d = {f: self.value(f'{p}_{f}') for f in ('zp1', 'bgv', 'fwhm', 'X', 'sky', 'alt', 'az')}
         if d['zp1'] is None:
             return None
         d['age'] = age
         return d
+
+    def departure(self, camera, filt):
+        """(measured minus model clear-equivalent sky [mag], source) of the freshest sky
+        that has a model: camera/filt itself, other filters of the telescope, Makak."""
+        order = [(camera, filt)] + [(c, f) for c in self.cams for f in self.cams[c]['filters']
+                                    if (c, f) != (camera, filt)]
+        for c, f in order:
+            o = self.fresh(c, f)
+            if (f'{c}/{f}' not in SKY_MODEL or not o or None in (o['sky'], o['alt'], o['az'])
+                    or o['X'] is None):
+                continue
+            zpref, k, _ = self.cams[c]['filters'][f]
+            sbc = o['sky'] - (o['zp1'] - (zpref - k * (o['X'] - 1)))
+            d = sky_geometry(o['alt'], o['az'], self.now - o['age'])
+            return sbc - sky_model_sb(f'{c}/{f}', d, k), f'{c}/{f} {o["age"]:.0f}s old'
+        o = self.fresh('MK', 'N')
+        if o and o['age'] <= MK_MAX_AGE and None not in (o['sky'], o['alt'], o['az']):
+            d = sky_geometry(o['alt'], o['az'], self.now - o['age'])
+            return MK_ZREF + o['sky'] - o['zp1'] - sky_model_sb('MK/N', d, MK_K), f'Makak {o["age"]:.0f}s old'
+        return 0.0, 'no measured sky'
+
+    def model_sky(self, camera, filt, X):
+        """(sky variance rate s, source) at the target from the sky model, or None."""
+        ra, dec = self.radec
+        if ra is None or f'{camera}/{filt}' not in SKY_MODEL:
+            return None
+        cam = self.cams[camera]
+        zpref, k, _ = cam['filters'][filt]
+        alt, az = altaz(ra, dec, self.now)
+        if alt < 5:
+            return None
+        dep, src = self.departure(camera, filt)
+        sbc = sky_model_sb(f'{camera}/{filt}', sky_geometry(alt, az, self.now), k) + dep
+        s = cam['bgk'] * cam['pix']**2 * 10**(-0.4 * (sbc - (zpref - k * (X - 1))))
+        return s, f'sky model {sbc - dep:.2f}{dep:+.2f} from {src}'
 
     def conditions(self, camera, filt, X):
         """Conditions of camera/filter at airmass X, with fallbacks."""
         cam = self.cams[camera]
         zpref, k, skycol = cam['filters'].get(filt, (math.nan, 0.15, 0.0))
         own = self.fresh(camera, filt)
+        model = self.model_sky(camera, filt, X)
+        if model:
+            # the sky as now at the target, so no twilight extrapolation from an older frame
+            if own:
+                fwhm = own['fwhm'] or DEFAULT_SEEING / cam['pix']
+                Xf = own['X'] if own['X'] else X
+                return Conditions(cam, own['zp1'] - k * (X - Xf), model[0], fwhm,
+                                  f'own frame {own["age"]:.0f}s old, {model[1]}')
+            tr = self.value('transp')
+            zp1 = zpref - k * (X - 1) + (tr or 0.0)
+            seeing = next((o['fwhm'] * self.cams[c]['pix'] for c in self.cams for f in self.cams[c]['filters']
+                           for o in [self.fresh(c, f)] if o and o['fwhm']), DEFAULT_SEEING)
+            return Conditions(cam, zp1, model[0], seeing / cam['pix'],
+                              f'{"transp" if tr is not None else "clear-sky zp"}, {model[1]}')
         if own and own['bgv'] is not None:
             fwhm = own['fwhm'] or DEFAULT_SEEING / cam['pix']
             Xf = own['X'] if own['X'] else X

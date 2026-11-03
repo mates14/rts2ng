@@ -138,7 +138,8 @@ class Expose(scriptcomm.Rts2Comm):
             for f in long:
                 if f not in self.mags:
                     log('W', f"no magnitude for {f}, exposing {min(self.exptime or self.tmax, self.tmax):g}s")
-        reader = snrexp.CondReader(TELESCOPE, lambda name: self.getValue(name, 'COND'))
+        reader = snrexp.CondReader(TELESCOPE, lambda name: self.getValue(name, 'COND'),
+                                   radec=snrexp.target_position(self))
         plan = snrexp.make_plan({self.camera: long}, self.mags, self.snr,
                                 snrexp.target_airmass(self), reader, self.tmin, self.tmax,
                                 fallback_t=self.exptime, sun=snrexp.twilight(self))

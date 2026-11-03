@@ -219,7 +219,8 @@ class Filtros(scriptcomm.Rts2Comm):
         groups = {c: [snrexp.long_filter(f) for f in fl]
                   for c, fl in self.FILTER_MAPS[mode].items() if c != 'C3'}
         own = [snrexp.long_filter(f) for f in self.get_current_filters()]
-        reader = lambda: snrexp.CondReader('SBT', lambda name: self.getValue(name, 'COND'))
+        reader = lambda: snrexp.CondReader('SBT', lambda name: self.getValue(name, 'COND'),
+                                           radec=snrexp.target_position(self))
 
         def compute():
             mags = self.target_magnitudes(sorted({f for fl in groups.values() for f in fl}))

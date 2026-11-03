@@ -51,7 +51,11 @@ B <- g, halpha <- r, ...), with a warning.
 **Conditions** come from the COND device (rtspy-sensor-cond), which reads
 the newest real-time ECSV of each camera/filter: zeropoint, sky and FWHM.
 A filter without a fresh frame (< 30 min) uses the freshest transparency
-(COND.transp) and another filter's sky shifted by a typical sky colour; with
+(COND.transp).  The sky at the target (T0.ORI) is a sky model (Sun, Moon,
+light pollution, airglow) plus the departure from it of the freshest
+measured sky: this filter's frame, another filter's, or the Makak sky monitor
+(COND MK/N); this also follows re-pointing.  Filters without a model (N,
+narrow bands) take another filter's sky shifted by a typical sky colour; with
 nothing at all, a clear sky of 19.5 mag/"2.  The zeropoint is moved to the
 target's airmass (T0.AIRMASS) with the filter's extinction.
 

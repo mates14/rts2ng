@@ -37,9 +37,13 @@ A GRB afterglow is in neither catalogue: give `-f` (or `-m`).
 
 **Conditions** come from the COND device (rtspy-sensor-cond), from the
 newest real-time ECSV of each filter (~20 s after readout on D50): zeropoint,
-sky, FWHM; a filter without a fresh frame uses the freshest transparency and
-another filter's sky; with nothing at all, a clear sky of 19.5 mag/"2.  The
-zeropoint is moved to the target's airmass with the filter's extinction.
+sky, FWHM; a filter without a fresh frame uses the freshest transparency.
+The sky at the target (T0.ORI) is a sky model (Sun, Moon, light pollution,
+airglow) plus the departure from it of the freshest measured sky: this
+filter's frame, another filter's, or the Makak sky monitor (COND MK/N); this
+also follows re-pointing.  Filters without a model (N) take another filter's
+sky; with nothing at all, a clear sky of 19.5 mag/"2.  The zeropoint is moved
+to the target's airmass with the filter's extinction.
 
 **Times** are the pipeline's noise model solved for the SNR, rounded up to
 1 2 3 5 10 15 20 30 45 60 90 120 180 240 300 ... s.
