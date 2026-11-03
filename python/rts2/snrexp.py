@@ -132,6 +132,17 @@ SKY_DONORS = {
 # Makak (MK/N in COND, a fixed camera): clear-equivalent SB = MK_ZREF + sky - zp1
 MK_ZREF, MK_K, MK_MAX_AGE = 16.17, 0.20, 900.0
 
+# Extinction k_f = k_r + EXT_BETA[f] (~/extinkce's model; beta from its pair
+# method refitted on D50 2026-08..10, after the realuminization of 2026-07-14).
+# EXT_Z0 = zeropoint above the atmosphere, D50 from per-night fits of zp
+# against airmass on the clear nights (Z0_r 22.79, 0.06 night to night; k_r
+# median 0.18); Makak (fixed airmass MK_X) calibrated on D50's k_r.  SBT has
+# none of its own yet: its clear-sky zp1 at X=1 plus the typical k.
+EXT_KR_TYP = 0.184
+EXT_BETA = {'Sloan_g': 0.099, 'Sloan_r': 0.0, 'Sloan_i': -0.046, 'Sloan_z': -0.046}
+EXT_Z0 = {'C0/Sloan_g': 22.94, 'C0/Sloan_r': 22.79, 'C0/Sloan_i': 22.165, 'C0/Sloan_z': 21.097, 'MK/N': 16.34}
+MK_X = 1.096
+
 
 def long_filter(f):
     return FILTER_LONG.get(f, f)
@@ -252,6 +263,22 @@ def sky_model_sb(key, d, k):
     flux += 10**max(-30.0, min(30.0, p['twi'] + p['twi_slope'] * d['sunalt'])) \
         * math.exp(p['twi_dir'] * math.cos(math.radians(d['sunsep'])))
     return 20 - 2.5 * math.log10(flux)
+
+
+def extinction(key, zp1, X):
+    """k_r [mag/airmass] from one frame of key ('C0/Sloan_r', 'MK/N') with zp1 at airmass X, or None."""
+    cam, _, f = key.partition('/')
+    if key == 'MK/N':
+        return (EXT_Z0[key] - zp1) / MK_X
+    if f not in EXT_BETA or not X:
+        return None
+    z0 = EXT_Z0.get(key)
+    if z0 is None:
+        tel = next((t for t in TELESCOPES.values() if cam in t and f in t[cam]['filters']), None)
+        if tel is None:
+            return None
+        z0 = tel[cam]['filters'][f][0] + EXT_KR_TYP + EXT_BETA[f]
+    return (z0 - zp1) / X - EXT_BETA[f]
 
 
 class Conditions:
