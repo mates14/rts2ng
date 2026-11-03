@@ -100,9 +100,8 @@ SITE_LON = 14.7836          # Ondrejov, deg east
 # flux relative to SB=20 = dark + light pollution + moon (Krisciunas & Schaefer
 # 1991) + twilight, see sky_model_sb().  Alone it is off by a per-night constant
 # (0.1-0.25 mag), so it is used differentially: the sky at the target is the
-# model there plus the departure from the model of the freshest measured sky,
-# own frame first, then another filter of the telescope, then Makak (which tracks
-# the nightly offsets of g and r best, of i and z less).
+# model there plus the departure from the model of a measured sky: the own
+# filter's frame, else the first fresh one of SKY_DONORS.
 SKY_PARAMS = ('dark', 'lp', 'lp_Xpow', 'lp_dir', 'lp_az', 'moon', 'mie', 'twi', 'twi_slope', 'twi_dir')
 SKY_MODEL = {
     'C1/Sloan_r': (0.09349, -1.619, 3.277, 2.422, 295.2, 1.565, 1.499, 5.707, 0.444, 1.298),
@@ -114,6 +113,21 @@ SKY_MODEL = {
     'C0/Sloan_i': (-0.07552, -1.954, 4.007, 1.56, 303.1, 1.333, 1.203, 5.175, 0.4292, 3),
     'C0/Sloan_z': (-5, 0.3327, 1.318, 0.06496, 314, 1.24, 1.045, 5.866, 0.4709, 3),
     'MK/N': (-4.9, -0.3031, 5, 3, 269.1, 1.491, 0.8988, 4.997, 0.3882, 0.8189),
+}
+# Whose departure a filter without a fresh frame takes, best first (backtest on
+# phdb 2026-05..10, mad of the predicted sky): the same band on the other camera
+# (0.10-0.12), the same colour family (g/r or i/z, 0.16-0.28), Makak (g/r 0.16-0.25,
+# i 0.26-0.30).  Across the families the sky does not transfer (D50 r from z 0.49,
+# worse than the model alone at 0.27-0.41), so those are left out.
+SKY_DONORS = {
+    'C1/Sloan_r': ('C2/Sloan_r', 'C1/Sloan_i', 'MK/N', 'C2/Sloan_g'),
+    'C1/Sloan_i': ('C1/Sloan_r', 'C2/Sloan_r', 'MK/N', 'C2/Sloan_g'),
+    'C2/Sloan_g': ('C2/Sloan_r', 'MK/N', 'C1/Sloan_r'),
+    'C2/Sloan_r': ('C1/Sloan_r', 'C1/Sloan_i', 'C2/Sloan_g', 'MK/N'),
+    'C0/Sloan_g': ('C0/Sloan_r', 'MK/N'),
+    'C0/Sloan_r': ('C0/Sloan_g', 'MK/N'),
+    'C0/Sloan_i': ('MK/N', 'C0/Sloan_r', 'C0/Sloan_z'),
+    'C0/Sloan_z': ('C0/Sloan_i',),
 }
 # Makak (MK/N in COND, a fixed camera): clear-equivalent SB = MK_ZREF + sky - zp1
 MK_ZREF, MK_K, MK_MAX_AGE = 16.17, 0.20, 900.0
@@ -332,23 +346,23 @@ class CondReader:
         return d
 
     def departure(self, camera, filt):
-        """(measured minus model clear-equivalent sky [mag], source) of the freshest sky
-        that has a model: camera/filt itself, other filters of the telescope, Makak."""
-        order = [(camera, filt)] + [(c, f) for c in self.cams for f in self.cams[c]['filters']
-                                    if (c, f) != (camera, filt)]
-        for c, f in order:
+        """(measured minus model clear-equivalent sky [mag], source): the own filter's
+        fresh frame, else the first fresh one of its SKY_DONORS (MK/N = Makak)."""
+        for key in (f'{camera}/{filt}',) + SKY_DONORS.get(f'{camera}/{filt}', ('MK/N',)):
+            c, _, f = key.partition('/')
             o = self.fresh(c, f)
-            if (f'{c}/{f}' not in SKY_MODEL or not o or None in (o['sky'], o['alt'], o['az'])
-                    or o['X'] is None):
+            if not o or None in (o['sky'], o['alt'], o['az']):
                 continue
+            d = sky_geometry(o['alt'], o['az'], self.now - o['age'])
+            if key == 'MK/N':
+                if o['age'] <= MK_MAX_AGE:
+                    return MK_ZREF + o['sky'] - o['zp1'] - sky_model_sb(key, d, MK_K), f'Makak {o["age"]:.0f}s old'
+                continue
+            if c not in self.cams or o['X'] is None:
+                continue                    # another telescope's camera: not used
             zpref, k, _ = self.cams[c]['filters'][f]
             sbc = o['sky'] - (o['zp1'] - (zpref - k * (o['X'] - 1)))
-            d = sky_geometry(o['alt'], o['az'], self.now - o['age'])
-            return sbc - sky_model_sb(f'{c}/{f}', d, k), f'{c}/{f} {o["age"]:.0f}s old'
-        o = self.fresh('MK', 'N')
-        if o and o['age'] <= MK_MAX_AGE and None not in (o['sky'], o['alt'], o['az']):
-            d = sky_geometry(o['alt'], o['az'], self.now - o['age'])
-            return MK_ZREF + o['sky'] - o['zp1'] - sky_model_sb('MK/N', d, MK_K), f'Makak {o["age"]:.0f}s old'
+            return sbc - sky_model_sb(key, d, k), f'{key} {o["age"]:.0f}s old'
         return 0.0, 'no measured sky'
 
     def model_sky(self, camera, filt, X):
