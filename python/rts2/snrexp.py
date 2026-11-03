@@ -461,6 +461,62 @@ class CondReader:
 
 
 # ---------------------------------------------------------------------------
+# site conditions (COND publishes them for the monitor pages)
+# ---------------------------------------------------------------------------
+SITE_SKY = {'D50': {'r': 'C0/Sloan_r', 'i': 'C0/Sloan_i'}, 'SBT': {'r': 'C2/Sloan_r', 'i': 'C1/Sloan_i'}}
+SITE_EXT_ORDER = ('C0', 'MK', 'C1', 'C2')  # D50 is calibrated, Makak on its scale, SBT approximate
+SITE_EXT_FRESH = 900.0                     # seconds a frame counts for k_r
+SITE_SUN_MAX = -6.0                        # no sky above this solar altitude
+
+
+def telescope_of(cameras):
+    """The TELESCOPES entry that has these cameras, or None."""
+    return next((t for t, cams in TELESCOPES.items() if set(cameras) & set(cams)), None)
+
+
+def site_conditions(telescope, sources, now=None):
+    """Best-effort sky at the zenith (r, i) [mag/"2] and extinction k_r [mag/airmass].
+
+    sources: COND's frames {'C0/Sloan_r': {zp1, sky, X, alt, az, tend, ...}}, local
+    and remote.  The sky is the model at the zenith plus the departure of the best
+    measured sky (CondReader.departure: own filter, its donors, Makak); k_r comes
+    from the freshest frame of D50, else Makak, else SBT.  Returns {'sky_r': (value,
+    source), 'sky_i': ..., 'k_r': (value, source)}, the source a camera/filter, 'MK/N'
+    or 'model'; a quantity it cannot give is left out.
+    """
+    now = now or time.time()
+    vals = {}
+    for key, s in sources.items():
+        cam, _, filt = key.partition('/')
+        p = cond_prefix(cam, filt)
+        for f in ('zp1', 'sky', 'bgv', 'fwhm', 'X', 'alt', 'az'):
+            v = s.get(f)
+            vals[f'{p}_{f}'] = None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+        vals[f'{p}_age'] = now - s['tend']
+    out = {}
+    zenith = sky_geometry(90.0, 0.0, now)
+    if telescope in SITE_SKY and zenith['sunalt'] < SITE_SUN_MAX:
+        reader = CondReader(telescope, lambda n: None if vals.get(n) is None else str(vals[n]), now=now)
+        for band, key in SITE_SKY[telescope].items():
+            cam, _, filt = key.partition('/')
+            dep, src = reader.departure(cam, filt)
+            src = 'MK/N' if src.startswith('Makak') else ('model' if src.startswith('no ') else src.split()[0])
+            k = TELESCOPES[telescope][cam]['filters'][filt][1]
+            out[f'sky_{band}'] = (sky_model_sb(key, zenith, k) + dep, src)
+    for cam in SITE_EXT_ORDER:
+        cand = [(s['tend'], key) for key, s in sources.items() if key.startswith(cam + '/')
+                and now - s['tend'] < SITE_EXT_FRESH and vals.get(f'{cond_prefix(*key.split("/", 1))}_zp1') is not None]
+        if not cand:
+            continue
+        key = max(cand)[1]
+        k = extinction(key, sources[key]['zp1'], sources[key].get('X'))
+        if k is not None and math.isfinite(k):
+            out['k_r'] = (k, key)
+            break
+    return out
+
+
+# ---------------------------------------------------------------------------
 # target magnitudes
 # ---------------------------------------------------------------------------
 ATLAS_DIR = '/home/mates/cat/atlas'

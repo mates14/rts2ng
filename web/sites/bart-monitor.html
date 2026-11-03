@@ -706,7 +706,7 @@
             -->
             <canvas id="cloud-canvas"></canvas>
             <div id="cloud-status" class="cloud-status"></div>
-            <!-- sky at the zenith and extinction, from condlog.py's /m/cond/conditions.json -->
+            <!-- sky at the zenith and extinction: COND's sky_r sky_i k_r, as rts2-recordd records them -->
             <canvas id="cond-canvas"></canvas>
             <div id="cond-status" class="cloud-status"></div>
         </div>
@@ -785,7 +785,7 @@
             C1: {}, C2: {}, C3: {},
             F1: {}, F2: {}, F3: {},
             IMGP: {},
-            WEATHER_BART: {}, RAIN_BART: {}, RAIN_D50: {}, CLOUD: {},
+            WEATHER_BART: {}, RAIN_BART: {}, RAIN_D50: {}, CLOUD: {}, COND: {},
             DISK_BART: {}, BARTUPS: {}
         };
 
@@ -1225,13 +1225,17 @@
                 return rain === null ? `<span class="warn">N/A (${label})</span>`
                     : rain == 1 ? `<span class="error">YES (${label})</span>` : `<span class="good">No (${label})</span>`;
             };
-            // COND's dew warning of each telescope (throughput lost against
-            // Makak), through condlog.py's conditions.json (drawCondGraph)
+            // COND's dew warning (throughput lost against Makak): this
+            // telescope's dew/dew_src, the other's from its snapshot as
+            // dew_remote/dew_remote_src ('host: cameras', 'n/a' when unknown)
             const dewStr = label => {
-                const d = condData && condData.dew ? condData.dew[label] : null;
-                if (!d || Date.now() / 1000 - d.written > 900)
+                const own = label === 'SBT';
+                const on = safeValue(systemData.COND, own ? 'dew' : 'dew_remote', null);
+                const src = String(safeValue(systemData.COND, own ? 'dew_src' : 'dew_remote_src', ''));
+                if (on === null || (!own && src === 'n/a'))
                     return `<span class="warn">N/A (${label})</span>`;
-                return d.on ? `<span class="error">YES (${label}: ${d.src})</span>` : `<span class="good">No (${label})</span>`;
+                return on == 1 ? `<span class="error">YES (${label}: ${src.replace(/^[^:]*: /, '')})</span>`
+                    : `<span class="good">No (${label})</span>`;
             };
 
             const tempOut = safeValue(systemData.WEATHER_BART, 'TEMP_OUT', NaN);
@@ -1440,7 +1444,7 @@
                     + ` - is D50's rts2-recordd running and recording ${CLOUD_DEVICE}.${CLOUD_VALUE},`
                     + ` and is ${CLOUD_API_BASE} still proxied to its rts2-httpd?`;
             }
-            await reloadCond();
+            await reloadCond(from, to, points);
             drawCloudGraph();
         }
 
@@ -2418,47 +2422,49 @@
 
         // --- Sky and extinction (under the cloud sensor) ---------------------
         // Best-effort sky at the zenith in r and i [mag/"2] and extinction
-        // k_r [mag/airmass], which python/rts2/condlog.py writes from the
-        // COND snapshots of both telescopes and Makak into this host's
-        // /m/cond/conditions.json: points [t, value, source], the source a
-        // camera/filter, 'MK/N' (Makak) or 'model' (the sky model alone, no
-        // measured sky). Same time range as the cloud graph above.
-        const COND_URL = '/m/cond/conditions.json';
+        // k_r [mag/airmass], which COND computes from all its sources (this
+        // telescope, the other one, Makak; rtspy sensor_cond with --snrexp)
+        // and rts2-recordd records (/etc/rts2/record: COND 60 sky_r sky_i
+        // k_r). History from /api/db/records like the cloud graph above, on
+        // its time range; the current values and their sources (sky_r_src
+        // ...) from COND itself.
+        const COND_DEVICE = 'COND';
         const COND_SERIES = [
-            // name, label, colour, axis
+            // value, label, colour, axis
             ['sky_r', 'sky r', '#dc2626', 'sky'],
             ['sky_i', 'sky i', '#7c3aed', 'sky'],
             ['k_r', 'k_r (right)', '#059669', 'k'],
         ];
-        var condData = null;             // var: the status panel's dewStr may run first
+        let condSeries = {};
 
-        async function reloadCond() {
+        async function reloadCond(from, to, points) {
             const status = document.getElementById('cond-status');
             if (!status)
                 return;
-            try {
-                const res = await fetch(`${COND_URL}?t=${Date.now()}`, { cache: 'no-store' });
-                if (!res.ok)
-                    throw new Error(`HTTP ${res.status}`);
-                condData = await res.json();
-                updateWeatherStatus();      // its "Dew?" line
-                const parts = [];
-                for (const [name, label] of COND_SERIES) {
-                    const s = condData.series[name] || [];
-                    const p = s.length ? s[s.length - 1] : null;
-                    if (p)
-                        parts.push(`${label.split(' (')[0]} ${p[1].toFixed(2)} (${p[2]}, `
-                            + `${new Date(p[0] * 1000).toTimeString().slice(0, 5)})`);
+            const errors = [];
+            await Promise.all(COND_SERIES.map(async ([name]) => {
+                try {
+                    const res = await fetch(`${API_BASE}/db/records?device=${COND_DEVICE}&value=${name}&from=${from}&to=${to}&points=${points}`);
+                    const data = await res.json();
+                    if (data.error)
+                        throw new Error(data.error);
+                    condSeries[name] = data.points;
+                } catch (e) {
+                    condSeries[name] = [];
+                    errors.push(`${name}: ${e.message}`);
                 }
-                const age = Math.round(Date.now() / 1000 - condData.last_frame);
-                status.className = 'cloud-status';
-                status.textContent = (parts.length ? parts.join(', ') : 'no measurements yet')
-                    + `; last frame ${age < 120 ? age + ' s' : age < 7200 ? Math.round(age / 60) + ' min' : Math.round(age / 3600) + ' h'} ago`;
-            } catch (e) {
-                condData = null;
-                status.className = 'cloud-status warn';
-                status.textContent = `cannot load ${COND_URL}: ${e.message} - is condlog.py running?`;
+            }));
+            const d = systemData[COND_DEVICE] || {};
+            const parts = [];
+            for (const [name, label] of COND_SERIES) {
+                const v = safeValue(d, name, null);
+                if (v !== null && isFinite(v))
+                    parts.push(`${label.split(' (')[0]} ${Number(v).toFixed(2)} (${safeValue(d, name + '_src', '?')})`);
             }
+            status.className = errors.length ? 'cloud-status warn' : 'cloud-status';
+            status.textContent = (parts.length ? 'now: ' + parts.join(', ') : 'no current sky or extinction')
+                + (errors.length ? ` - cannot load history (${errors.join('; ')}),`
+                    + ` is rts2-recordd recording ${COND_DEVICE} ${COND_SERIES.map(s => s[0]).join(' ')}?` : '');
         }
 
         function drawCondGraph() {
@@ -2482,14 +2488,14 @@
 
             const tMax = cloudSeries ? cloudSeries.to : Date.now() / 1000;
             const tMin = cloudSeries ? cloudSeries.from : tMax - cloudHours * 3600;
-            const inRange = name => ((condData && condData.series[name]) || [])
+            const inRange = name => (condSeries[name] || [])
                 .filter(p => p[0] >= tMin && p[0] <= tMax && p[1] !== null && isFinite(p[1]));
             const series = COND_SERIES.map(([name, label, colour, axis]) => ({ label, colour, axis, pts: inRange(name) }));
             if (!series.some(s => s.pts.length)) {
                 ctx.fillStyle = fg;
                 ctx.font = '12px Arial, sans-serif';
                 ctx.textAlign = 'center';
-                ctx.fillText('no sky or extinction data in this range', width / 2, height / 2);
+                ctx.fillText('no sky or extinction recorded in this range', width / 2, height / 2);
                 return;
             }
 
@@ -2557,8 +2563,8 @@
                 ctx.fillText(label, x, y1 + 4);
             }
 
-            // points, not lines: the source can change from one to the
-            // next; hollow where only the sky model stood behind the value
+            // points, not lines: the source behind a value can change from
+            // one sample to the next
             ctx.save();
             ctx.beginPath();
             ctx.rect(x0, y0, x1 - x0, y1 - y0);
@@ -2566,11 +2572,10 @@
             for (const s of series) {
                 const ys = s.axis === 'sky' ? sy : ky;
                 ctx.fillStyle = s.colour;
-                ctx.strokeStyle = s.colour;
                 for (const p of s.pts) {
                     ctx.beginPath();
                     ctx.arc(sx(p[0]), ys(p[1]), 1.8, 0, 2 * Math.PI);
-                    p[2] === 'model' ? ctx.stroke() : ctx.fill();
+                    ctx.fill();
                 }
             }
             ctx.restore();
