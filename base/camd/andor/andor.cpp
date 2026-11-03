@@ -53,6 +53,8 @@
 #include <iomanip>
 #include <time.h>
 #include <iostream>
+#include <climits>
+#include <vector>
 
 // XXX camd.h is full of inline defs... not a cool thing for a .h
 #include "camd.h"
@@ -278,6 +280,20 @@ namespace rts2camd
     //char *kinFile = nullptr;
     uint64_t *kinSeriesBuffer = nullptr;
     uint64_t kinSeriesNumber = 0;
+    // one kinetic frame as it comes off the camera: 16-bit for single
+    // scans, 32-bit when each frame is itself an ACCNUM accumulation
+    // (base note: classic read every frame with GetOldestImage16 () into
+    // a stack array the size of the chip, which wrapped accumulated frames
+    // above 65535)
+    std::vector<uint16_t> kinFrame16;
+    std::vector<at_32> kinFrame32;
+
+    /**
+     * Scans one saved frame adds up: ACCNUM for an accumulation,
+     * KINNUM * ACCNUM for a kinetic series (each member can itself be an
+     * accumulation), 1 otherwise.
+     */
+    int coaddedScans ();
   };
 
 }
@@ -417,14 +433,35 @@ Andor::isExposing ()
         }
 
       size_t size = chipUsedSize ();
-      uint16_t buffer[size];
+      bool frame32 = accNumber->getValueInteger () > 1;
 
       do                        // This loop needs to be fast, no logging!
         {
-          ret = GetOldestImage16 (buffer, size);
-          fwrite (buffer, sizeof (buffer), 1, kinSeriesTarget);
-          for (unsigned int j = 0; j < size; j++)
-            kinSeriesBuffer[j] += buffer[j];
+          // base note: classic summed and wrote the buffer whatever
+          // GetOldestImage16 () returned, and wrote to a series file
+          // that fopen () may have failed to open
+          if (frame32)
+            {
+              kinFrame32.resize (size);
+              ret = GetOldestImage (kinFrame32.data (), size);
+              if (ret != DRV_SUCCESS)
+                break;
+              if (kinSeriesTarget)
+                fwrite (kinFrame32.data (), sizeof (at_32), size, kinSeriesTarget);
+              for (size_t j = 0; j < size; j++)
+                kinSeriesBuffer[j] += kinFrame32[j];
+            }
+          else
+            {
+              kinFrame16.resize (size);
+              ret = GetOldestImage16 (kinFrame16.data (), size);
+              if (ret != DRV_SUCCESS)
+                break;
+              if (kinSeriesTarget)
+                fwrite (kinFrame16.data (), sizeof (uint16_t), size, kinSeriesTarget);
+              for (size_t j = 0; j < size; j++)
+                kinSeriesBuffer[j] += kinFrame16[j];
+            }
           kinSeriesNumber += 1;
           ret = GetNumberNewImages (&n, &last);
         }
@@ -553,34 +590,37 @@ Andor::doReadout ()
 
   if (acqMode->getValueInteger () == ACQMODE_KINETIC)
     {
+      // base note: classic wrote the average of the series as 16-bit (and
+      // its 32-bit branch called GetAcquiredData (), which in this mode
+      // returns the whole series, not one frame). Now the frame is the sum
+      // of the series, as ACCUMULATE's is: 32-bit when it covers more than
+      // one scan (setAccumulationDataType ()), and EXPTIME is the scans'
+      // total (setTiming ()). The series itself is in KINFILE.
+      if (kinSeriesNumber != (uint64_t) kinNumber->getValueInteger ())
+        logStream (MESSAGE_WARNING) << "doReadout: kinetic series has " <<
+          kinSeriesNumber << " frames, KINNUM is " <<
+          kinNumber->getValueInteger () << "; EXPTIME assumes KINNUM" << sendLog;
 
-      switch (getLastExposureDataType ())
+      if (kinSeriesBuffer == nullptr)
         {
-        case RTS2_DATA_FLOAT:
-          logStream (MESSAGE_INFO) << "doReadout: GetAcquiredFloatData" <<
-            sendLog;
-          ret =
-            GetAcquiredFloatData ((float *) getDataBuffer (0),
-                                  chipUsedSize ());
-          break;
-        case RTS2_DATA_LONG:
-          logStream (MESSAGE_INFO) << "doReadout: GetAcquiredData" << sendLog;
-          ret =
-            GetAcquiredData ((at_32 *) getDataBuffer (0), chipUsedSize ());
-          break;
-          // case RTS2_DATA_SHORT:
-        default:
-          logStream (MESSAGE_INFO) << "doReadout: GetAcquiredData16" <<
-            sendLog;
-
-          short unsigned *buf = (short unsigned *) getDataBuffer (0);
-
-          for (unsigned int j = 0; j < chipUsedSize (); j++)
-            buf[j] = kinSeriesBuffer[j] / kinSeriesNumber;
-          ret = DRV_SUCCESS;    // of course :)
-
-          break;
+          logStream (MESSAGE_ERROR) << "doReadout: no kinetic series sum buffer" << sendLog;
+          return -1;
         }
+      size_t size = chipUsedSize ();
+      if (getLastExposureDataType () == RTS2_DATA_LONG)
+        {
+          at_32 *buf = (at_32 *) getDataBuffer (0);
+          for (size_t j = 0; j < size; j++)
+            buf[j] = kinSeriesBuffer[j] > (uint64_t) INT32_MAX ? INT32_MAX : (at_32) kinSeriesBuffer[j];
+        }
+      else
+        {
+          // a single scan (KINNUM * ACCNUM == 1): 16 bits hold it
+          uint16_t *buf = (uint16_t *) getDataBuffer (0);
+          for (size_t j = 0; j < size; j++)
+            buf[j] = kinSeriesBuffer[j] > 65535 ? 65535 : (uint16_t) kinSeriesBuffer[j];
+        }
+      ret = DRV_SUCCESS;
 
       if (kinSeriesTarget)
         {
@@ -735,10 +775,13 @@ Andor::scriptEnds ()
  * hands us anyway; GetAcquiredData16() is documented to corrupt data above
  * 65535, so 16 bits there is not a saturated frame, it is a wrapped one.
  *
+ * A kinetic series is summed the same way, in doReadout() rather than in the
+ * camera, so its frame is the same kind of product as an accumulation of
+ * KINNUM * ACCNUM scans (base note: classic averaged it back down to
+ * 16 bits, a different product from the same scans).
+ *
  * Everything else stays 16-bit.  A single scan cannot exceed the ADC, and
- * the kinetic series is averaged back down by ACCNUM in doReadout() and is
- * a preview rather than a science product - neither has anything to gain
- * from doubling the size of every file on disk.
+ * has nothing to gain from doubling the size of every file on disk.
  *
  * data_type stays read-only for clients on purpose: it is a consequence of
  * ACQMODE and ACCNUM, not an independent knob, and a script that could set
@@ -746,6 +789,20 @@ Andor::scriptEnds ()
  * from here works regardless of the writable flag, which gates only
  * client-side set commands.
  */
+int
+Andor::coaddedScans ()
+{
+  switch (acqMode->getValueInteger ())
+    {
+    case ACQMODE_ACCUMULATE:
+      return accNumber->getValueInteger ();
+    case ACQMODE_KINETIC:
+      return kinNumber->getValueInteger () * accNumber->getValueInteger ();
+    default:
+      return 1;
+    }
+}
+
 void
 Andor::setAccumulationDataType ()
 {
@@ -759,8 +816,7 @@ Andor::setAccumulationDataType ()
   if (!hasDataTypes ())
     return;
 
-  bool accumulating = (acqMode->getValueInteger () == ACQMODE_ACCUMULATE)
-    && (accNumber->getValueInteger () > 1);
+  bool accumulating = coaddedScans () > 1;
   int wanted = accumulating ? RTS2_DATA_LONG : RTS2_DATA_USHORT;
 
   if (getDataType () == wanted)
@@ -837,9 +893,10 @@ Andor::setTiming ()
   // just reported, ie. the scan length the SDK actually settled on rather than the
   // one we asked for.  The shifts between scans are photon-blind and do not belong
   // in it; the wall-clock duration is ACQTIME.
-  if (acqMode->getValueInteger () == ACQMODE_ACCUMULATE
-      && accNumber->getValueInteger () > 1)
-    setExposureTotal (accNumber->getValueInteger () * expt);
+  // A kinetic series is summed into one frame too (doReadout()), so the
+  // same applies to it, over all its scans.
+  if (coaddedScans () > 1)
+    setExposureTotal (coaddedScans () * expt);
   else
     setExposureTotal (NAN);
 

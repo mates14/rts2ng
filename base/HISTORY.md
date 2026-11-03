@@ -4476,3 +4476,44 @@ on lascaux50. What to look at there: COOLING/CCD_SET/TETAR -50 at night
 start, TCSTATUS STABILIZED and temp_stable 1 together, and at day
 TETAR 20 then TCSTATUS OFF.
 
+## Andor: a kinetic series saves the same frame as an accumulation (2026-11-03) [MJ]
+
+MJ: ACCUMULATE and KINETIC should give the same image, kinetic only adding
+the raw series on disk. They did not: ACCUMULATE is summed in the camera,
+32-bit for ACCNUM > 1 (since the 32-bit FITS work), EXPTIME = ACCNUM x
+scan; KINETIC was read frame by frame in `isExposing ()` into
+/var/tmp/kin-*.out and a 64-bit sum, and saved as the **average**,
+16-bit, EXPTIME one scan - written before 32-bit frames existed.
+
+Now `coaddedScans ()` (ACCNUM; KINNUM x ACCNUM for kinetic, each member
+can be an accumulation; 1 otherwise) drives both the data type
+(`setAccumulationDataType ()`: 32-bit when > 1) and `exposure_total`
+(`setTiming ()`), and the kinetic readout writes the sum, clamped to
+INT32_MAX (16-bit, clamped, for a single scan). Same pixels, type and
+EXPTIME as ACCUMULATE of the same scans, bias included once per scan in
+both; the difference left is where the sum is made.
+
+Fixed on the way, all in the kinetic path:
+- frames that are accumulations (ACCNUM > 1) were read with
+  `GetOldestImage16 ()` and wrapped above 65535; they are read 32-bit
+  (`GetOldestImage ()`), and KINFILE then holds 32-bit frames;
+- the frame was summed and written whatever `GetOldestImage16 ()`
+  returned; now only on success;
+- `fwrite ()` to a series file that `fopen ()` may have failed to open;
+- the frame buffer was a stack array the size of the chip (2 MB for the
+  1024x1024 iXon), now a vector kept between frames;
+- the readout's 32-bit branch called `GetAcquiredData ()`, which in
+  kinetic mode returns the whole series;
+- a series shorter than KINNUM is logged (EXPTIME assumes KINNUM), and a
+  missing sum buffer is an error instead of a null dereference.
+
+D50 uses kinetic series (scripts with KINNUM 6 to 1968, ACCNUM 1): their
+frames change from 16-bit averages to 32-bit sums with EXPTIME = KINNUM x
+scan. `~/bin/combine2w` there weights by EXPTIME, which now treats them as
+it treats accumulations. python/sites/d50/README.md says so.
+
+Built against the SDK, plain and with dpkg-buildflags, no warnings. Not
+run: needs C0's hand rebuild on lascaux50. To check there: a short
+`ACQMODE=3 KINNUM=5 E 1` and `ACQMODE=2 ACCNUM=5 E 1` on the same field:
+both BITPIX 32, EXPTIME 5, pixel levels alike; KINFILE 5 x the frame size.
+

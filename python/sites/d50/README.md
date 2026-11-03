@@ -55,7 +55,10 @@ to the end of the exposure (~1 mag per degree of solar altitude).  Where a
 single frame would saturate, the Andor accumulates: `ACQMODE=2`,
 `ACCNUM=n`, exposure = the sub-exposure (32-bit frame, EXPTIME = n x sub),
 n the fewest that reach the SNR with n readouts; ACQMODE goes back to a
-single scan for the filters that do not need it.
+single scan for the filters that do not need it.  A kinetic series
+(`ACQMODE=3`, `KINNUM=k`) gives the same kind of frame since 2026-11-03:
+the sum of its k x ACCNUM scans, 32-bit, EXPTIME the scans' total, plus the
+individual frames in `KINFILE` (/var/tmp/kin-*.out). [MJ]
 
 **Dithering**: an `exe` script's value change does not wait for the
 device, so after setting T0.woffs the script waits until T0 reports the
