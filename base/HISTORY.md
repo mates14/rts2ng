@@ -4313,3 +4313,48 @@ passes the stamped package version as `RTS2_BUILD_ID`, and
 base/CMakeLists.txt uses that for `BASE_GIT_DESCRIBE` when set. BUILD
 then equals `dpkg-query -W rts2-base` at the site.
 
+## Cooler: one temperature regulation for all cooled cameras (2026-11-03) [MJ]
+
+gxccd, fli and andor each had their own copy of the ramp (TERAMP/TETAR,
+a step every 60 s), and the copies had drifted: gxccd started from a fresh
+chip reading and waited for a busy camera, fli and andor started from
+CCD_TEMP; off was a ramp to 50 C (gxccd), 40 C (fli) or an immediate
+CoolerOFF () (andor); the nightcool fallback existed twice; cooler power
+was TEMPPWR or COOL_PWR. And gxccd's off overwrote CCD_SET with 50, so
+COOLING on by hand afterwards "cooled" to 50 C; only the nightly
+beforeNight () set the real target again.
+
+`Cooler` (camd/include/cooler.h, camd/src/cooler.cpp) is owned by Camera
+(`createCooler ()`); a driver implements `CoolerHardware`:
+`coolerSetPoint ()`, and optionally `coolerPower ()` (a cooler switch,
+called once the off ramp has arrived) and `coolerBusy ()` (gxccd's
+`cameraBusy ()`). Camera's `setCoolTemp ()`/`switchCooling ()` delegate
+to it, `EVENT_COOLER_RAMP` (local event 677) drives the ramp,
+`Camera::info ()` updates `temp_stable`. Decisions (MJ): ramps both ways,
+but TERAMP defaults to 100 C/min, so practically immediate unless a site
+sets it (autosaved); TEMPPWR on every camera; `temp_stable` = cooling on,
+ramp at CCD_SET, CCD_TEMP within `temp_tol` (1 C) for 120 s; dummy, gxccd
+and fli now, andor after gxccd has run on it at FRAM.
+
+Changes against classic in the drivers: a ramp started from an off cooler
+starts at CCD_TEMP, a CCD_SET change while on continues from TETAR (it
+used to restart from CCD_TEMP); CCD_SET changes while cooling is off are
+only stored (gxccd used to ramp to them with COOLING off); gxccd's reinit
+does not send TETAR while it is still NAN; fli's info () no longer fails
+when reading cooler power fails, it shows NAN. gxccd without a cooler
+(`GBP_COOLER`) refuses COOLING/CCD_SET as before. The dummy camera
+simulates a cooler: the CCD goes half way to the setpoint per info (),
+back to 20 C with the cooler off (classic printed CCD_SET plus noise, and
+dereferenced tempSet with `--no-temp`).
+
+Bench: private centrald + camd-dummy, commands through rts2-sendcmd
+(`X CCD_SET = -10` etc., one argument, or getopt takes -10 for an option),
+values read off the camera's socket. CCD_SET set while off stays stored;
+COOLING on: TETAR -10 at once, CCD_TEMP -2.3, -8.0, ... -9.9; temp_stable
+1 about 2 min after CCD_TEMP came within 1 C. TERAMP=10, COOLING off:
+TETAR 0, 10, 20 one minute apart, CCD_SET still -10. COOLING on again:
+TETAR 10.1 = CCD_TEMP 20.1 minus one step. andor compiled (still its own
+ramp), gxccd and fli built; none run on hardware. coolerPower (false)
+after the off ramp is not visible on the dummy (its off temperature is
+the ambient one).
+

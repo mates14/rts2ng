@@ -342,8 +342,9 @@ MainWindow::MainWindow (int argc, char **argv, QWidget *parent):
 	// Status is modeled on fiber_pointing_client.py's own state/chip-temp/
 	// voltage/power/filter corner (refresh_state() in that script).
 	// Read-only: a compact at-a-glance summary, not a second set of
-	// controls. Voltage/power ("VOLTAGE"/"TEMPPWR") are gxccd-specific
-	// Values (base/camd/gxccd/gxccd.cpp) - they simply stay "n/a" on
+	// controls. Voltage ("VOLTAGE") is gxccd-specific, power ("TEMPPWR")
+	// comes from cameras whose cooler reports it (base/camd/include/
+	// cooler.h; gxccd, fli) - they simply stay "n/a" on
 	// cameras that don't report them (e.g. the dummy driver used for
 	// testing). ----------------------------------------------------------
 	QSplitter *bottomSplitter = new QSplitter (Qt::Horizontal, mainSplitter);
@@ -702,8 +703,8 @@ void MainWindow::updateStatusPanel ()
 		statusTempLabel->setText (text);
 	}
 
-	// VOLTAGE/TEMPPWR are gxccd-specific (base/camd/gxccd/gxccd.cpp) -
-	// simply absent (state.values won't contain the key) on the dummy
+	// VOLTAGE is gxccd-specific, TEMPPWR only on cameras reporting cooler
+	// power (base/camd/include/cooler.h) - simply absent (state.values won't contain the key) on the dummy
 	// driver and most other camera families, leaving the label at "n/a".
 	if (state.values.contains ("VOLTAGE"))
 	{

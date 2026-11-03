@@ -25,6 +25,7 @@
 
 #include "scriptdevice.h"
 #include "imghdr.h"
+#include "cooler.h"
 
 #define MAX_CHIPS  3
 #define MAX_DATA_RETRY 100
@@ -171,6 +172,8 @@ class FilterVal
  */
 class Camera:public rts2core::ScriptDevice
 {
+	friend class Cooler;
+
 	public:
 		Camera (int argc, char **argv, rounding_t binning_rounding = CEIL);
 		virtual ~ Camera (void);
@@ -213,6 +216,8 @@ class Camera:public rts2core::ScriptDevice
 		 */
 		virtual int setCoolTemp (float new_temp)
 		{
+			if (cooler)
+				return cooler->setTarget (new_temp);
 			tempSet->setValueDouble (new_temp);
 			sendValueAll (tempSet);
 			return 0;
@@ -306,6 +311,8 @@ class Camera:public rts2core::ScriptDevice
 		 */
 		virtual int switchCooling (bool newval)
 		{
+			if (cooler)
+				return cooler->switchCooling (newval);
 			if (coolingOnOff)
 			{
 				coolingOnOff->setValueBool (newval);
@@ -931,6 +938,20 @@ class Camera:public rts2core::ScriptDevice
 		 * actively regulate CCD temperature. It creates tempSet,
 		 * nightCoolTemp and autocooling variables.
 		 */
+		/**
+		 * Create the shared temperature regulation (COOLING, CCD_SET,
+		 * nightcool, autocooling, TERAMP, TETAR, temp_tol, temp_stable)
+		 * for a cooled camera; the driver implements CoolerHardware. Use it
+		 * instead of createTempSet (). See cooler.h.
+		 *
+		 * @param offTemp [C] setpoint that cooling off ramps to
+		 */
+		void createCooler (CoolerHardware *hw, float offTemp) { cooler = new Cooler (this, hw, offTemp); }
+
+		// base note: not in classic, see cooler.h; nullptr for cameras
+		// without it (uncooled, or andor, which still has its own ramp)
+		Cooler *cooler;
+
 		void createTempSet ()
 		{
 			createValue (coolingOnOff, "COOLING", "camera cooling start/stop", true, RTS2_VALUE_WRITABLE | RTS2_DT_ONOFF | RTS2_VALUE_AUTOSAVE, CAM_WORKING);

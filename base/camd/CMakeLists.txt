@@ -1,5 +1,6 @@
 add_library(base_camd STATIC
 	src/camd.cpp
+	src/cooler.cpp
 	src/cliwheel.cpp
 	src/clifocuser.cpp
 )

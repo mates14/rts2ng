@@ -402,6 +402,7 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 	tempSet = nullptr;
 	nightCoolTemp = nullptr;
 	coolingOnOff = nullptr;
+	cooler = nullptr;
 
 	detsize = nullptr;
 	datasec = nullptr;
@@ -623,6 +624,7 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 Camera::~Camera ()
 {
+	delete cooler;
 	delete sharedData;
 	delete fhd;
 
@@ -813,6 +815,8 @@ int Camera::info ()
 			viter->filter->setValueInteger (getFilterNum (*niter));
 	}
 	camFocVal->setValueInteger (getFocPos ());
+	if (cooler)
+		cooler->checkStable ();
 	return rts2core::ScriptDevice::info ();
 }
 
@@ -1636,6 +1640,13 @@ void Camera::postEvent (rts2core::Event * event)
 			{
 				focuserMoving->setValueBool (false);
 				checkQueuedExposures ();
+			}
+			break;
+		case EVENT_COOLER_RAMP:
+			if (cooler)
+			{
+				cooler->rampStep (event);
+				return;
 			}
 			break;
 		case EVENT_TEMP_CHECK:

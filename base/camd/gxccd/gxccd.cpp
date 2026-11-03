@@ -49,8 +49,6 @@
 #include <sys/file.h>
 #include <unistd.h>
 
-#define EVENT_TE_RAMP	      RTS2_LOCAL_EVENT + 678
-
 // a failed filter move is retried this often, for this long (setCamFilterNum ())
 #define FILTER_RETRY_USEC     500000
 #define FILTER_RETRY_SEC      15
@@ -70,13 +68,11 @@ namespace rts2camd
  *
  * @author Petr Kubanek <petr@kubanek.net>
  */
-class GXCCD:public Camera
+class GXCCD:public Camera, public CoolerHardware
 {
 	public:
 		GXCCD (int argc, char **argv);
 		virtual ~GXCCD ();
-
-		virtual void postEvent (rts2core::Event *event);
 
 		virtual int commandAuthorized (rts2core::Connection * conn);
 
@@ -91,8 +87,10 @@ class GXCCD:public Camera
 		virtual int info ();
 		virtual int setValue (rts2core::Value *oldValue, rts2core::Value *newValue);
 
-		virtual int setCoolTemp (float new_temp);
-		virtual int switchCooling (bool cooling);
+		// base note: temperature regulation is Camera's Cooler (cooler.h);
+		// the driver only sends the setpoint
+		virtual int coolerSetPoint (float temp);
+		virtual bool coolerBusy () { return cameraBusy (); }
 
 		virtual int setFilterNum (int new_filter, const char *fn = nullptr);
 		virtual int setCamFilterNum (int new_filter);
@@ -120,9 +118,6 @@ class GXCCD:public Camera
 		rts2core::ValueSelection *mode;
 		rts2core::ValueIntegerMinMax *fan = nullptr;
 		rts2core::ValueIntegerMinMax *windowHeating = nullptr;
-		rts2core::ValueFloat *tempRamp;
-		rts2core::ValueFloat *tempTarget;
-		rts2core::ValueFloat *power = nullptr;
 		rts2core::ValueFloat *voltage;
 		rts2core::ValueFloat *gain;
 
@@ -135,8 +130,6 @@ class GXCCD:public Camera
 
 		bool reseted_shutter;
 		bool internalTimer;
-
-		bool hasCooling = false;
 
 		rts2core::ValueIntegerMinMax *desiredNightWindowHeating;
 		int desiredNightHeatingInitValue = 0;
@@ -170,11 +163,9 @@ GXCCD::GXCCD (int argc, char **argv):Camera (argc, argv)
 	createFilter ();
 	createTempAir ();
 	createTempCCD ();
-	createTempSet ();
-
-	createValue (tempRamp, "TERAMP", "[C/min] temperature ramping", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
-	tempRamp->setValueFloat (1.0);
-	createValue (tempTarget, "TETAR", "[C] current target temperature", false);
+	// 50 C: the camera has no cooler switch, cooling off leaves it
+	// regulated warm (as classic did)
+	createCooler (this, 50.0);
 
 	createValue (voltage, "VOLTAGE", "[V] current voltage of the camera power supply", true);
 	createValue (gain, "GAIN", "[e-ADU] gain", true);
@@ -202,52 +193,6 @@ GXCCD::GXCCD (int argc, char **argv):Camera (argc, argv)
 GXCCD::~GXCCD ()
 {
 	gxccd_release (camera);
-}
-
-void GXCCD::postEvent (rts2core::Event *event)
-{
-	float change = 0;
-	int res = 0;
-
-	switch (event->getType ())
-	{
-		case EVENT_TE_RAMP:
-			// base note: no command to a busy camera (cameraBusy ()); the
-			// step comes a few seconds later
-			if (cameraBusy ())
-			{
-				addTimer (5, event);
-				return;
-			}
-			if (tempTarget->getValueFloat () < tempSet->getValueFloat ())
-				change = tempRamp->getValueFloat ();
-			else if (tempTarget->getValueFloat () > tempSet->getValueFloat ())
-				change = -1 * tempRamp->getValueFloat ();
-			if (change != 0)
-			{
-				tempTarget->setValueFloat (tempTarget->getValueFloat () + change);
-				if (fabs (tempTarget->getValueFloat () - tempSet->getValueFloat ()) < fabs (change))
-					tempTarget->setValueFloat (tempSet->getValueFloat ());
-				sendValueAll (tempTarget);
-
-				// base note: one attempt, as classic; the retries came with
-				// upstream's cta-n merge, see reinitCamera ()
-				res = gxccd_set_temperature (camera, tempTarget->getValueFloat ());
-				if (res)
-				{
-					gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-					logStream (MESSAGE_ERROR) << "cannot set target temperature: " << gx_err << sendLog;
-
-					if (res == -1)
-						reinitCamera ();
-				}
-
-				addTimer (60, event);
-				return;
-			}
-			break;
-	}
-	Camera::postEvent (event);
 }
 
 int GXCCD::processOption (int opt)
@@ -298,10 +243,7 @@ int GXCCD::initHardware ()
 		//createFilter ();
 	}*/
 	gxccd_get_boolean_parameter (camera, GBP_COOLER, &val);
-	if (val)
-	{
-		hasCooling = true;
-	}
+	cooler->setAvailable (val);
 	gxccd_get_boolean_parameter (camera, GBP_FAN, &val);
 	if (val)
 	{
@@ -332,7 +274,7 @@ int GXCCD::initHardware ()
 	gxccd_get_boolean_parameter (camera, GBP_POWER_UTILIZATION, &val);
 	if (val)
 	{
-		createValue (power, "TEMPPWR", "[%] utilization of cooling power", true);
+		cooler->createPower ();
 	}
 
 	gxccd_get_boolean_parameter (camera, GBP_READ_MODES, &val);
@@ -500,11 +442,8 @@ int GXCCD::info ()
 	ret = gxccd_get_value (camera, GV_ADC_GAIN, &val);
 	gain->setValueFloat (ret ? NAN : val);
 
-	if (power)
-	{
-		ret = gxccd_get_value (camera, GV_POWER_UTILIZATION, &val);
-		power->setValueFloat (ret ? NAN : val);
-	}
+	ret = gxccd_get_value (camera, GV_POWER_UTILIZATION, &val);
+	cooler->setPower (ret ? NAN : val);
 
 	ret = gxccd_get_value (camera, GV_SUPPLY_VOLTAGE, &val);
 	voltage->setValueFloat (ret ? NAN : val);
@@ -567,61 +506,20 @@ int GXCCD::setWindowHeating (int heatingLevel)
 	return 0;
 }
 
-int GXCCD::setCoolTemp (float new_temp)
+int GXCCD::coolerSetPoint (float temp)
 {
-	float val;
-
-	if (hasCooling == false)
-		return -2;
-
-	// base note: one attempt, as classic (see reinitCamera ())
-	int ret = gxccd_get_value (camera, GV_CHIP_TEMPERATURE, &val);
-	if (ret)
+	// base note: one attempt, as classic; the retries came with
+	// upstream's cta-n merge, see reinitCamera ()
+	int res = gxccd_set_temperature (camera, temp);
+	if (res)
 	{
 		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-		logStream (MESSAGE_ERROR) << "cannot retrieve chip temperature, cannot start cooling: " << gx_err << sendLog;
-
-		if (ret == -1)
+		logStream (MESSAGE_ERROR) << "cannot set target temperature: " << gx_err << sendLog;
+		if (res == -1)
 			reinitCamera ();
-
 		return -1;
 	}
-	deleteTimers (EVENT_TE_RAMP);
-	tempTarget->setValueFloat (val);
-	addTimer (1, new rts2core::Event (EVENT_TE_RAMP));
-	return Camera::setCoolTemp (new_temp);
-}
-
-int GXCCD::switchCooling (bool cooling)
-{
-	int ret;
-
-	if (hasCooling == false)
-		return -2;
-
-	Camera::switchCooling (cooling);
-
-	if (cooling)
-	{
-		if (std::isnan (tempSet->getValueFloat ()))
-		{
-			if (!nightCoolTemp || std::isnan (nightCoolTemp->getValueFloat ()))
-			{
-				logStream (MESSAGE_ERROR) << "nightCoolTemp not defined" << sendLog;
-				ret = -1;
-			}
-			else
-				ret = setCoolTemp (nightCoolTemp->getValueFloat ());
-		}
-		else
-			ret = setCoolTemp (tempSet->getValueFloat ());
-	}
-	else
-	{
-		ret = setCoolTemp (50.0);
-	}
-	return ret;
-
+	return 0;
 }
 
 int GXCCD::setFilterNum (int new_filter, const char *fn)
@@ -967,13 +865,18 @@ int GXCCD::reinitCamera ()
 		return -1;
 	}
 
-	ret = gxccd_set_temperature (camera, tempTarget->getValueFloat ());
-	if (ret)
+	// base note: classic sent TETAR also while it was still NAN (cooling
+	// never started); there is nothing to restore then
+	if (!std::isnan (cooler->getSetPoint ()))
 	{
-		gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
-		logStream (MESSAGE_ERROR) << "reinitilization failed - cannot set target temperature: " << gx_err << sendLog;
-		raiseHWError ();
-		return -1;
+		ret = gxccd_set_temperature (camera, cooler->getSetPoint ());
+		if (ret)
+		{
+			gxccd_get_last_error (camera, gx_err, sizeof (gx_err));
+			logStream (MESSAGE_ERROR) << "reinitilization failed - cannot set target temperature: " << gx_err << sendLog;
+			raiseHWError ();
+			return -1;
+		}
 	}
 
 	// the internal wheel, not camFilterVal - with --wheeldev that one holds

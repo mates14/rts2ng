@@ -34,7 +34,6 @@
 #define FLIUSB_CAM_ID      0x02
 #define FLIUSB_PROLINE_ID  0x0a
 
-#define EVENT_TE_RAMP         RTS2_LOCAL_EVENT + 678
 #define EVENT_IDLE_FLUSH      RTS2_LOCAL_EVENT + 679
 
 namespace rts2camd
@@ -45,7 +44,7 @@ namespace rts2camd
  *
  * @author Petr Kubanek <kubanek@fzu.cz>
  */
-class Fli:public Camera
+class Fli:public Camera, public CoolerHardware
 {
 	public:
 		Fli (int in_argc, char **in_argv);
@@ -57,9 +56,11 @@ class Fli:public Camera
 
 		virtual int initHardware ();
 
-		virtual int setCoolTemp (float new_temp);
-
 	protected:
+		// base note: temperature regulation is Camera's Cooler (cooler.h);
+		// the driver only sends the setpoint
+		virtual int coolerSetPoint (float temp);
+
 		virtual int initChips ();
 
 		virtual void initBinnings ()
@@ -84,8 +85,6 @@ class Fli:public Camera
 
 		virtual int info ();
 
-		virtual int switchCooling (bool cooling);
-
 		virtual void temperatureCheck ();
 
 		virtual int startExposure ();
@@ -96,9 +95,6 @@ class Fli:public Camera
 		virtual int setValue (rts2core::Value * old_value, rts2core::Value * new_value);
 
 	private:
-		rts2core::ValueFloat *tempRamp;
-		rts2core::ValueFloat *tempTarget;
-		rts2core::ValueFloat *coolPower;
 		rts2core::ValueSelection *fliShutter;
 		rts2core::ValueBool *useBgFlush;
 		rts2core::ValueSelection *fliMode;
@@ -286,17 +282,15 @@ int Fli::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 Fli::Fli (int in_argc, char **in_argv):Camera (in_argc, in_argv)
 {
 	createTempAir ();
-	createTempSet ();
-
-	createValue (tempRamp, "TERAMP", "[C/min] temperature ramping", false, RTS2_VALUE_WRITABLE);
-	tempRamp->setValueFloat (1.0);
-	createValue (tempTarget, "TETAR", "[C] current target temperature", false);
+	// 40 C is a safe value, some cameras start to cool at max if this is
+	// set too high (some kind of overflow, not handled in libfli). The
+	// limit differs between cameras; 40 C seems safe (tested for maxcam
+	// and IMG). Cooling off ramps to it, as classic did.
+	createCooler (this, 40.0);
 
 	createTempCCD ();
 	createTempCCDHistory ();
 	createExpType ();
-
-	coolPower = nullptr;
 
 	createValue (fliShutter, "FLISHUT", "FLI shutter state", true, RTS2_VALUE_WRITABLE);
 	fliShutter->addSelVal ("CLOSED");
@@ -357,36 +351,8 @@ Fli::~Fli (void)
 
 void Fli::postEvent (rts2core::Event *event)
 {
-	float change = 0;
 	switch (event->getType ())
 	{
-		case EVENT_TE_RAMP:
-			if (std::isnan (tempTarget->getValueFloat ()))
-			{
-				if (std::isnan (tempCCD->getValueFloat ()))
-				{
-					addTimer (10, event);	// give info () time to get tempCCD
-					return;
-				}
-				else
-					tempTarget->setValueFloat ( tempCCD->getValueFloat () );
-			}
-			if (tempTarget->getValueFloat () < tempSet->getValueFloat ())
-				change = tempRamp->getValueFloat ();
-			else if (tempTarget->getValueFloat () > tempSet->getValueFloat ())
-				change = -1 * tempRamp->getValueFloat ();
-			if (change != 0)
-			{
-				tempTarget->setValueFloat (tempTarget->getValueFloat () + change);
-				if (fabs (tempTarget->getValueFloat () - tempSet->getValueFloat ()) < fabs (change))
-					tempTarget->setValueFloat (tempSet->getValueFloat ());
-				sendValueAll (tempTarget);
-				if (FLISetTemperature (dev, tempTarget->getValueFloat ()))
-					logStream (MESSAGE_ERROR) << "cannot set target temperature" << sendLog;
-				addTimer (60, event);
-				return;
-			}
-			break;
 		case EVENT_IDLE_FLUSH:
 			if (idleFlushPeriod->getValueInteger () <= 0)
 				break;
@@ -667,10 +633,9 @@ int Fli::initHardware ()
 
 	double cp;
 	ret = FLIGetCoolerPower (dev, &cp);
+	// base note: classic called it COOL_PWR; TEMPPWR as every camera
 	if (!ret)
-	{
-		createValue (coolPower, "COOL_PWR", "cooling power", true);
-	}
+		cooler->createPower ();
 
 	// get mode..
 	createValue (fliMode, "RDOUTM", "readout mode", true, RTS2_VALUE_WRITABLE, CAM_WORKING);
@@ -700,43 +665,9 @@ int Fli::info ()
 	if (ret)
 		return -1;
 	tempCCD->setValueFloat (fliTemp);
-	if (coolPower)
-	{
-		ret = FLIGetCoolerPower (dev, &fliTemp);
-		if (ret)
-			return -1;
-		coolPower->setValueFloat (fliTemp);
-	}
+	ret = FLIGetCoolerPower (dev, &fliTemp);
+	cooler->setPower (ret ? NAN : fliTemp);
 	return Camera::info ();
-}
-
-int Fli::switchCooling (bool cooling)
-{
-	int ret;
-
-	Camera::switchCooling (cooling);
-
-	if (cooling)
-	{
-		if (std::isnan (tempSet->getValueFloat ()))
-		{
-			if (!nightCoolTemp || std::isnan (nightCoolTemp->getValueFloat ()))
-			{
-				logStream (MESSAGE_ERROR) << "nightCoolTemp not defined" << sendLog;
-				ret = -1;
-			}
-			else
-				ret = setCoolTemp (nightCoolTemp->getValueFloat ());
-		}
-		else
-			ret = setCoolTemp (tempSet->getValueFloat ());
-	}
-	else
-	{
-		// 40 C is safe value, some cameras will start to cool at max if this is set too high (some kind of overflow, not handled in libfli). Limit is different for different cameras, 40 C seems to be safe value (tested for maxcam and IMG). This value is also used in setCoolTemp ().
-		ret = setCoolTemp (40.0);
-	}
-	return ret;
 }
 
 void Fli::temperatureCheck ()
@@ -755,15 +686,14 @@ void Fli::temperatureCheck ()
 	addTempCCDHistory (fliTemp);
 }
 
-int Fli::setCoolTemp (float new_temp)
+int Fli::coolerSetPoint (float temp)
 {
-	if (coolingOnOff->getValueBool () || new_temp == 40.0)
+	if (FLISetTemperature (dev, temp))
 	{
-		deleteTimers (EVENT_TE_RAMP);
-		tempTarget->setValueFloat ( tempCCD->getValueFloat () );
-		addTimer (1, new rts2core::Event (EVENT_TE_RAMP));
+		logStream (MESSAGE_ERROR) << "cannot set target temperature" << sendLog;
+		return -1;
 	}
-	return Camera::setCoolTemp (new_temp);
+	return 0;
 }
 
 int main (int argc, char **argv)

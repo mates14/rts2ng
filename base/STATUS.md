@@ -189,6 +189,19 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   it was refused for the whole readout (2.6 s on C3) or, with the reinit,
   wedged the camera (HISTORY, "An exposure whose client left ends at
   once"). [JS 2026-10-27]
+- Cooled cameras regulate through `Cooler` (`camd/include/cooler.h`,
+  `Camera::createCooler ()`); the driver implements only
+  `CoolerHardware`: `coolerSetPoint ()`, optionally `coolerPower ()` and
+  `coolerBusy ()`. dummy, gxccd and fli use it; andor still has its own
+  ramp (STATUS, "Agreed but not done"). Cooling off ramps to the driver's
+  off temperature (gxccd 50 C, fli 40 C: no cooler switch, they stay
+  regulated warm) and then calls `coolerPower (false)`; it does not touch
+  `CCD_SET`, so cooling on returns to it (gxccd used to overwrite it with
+  50, and COOLING on by hand then cooled to 50). `TERAMP` defaults to
+  100 C/min, practically immediate both ways; it is autosaved, so a site
+  that set a gentler one keeps it. `temp_stable`: cooling on, the ramp at
+  `CCD_SET`, `CCD_TEMP` within `temp_tol` for 120 s. Cooler power is
+  `TEMPPWR` on every camera (fli's was `COOL_PWR`). [MJ 2026-11-03]
 - gxccd: a failed filter move is retried every 0.5 s for up to 15 s and
   never answered with `reinitCamera ()` (classic did not reinit either).
   The driver sends nothing of its own to a busy camera (`cameraBusy ()`:
@@ -362,9 +375,11 @@ it, and say which classes you added.
   on purpose until all mounts in use are ported; `GEM` and `Fork` are
   faithful classic ports for now.
 - **Shared device parts.** [MJ 2026-11-03] Components instead of copies
-  in every driver: a `Cooler` owned by `Camera` (COOLING/CCD_SET/CCD_TEMP/
-  CCD_AIR/TEMPPWR, polling, history, nightcool, a temp_stable flag),
-  connection health for serial/TCP/UDP devices, night-scheduled switches.
+  in every driver. Done: `Cooler` for dummy, gxccd, fli. Left: andor onto
+  `Cooler` (its `TE_RAMP`, `TCSTATUS`, immediate `CoolerOFF ()` and
+  `afterNight ()`), after gxccd has run on it at FRAM for a while, since
+  C0 can only be checked at D50; connection health for serial/TCP/UDP
+  devices; night-scheduled switches (gxccd's `WINDOW_HEATING_NIGHT`).
   Also essential values for the other device types (teld, focusd, dome,
   filterd); only the camera marks any so far.
 

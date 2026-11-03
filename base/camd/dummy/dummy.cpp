@@ -47,7 +47,7 @@ namespace rts2camd
  *
  * @author Petr Kubanek <petr@kubanek.net>
  */
-class Dummy:public Camera
+class Dummy:public Camera, public CoolerHardware
 {
 	public:
 		Dummy (int in_argc, char **in_argv):Camera (in_argc, in_argv)
@@ -183,7 +183,9 @@ class Dummy:public Camera
 			if (showTemp)
 			{
 				createTempAir ();
-				createTempSet ();
+				// base note: classic set CCD_TEMP to CCD_SET plus noise; the
+				// shared Cooler is simulated instead (info ())
+				createCooler (this, AMBIENT);
 
 				createValue (tempMin, "temp_min", "[C] minimal set temperature", false, RTS2_VALUE_WRITABLE);
 				createValue (tempMax, "temp_max", "[C] maximal set temperature", false, RTS2_VALUE_WRITABLE);
@@ -219,6 +221,9 @@ class Dummy:public Camera
 
 			return initChips ();
 		}
+		virtual int coolerSetPoint (float temp) { simSetPoint = temp; return 0; }
+		virtual int coolerPower (bool on) { simCoolerOn = on; return 0; }
+
 		virtual int initChips ()
 		{
 			initCameraChip (width, height, 0, 0);
@@ -233,13 +238,14 @@ class Dummy:public Camera
 			}
 			clearHWError ();
 			usleep (infoSleep);
-			float t = tempSet->getValueFloat ();
-			if (std::isnan (t))
-				t = 30;
-			tempCCD->setValueFloat (t + random_num() * 3);
-			if (tempAir)
+			if (showTemp)
 			{
-				tempAir->setValueFloat (t + random_num () * 3);
+				// the CCD goes half way to the setpoint each info () call,
+				// or back to the ambient temperature with the cooler off
+				float goal = (simCoolerOn && !std::isnan (simSetPoint)) ? simSetPoint : AMBIENT;
+				simCCD += (goal - simCCD) * 0.5;
+				tempCCD->setValueFloat (simCCD + random_num () * 0.2);
+				tempAir->setValueFloat (AMBIENT + random_num () * 0.2);
 			}
 			return Camera::info ();
 		}
@@ -345,6 +351,12 @@ class Dummy:public Camera
 		long dataSize;
 
 		bool showTemp;
+
+		// the simulated cooler
+		static constexpr float AMBIENT = 20.0;
+		float simCCD = AMBIENT;
+		float simSetPoint = NAN;
+		bool simCoolerOn = false;
 
 		void generateImage (size_t pixelsize, int chan);
 
