@@ -283,7 +283,11 @@ if [ $build_deb == 1 ]; then
 
     for tree in $modules; do
         stamp_changelog $tree
-        ( cd $tree && dpkg-buildpackage -us -uc -b )
+        # The stamp has just modified a tracked file, so cmake's own
+        # `git describe --dirty` would call every package build dirty; hand
+        # it the package version instead, which is what BUILD then shows
+        # (base/CMakeLists.txt, same string as `dpkg-query -W`). [MJ 2026-11-03]
+        ( cd $tree && RTS2_BUILD_ID="$(dpkg-parsechangelog -S Version)" dpkg-buildpackage -us -uc -b )
         ( cd $tree && dh_clean )	# removes debian/.debhelper, obj-*, etc.
     done
 

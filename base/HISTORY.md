@@ -4305,3 +4305,11 @@ COOLING, CCD_SET, then the rest, with the 29 debug values at the end.
 `exposure=2 E 1 E 1` through rts2-scriptexec still set its values by name
 and wrote both images. Hardened (dpkg-buildflags) build clean.
 
+BUILD said "-dirty" on lascaux's clean release build, same day [MJ]:
+`buildme.sh -d` stamps each tree's debian/changelog (a tracked file)
+before dpkg-buildpackage runs cmake, so `git describe --dirty` saw a
+modified tree. buildme already takes the commit before stamping; it now
+passes the stamped package version as `RTS2_BUILD_ID`, and
+base/CMakeLists.txt uses that for `BASE_GIT_DESCRIBE` when set. BUILD
+then equals `dpkg-query -W rts2-base` at the site.
+

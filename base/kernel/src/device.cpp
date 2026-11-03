@@ -557,7 +557,7 @@ Device::Device (int in_argc, char **in_argv, int in_device_type, const char *def
 	const char *slash = strrchr (exe, '/');
 	driverName->setValueCharArr (slash ? slash + 1 : exe);
 
-	createConstValue (buildId, "BUILD", "git describe of the source (configure time)", true, RTS2_VALUE_DEVPREFIX);
+	createConstValue (buildId, "BUILD", "package version, or git describe for a plain build", true, RTS2_VALUE_DEVPREFIX);
 	buildId->setValueCharArr (BASE_GIT_DESCRIBE);
 
 	createConstValue (linkTime, "LINKED", "time the driver executable was linked", true, RTS2_VALUE_DEVPREFIX);

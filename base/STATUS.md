@@ -122,7 +122,9 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 
 **Device values** [MJ 2026-11-03]
 - Right after `infotime`/`uptime`, every device sends its identity:
-  `DRIVER` (executable), `BUILD` (`git describe` at configure time),
+  `DRIVER` (executable), `BUILD` (the package version, as `dpkg-query -W`
+  shows it, from `RTS2_BUILD_ID` set by `buildme.sh -d`; `git describe` at
+  configure time in a plain build),
   `LINKED` (the executable's mtime), and `SDK_VER`/`HW_VER` when the driver
   calls `setSdkVersion ()`/`setHwVersion ()` from `initHardware ()` (gxccd,
   fli and andor do). They are constant values (`Device::Device`), not part

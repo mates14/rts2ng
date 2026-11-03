@@ -41,6 +41,12 @@ if(GIT_FOUND)
 		set(BASE_GIT_DESCRIBE "${_base_git_describe}")
 	endif()
 endif()
+# buildme.sh -d passes the package version: it stamps debian/changelog
+# before dpkg-buildpackage runs, which would make the describe above
+# "-dirty" on every package build. [MJ 2026-11-03]
+if(DEFINED ENV{RTS2_BUILD_ID} AND NOT "$ENV{RTS2_BUILD_ID}" STREQUAL "")
+	set(BASE_GIT_DESCRIBE "$ENV{RTS2_BUILD_ID}")
+endif()
 message(STATUS "base: building from ${BASE_GIT_DESCRIBE}")
 
 configure_file(
