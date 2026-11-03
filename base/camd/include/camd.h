@@ -904,9 +904,9 @@ class Camera:public rts2core::ScriptDevice
 		 * Create statistics value to hold array of temperatures histories.
 		 */
 		void createTempCCDHistory () {
-			createValue (tempCCDHistory, "ccd_temp_history", "history of ccd temperatures", false);
-			createValue (tempCCDHistoryInterval, "ccd_temp_interval", "interval in seconds between repeative queries of CCD temperature", false);
-			createValue (tempCCDHistorySize, "ccd_temp_size", "interval in seconds between repeative queries of CCD temperature", false);
+			createValue (tempCCDHistory, "ccd_temp_history", "history of ccd temperatures", false, RTS2_VALUE_DEBUG);
+			createValue (tempCCDHistoryInterval, "ccd_temp_interval", "interval in seconds between repeative queries of CCD temperature", false, RTS2_VALUE_DEBUG);
+			createValue (tempCCDHistorySize, "ccd_temp_size", "interval in seconds between repeative queries of CCD temperature", false, RTS2_VALUE_DEBUG);
 
 			tempCCDHistoryInterval->setValueInteger (2);
 			tempCCDHistorySize->setValueInteger (20);

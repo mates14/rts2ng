@@ -4250,3 +4250,41 @@ The fix is
 in rts2-executor (db links base's script library), so it reaches the sites
 with the next release and an EXEC restart; the cameras, C0's Andor
 included, need no rebuild.
+
+## Device identity values, fewer values on show in rts2-mon (2026-11-03) [MJ]
+
+Two complaints about device values: there is nothing that says what is
+running (which driver, which build, on which SDK and firmware), and a
+camera shows so many values in rts2-mon that `exposure` is hard to find
+(it was the 57th of 93 in camd-dummy).
+
+Identity: `Device::Device` creates constant values `DRIVER`, `BUILD`
+(`BASE_GIT_DESCRIBE`) and `LINKED` (mtime of `/proc/self/exe`; dpkg keeps
+the build's mtime), and `setSdkVersion ()`/`setHwVersion ()` create
+`SDK_VER`/`HW_VER` on first call. Constant values go out right after
+`infotime`/`uptime` (`Daemon::sendMetaInfo`), so they head every client's
+list without any reordering. `RTS2_VALUE_DEVPREFIX` because a camera's own
+values go to FITS unprefixed, and every device's `BUILD` would land on the
+same key. gxccd reports `GIP_DRIVER_*` and the optional firmware/flash
+(`GBP_HEX_VERSION_NUMBER` honoured), FLI `FLIGetLibVersion` and the
+hw/fw revisions it already put in `CCD_TYPE`, Andor `GetVersionInfo` and
+`GetHardwareVersion`. `Device::init ()` logs the build line for every
+device, which replaces gemini-udp's own `logBuildIdentity ()`.
+
+Too many values: camd already had `RTS2_VALUE_DEBUG`, which rts2-mon hides
+by default, but nothing set it. Now the secondary camera values do (64
+visible of 93 in camd-dummy, 29 hidden). No wire change, the flag is classic.
+
+A server-side ordering by importance (tiers sorted in the device's value
+vector, no wire flag) and a shared cooling component were discussed and
+left for later (STATUS, "Agreed but not done").
+
+Bench: private centrald + camd-dummy, the metadata dump read off the
+socket (identity values 3rd-5th, after `infotime`/`uptime`); dummy
+temporarily calling both setters, twice for `SDK_VER`, which updated; an
+image through rts2-scriptexec with `C9.DRIVER`, `C9.BUILD`, `C9.LINKED`
+in the header. Andor compiled against the SDK in `~/andor`, gxccd and FLI
+built; their version strings are untested without the cameras. rts2-mon's
+screen not looked at (no terminal to drive it here), only the flag on the
+wire it filters by.
+

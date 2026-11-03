@@ -473,52 +473,56 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 	calculateStatistics->addSelVal ("no");
 	calculateStatistics->setValueInteger (STATISTIC_YES);
 
+	// base note: the secondary values below (stats beyond average/min/max,
+	// center box, SEP, slit, queue internals, WCS, channel geometry) carry
+	// RTS2_VALUE_DEBUG, so rts2-mon hides them unless debug values are shown
+	// and the essential ones can be found. Display only; FITS is unaffected.
 	createValue (average, "average", "image average", false);
 	createValue (max, "max", "maximum pixel value", false);
 	createValue (min, "min", "minimal pixel value", false);
-	createValue (sum, "sum", "sum of pixels readed out", false);
-	createValue (image_mode, "image_mode", "mode (most often pixel value)", false);
+	createValue (sum, "sum", "sum of pixels readed out", false, RTS2_VALUE_DEBUG);
+	createValue (image_mode, "image_mode", "mode (most often pixel value)", false, RTS2_VALUE_DEBUG);
 
 	// mode histogram
 	modeCount = nullptr;
 	modeCountSize = 0;
 
-	createValue (computedPix, "computed", "number of pixels so far computed", false);
+	createValue (computedPix, "computed", "number of pixels so far computed", false, RTS2_VALUE_DEBUG);
 
-	createValue (calculateCenter, "center_cal", "calculate center box statistics", false, RTS2_VALUE_WRITABLE | RTS2_DT_ONOFF);
+	createValue (calculateCenter, "center_cal", "calculate center box statistics", false, RTS2_VALUE_WRITABLE | RTS2_DT_ONOFF | RTS2_VALUE_DEBUG);
 	calculateCenter->setValueBool (false);
 
-	createValue (centerBox, "center_box", "calculate center box coordinates", false, RTS2_VALUE_INTEGER | RTS2_VALUE_WRITABLE);
+	createValue (centerBox, "center_box", "calculate center box coordinates", false, RTS2_VALUE_INTEGER | RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 	centerBox->setInts (-1, -1, -1, -1);
 
-	createValue (sepFind, "sep_cal", "find stars with SEP", false, RTS2_VALUE_WRITABLE);
-	createValue (sepX, "sep_X", "X positions of stars", false);
-	createValue (sepY, "sep_Y", "Y positions of stars", false);
-	createValue (sepFluxes, "sep_fluxes", "star fluxes", false);
+	createValue (sepFind, "sep_cal", "find stars with SEP", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
+	createValue (sepX, "sep_X", "X positions of stars", false, RTS2_VALUE_DEBUG);
+	createValue (sepY, "sep_Y", "Y positions of stars", false, RTS2_VALUE_DEBUG);
+	createValue (sepFluxes, "sep_fluxes", "star fluxes", false, RTS2_VALUE_DEBUG);
 
 	sepFind->setValueBool (false);
 
-	createValue (slitPosX, "slitposx", "[pixels] slit position along dithering axis", true, RTS2_VALUE_WRITABLE);
+	createValue (slitPosX, "slitposx", "[pixels] slit position along dithering axis", true, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 	slitPosX->setValueDouble (-1);
-	createValue (slitPosY, "slitposy", "[pixels] slit position along dithering axis", true, RTS2_VALUE_WRITABLE);
+	createValue (slitPosY, "slitposy", "[pixels] slit position along dithering axis", true, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 	slitPosY->setValueDouble (-1);
 
-	createValue (centerCutLevel, "center_cut_level", "[ADU] lower limit for ADU value to be considered for pixels", false, RTS2_VALUE_WRITABLE);
+	createValue (centerCutLevel, "center_cut_level", "[ADU] lower limit for ADU value to be considered for pixels", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 	centerCutLevel->setValueDouble (0);
 
-	createValue (sumsX, "sums_Xs", "sums along X axis", false, RTS2_VALUE_DOUBLE);
-	createValue (sumsY, "sums_Ys", "sums along Y axis", false, RTS2_VALUE_DOUBLE);
+	createValue (sumsX, "sums_Xs", "sums along X axis", false, RTS2_VALUE_DOUBLE | RTS2_VALUE_DEBUG);
+	createValue (sumsY, "sums_Ys", "sums along Y axis", false, RTS2_VALUE_DOUBLE | RTS2_VALUE_DEBUG);
 
-	createValue (centerX, "center_X", "center pixel in X", false);
-	createValue (centerY, "center_Y", "center pixel in Y", false);
+	createValue (centerX, "center_X", "center pixel in X", false, RTS2_VALUE_DEBUG);
+	createValue (centerY, "center_Y", "center pixel in Y", false, RTS2_VALUE_DEBUG);
 
-	createValue (centerMax, "center_max", "maximal ADU value", false);
-	createValue (centerSums, "center_sums", "number of measurements to sum for statistics", false, RTS2_VALUE_WRITABLE);
+	createValue (centerMax, "center_max", "maximal ADU value", false, RTS2_VALUE_DEBUG);
+	createValue (centerSums, "center_sums", "number of measurements to sum for statistics", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 	centerSums->setValueInteger (5);
-	createValue (centerStat, "center_stat", "center statistics", false);
+	createValue (centerStat, "center_stat", "center statistics", false, RTS2_VALUE_DEBUG);
 
-	createValue (centerAvg, "center_avg", "average of pixels above threshold", false);
-	createValue (centerAvgStat, "center_avg_stat", "statistics of average of pixels above threshold", false);
+	createValue (centerAvg, "center_avg", "average of pixels above threshold", false, RTS2_VALUE_DEBUG);
+	createValue (centerAvgStat, "center_avg_stat", "statistics of average of pixels above threshold", false, RTS2_VALUE_DEBUG);
 
 	createValue (quedExpNumber, "que_exp_num", "number of exposures in que", false, RTS2_VALUE_WRITABLE, 0);
 	quedExpNumber->setValueInteger (0);
@@ -526,15 +530,15 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 	createValue (exposureNumber, "exposure_num", "number of exposures camera took from driver restart", false, RTS2_VALUE_WRITABLE, 0);
 	exposureNumber->setValueLong (0);
 
-	createValue (scriptExposureNum, "script_exp_num", "number of images taken in script", false, 0, 0);
+	createValue (scriptExposureNum, "script_exp_num", "number of images taken in script", false, RTS2_VALUE_DEBUG, 0);
 	scriptExposureNum->setValueLong (0);
 
 	createValue (exposureEnd, "exposure_end", "expected end of exposure", false);
 
-	createValue (waitingForEmptyQue, "wait_for_que", "if camera is waiting for empty que", false);
+	createValue (waitingForEmptyQue, "wait_for_que", "if camera is waiting for empty que", false, RTS2_VALUE_DEBUG);
 	waitingForEmptyQue->setValueBool (false);
 
-	createValue (waitingForNotBop, "wait_for_notbop", "if camera is waiting for not bop state", false);
+	createValue (waitingForNotBop, "wait_for_notbop", "if camera is waiting for not bop state", false, RTS2_VALUE_DEBUG);
 	waitingForNotBop->setValueBool (false);
 
 	createValue (chipSize, "SIZE", "chip size", true, RTS2_VALUE_INTEGER);
@@ -554,16 +558,16 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 	// not written to FITS: it reaches the header as EXPTIME/EXPOSURE, through
 	// DevClientCameraImage::cameraMetadata(), rather than under its own name
-	createValue (exposureTotal, RTS2_VALUE_EXPOSURE_TOTAL, "[s] total integration one frame represents, NAN unless the mode coadds scans", false, 0, CAM_WORKING);
+	createValue (exposureTotal, RTS2_VALUE_EXPOSURE_TOTAL, "[s] total integration one frame represents, NAN unless the mode coadds scans", false, RTS2_VALUE_DEBUG, CAM_WORKING);
 	exposureTotal->setValueDouble (NAN);
 
 	createValue (lastImagePath, "last_image", "path to the last image", false, RTS2_VALUE_WRITABLE);
 
 	sendOkInExposure = false;
 
-	createValue (pixelsSecond, "pixels_second", "[pixels/second] average readout speed", false, RTS2_DT_KMG);
+	createValue (pixelsSecond, "pixels_second", "[pixels/second] average readout speed", false, RTS2_DT_KMG | RTS2_VALUE_DEBUG);
 	createValue (readoutTime, "readout_time", "[s] data readout time", false, RTS2_DT_TIMEINTERVAL);
-	createValue (transferTime, "transfer_time", "[s] data transfer time, including overhead", false, RTS2_DT_TIMEINTERVAL);
+	createValue (transferTime, "transfer_time", "[s] data transfer time, including overhead", false, RTS2_DT_TIMEINTERVAL | RTS2_VALUE_DEBUG);
 
 	createValue (camFocVal, "focpos", "position of focuser", false, RTS2_VALUE_WRITABLE, CAM_EXPOSING);
 
@@ -574,10 +578,10 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 	exposureConn = nullptr;
 
-	createValue (focuserMoving, "foc_moving", "if focuser is moving", false);
+	createValue (focuserMoving, "foc_moving", "if focuser is moving", false, RTS2_VALUE_DEBUG);
 	focuserMoving->setValueBool (false);
 
-	createValue (needReload, "need_reload", "camera needs to be reloaded after finishing the exposure", false);
+	createValue (needReload, "need_reload", "camera needs to be reloaded after finishing the exposure", false, RTS2_VALUE_DEBUG);
 	needReload->setValueBool (false);
 
 	// other options..
@@ -845,7 +849,7 @@ int Camera::processOption (int in_opt)
 				std::cerr << "the program does not accept two filter offsets files" << std::endl;
 				return -1;
 			}
-			createValue (filterOffsetFile, "offset_file", "filter offset file", false, RTS2_VALUE_WRITABLE);
+			createValue (filterOffsetFile, "offset_file", "filter offset file", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 			setFilterOffsetFile (optarg);
 			break;
 		case 'e':
@@ -868,18 +872,18 @@ int Camera::processOption (int in_opt)
 			// create WCS parameters..
 			if (wcs_cdelta1 == nullptr)
 			{
-				createValue (wcs_ctype1, multiWCS ("CTYPE1", multi_wcs), "WCS transformation type", false, RTS2_DT_WCS_MASK);
-				createValue (wcs_ctype2, multiWCS ("CTYPE2", multi_wcs), "WCS transformation type", false, RTS2_DT_WCS_MASK);
+				createValue (wcs_ctype1, multiWCS ("CTYPE1", multi_wcs), "WCS transformation type", false, RTS2_DT_WCS_MASK | RTS2_VALUE_DEBUG);
+				createValue (wcs_ctype2, multiWCS ("CTYPE2", multi_wcs), "WCS transformation type", false, RTS2_DT_WCS_MASK | RTS2_VALUE_DEBUG);
 				wcs_ctype1->setValueCharArr ("RA---TAN");
 				wcs_ctype2->setValueCharArr ("DEC--TAN");
-				createValue (wcs_crpix1, multiWCS ("CRPIX1", multi_wcs), "WCS x reference pixel", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CRPIX1);
-				createValue (wcs_crpix2, multiWCS ("CRPIX2", multi_wcs), "WCS y reference pixel", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CRPIX2);
+				createValue (wcs_crpix1, multiWCS ("CRPIX1", multi_wcs), "WCS x reference pixel", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CRPIX1 | RTS2_VALUE_DEBUG);
+				createValue (wcs_crpix2, multiWCS ("CRPIX2", multi_wcs), "WCS y reference pixel", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CRPIX2 | RTS2_VALUE_DEBUG);
 
-				createValue (wcs_cdelta1, multiWCS ("CDELT1", multi_wcs), "[deg] WCS delta along 1st axis", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CDELT1);
-				createValue (wcs_cdelta2, multiWCS ("CDELT2", multi_wcs), "[deg] WCS delta along 2nd axis", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CDELT2);
-				createValue (wcs_crota, multiWCS ("CROTA2", multi_wcs), "[deg] WCS rotation", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_ROTANG);
+				createValue (wcs_cdelta1, multiWCS ("CDELT1", multi_wcs), "[deg] WCS delta along 1st axis", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CDELT1 | RTS2_VALUE_DEBUG);
+				createValue (wcs_cdelta2, multiWCS ("CDELT2", multi_wcs), "[deg] WCS delta along 2nd axis", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_CDELT2 | RTS2_VALUE_DEBUG);
+				createValue (wcs_crota, multiWCS ("CROTA2", multi_wcs), "[deg] WCS rotation", false, RTS2_VALUE_WRITABLE | RTS2_DT_WCS_ROTANG | RTS2_VALUE_DEBUG);
 
-				createValue (wcs_aux, "WCSAUX", "suffixes of auxiliary WCS to add", false, RTS2_VALUE_WRITABLE);
+				createValue (wcs_aux, "WCSAUX", "suffixes of auxiliary WCS to add", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_DEBUG);
 			}
 			params = SplitStr (optarg, ":");
 			if (params.size () != 5)
@@ -923,7 +927,7 @@ int Camera::processOption (int in_opt)
 
 		case OPT_DETSIZE:
 			{
-				createValue (detsize, "DETSIZE", "[x w y h] total detector size", false, RTS2_VALUE_FLOAT);
+				createValue (detsize, "DETSIZE", "[x w y h] total detector size", false, RTS2_VALUE_FLOAT | RTS2_VALUE_DEBUG);
 				if (detsize->setValueCharArr (optarg))
 				{
 					std::cerr << "cannot parse --detsize argument: " << optarg << ", exiting." << std::endl;
@@ -933,7 +937,7 @@ int Camera::processOption (int in_opt)
 			break;
 		case OPT_DATASEC:
 			{
-				createValue (datasec, "DATASEC", "[x w y h] good data section", false, RTS2_VALUE_INTEGER);
+				createValue (datasec, "DATASEC", "[x w y h] good data section", false, RTS2_VALUE_INTEGER | RTS2_VALUE_DEBUG);
 				if (datasec->setValueCharArr (optarg))
 				{
 					std::cerr << "cannot parse --datasec argument: " << optarg << ", exiting." << std::endl;
@@ -942,23 +946,23 @@ int Camera::processOption (int in_opt)
 			}
 			break;
 		case OPT_TRIMS_XY:
-			createValue (trimx, "TRIM_X1", "[X11 X12 X13 ..] channel X trimmed data start", false);
-			createValue (trimy, "TRIM_Y1", "[Y11 Y12 Y13 ..] channel Y trimmed data start", false);
+			createValue (trimx, "TRIM_X1", "[X11 X12 X13 ..] channel X trimmed data start", false, RTS2_VALUE_DEBUG);
+			createValue (trimy, "TRIM_Y1", "[Y11 Y12 Y13 ..] channel Y trimmed data start", false, RTS2_VALUE_DEBUG);
 			fillPairs (trimx, trimy, optarg);
 			break;
 		case OPT_TRIMS_END:
-			createValue (trimx2, "TRIM_X2", "[X22 X22 X23 ..] channel X trimmed data end", false);
-			createValue (trimy2, "TRIM_Y2", "[Y21 Y22 Y23 ..] channel Y trimmed data end", false);
+			createValue (trimx2, "TRIM_X2", "[X22 X22 X23 ..] channel X trimmed data end", false, RTS2_VALUE_DEBUG);
+			createValue (trimy2, "TRIM_Y2", "[Y21 Y22 Y23 ..] channel Y trimmed data end", false, RTS2_VALUE_DEBUG);
 			fillPairs (trimx2, trimy2, optarg);
 			break;
 		case OPT_CHANNELS_STARTS:
-			createValue (chan1offset, "CHAN1_OFFSETS", "[X1 X2 X3 ..] channels X offsets", false);
-			createValue (chan2offset, "CHAN2_OFFSETS", "[Y1 Y2 Y3 ..] channels Y offsets", false);
+			createValue (chan1offset, "CHAN1_OFFSETS", "[X1 X2 X3 ..] channels X offsets", false, RTS2_VALUE_DEBUG);
+			createValue (chan2offset, "CHAN2_OFFSETS", "[Y1 Y2 Y3 ..] channels Y offsets", false, RTS2_VALUE_DEBUG);
 			fillPairs (chan1offset, chan2offset, optarg);
 			break;
 		case OPT_CHANNELS_DELTAS:
-			createValue (chan1delta, "CHAN1_DELTA", "[X1 X2 X3 ..] channels X deltas", false);
-			createValue (chan2delta, "CHAN2_DELTA", "[Y1 Y2 Y3 ..] channels Y deltas", false);
+			createValue (chan1delta, "CHAN1_DELTA", "[X1 X2 X3 ..] channels X deltas", false, RTS2_VALUE_DEBUG);
+			createValue (chan2delta, "CHAN2_DELTA", "[Y1 Y2 Y3 ..] channels Y deltas", false, RTS2_VALUE_DEBUG);
 			fillPairs (chan1delta, chan2delta, optarg);
 			break;
 		default:

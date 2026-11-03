@@ -120,6 +120,22 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   0 s frames at every script repeat on D50. `kernel/tests/test_value_que`.
   [MJ 2026-10-18]
 
+**Device values** [MJ 2026-11-03]
+- Right after `infotime`/`uptime`, every device sends its identity:
+  `DRIVER` (executable), `BUILD` (`git describe` at configure time),
+  `LINKED` (the executable's mtime), and `SDK_VER`/`HW_VER` when the driver
+  calls `setSdkVersion ()`/`setHwVersion ()` from `initHardware ()` (gxccd,
+  fli and andor do). They are constant values (`Device::Device`), not part
+  of classic, and carry `RTS2_VALUE_DEVPREFIX`, so FITS has `C0.BUILD`,
+  `T0.BUILD`, ... instead of one device's overwriting the other's. A new
+  driver on a vendor SDK should set both.
+- Values an operator does not need in normal work carry `RTS2_VALUE_DEBUG`
+  (camd: stats beyond average/min/max, `center_*`, `sep_*`, WCS, channel
+  geometry, temperature history knobs). rts2-mon hides them unless the
+  Debug menu item or `--show-debug` is on, and its Ctrl-F searches only
+  what is shown. The flag is display only: FITS, scripts and `-s` are
+  unaffected. Mark the internals of a new driver the same way.
+
 **Event loop**
 - Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
   script line) may call `oneRunLoop ()`. A nested loop leaves the outer one
@@ -335,6 +351,13 @@ it, and say which classes you added.
   class (add `never` to `flipping`), with `AltAz` as its sibling. Deferred
   on purpose until all mounts in use are ported; `GEM` and `Fork` are
   faithful classic ports for now.
+- **Value order and shared device parts.** [MJ 2026-11-03] (1) A display
+  tier per value (identity, essential, normal, debug), sorted once in the
+  device's value vector before it serves anyone: no wire flag, so classic
+  clients see only a different order. (2) Components instead of copies in
+  every driver: a `Cooler` owned by `Camera` (COOLING/CCD_SET/CCD_TEMP/
+  CCD_AIR/TEMPPWR, polling, history, nightcool, a temp_stable flag),
+  connection health for serial/TCP/UDP devices, night-scheduled switches.
 
 ## Open items
 
