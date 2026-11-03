@@ -1765,6 +1765,14 @@ int Connection::sendMsg (const char *msg)
 		#endif
 		return -1;
 	}
+	// base note: classic wrote also while a non-blocking connect () was
+	// still in progress; the write fails with EAGAIN and the link is
+	// dropped (a device's first message - its build line, an init error -
+	// to a remote centrald, BART sensors to D50's, 2026-11-03). Nothing
+	// can be sent before the connect completes: messages and values are
+	// skipped (they are in syslog), commands wait in queSend ().
+	if (isConnState (CONN_INPROGRESS))
+		return -1;
 	len = strlen (msg) + 1;
 	char *mbuf = new char[len + 1];
 	strcpy (mbuf, msg);

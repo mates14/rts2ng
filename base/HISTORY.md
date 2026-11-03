@@ -4358,3 +4358,24 @@ ramp), gxccd and fli built; none run on hardware. coolerPower (false)
 after the off ramp is not visible on the dummy (its off temperature is
 the ambient one).
 
+## A device's first message dropped its link to a remote centrald (2026-11-03) [MJ]
+
+After the release with the build line, lascaux's log had, at each daemon
+start, `connection centrald (147.231.107.225) ... dropped: send failed:
+Resource temporarily unavailable, message 'M ... build ...'` for
+RAIN_BART, WEATHER_BART and SCH: the devices that also register with
+D50's centrald. The link to it was still connecting (non-blocking,
+`CONN_INPROGRESS`) when `Device::init ()` logged the build line, the
+message was written into the unconnected socket, EAGAIN, drop; the
+reconnect follows 60 s later and logs nothing. Never before today in the
+logs with an `M` line; the "focus change started" (`R`) drops of
+2026-10-20 have the same signature and were probably the same thing.
+`sendValue ()` already skipped `CONN_INPROGRESS` links, `sendMessage ()`
+and `sendProgress ()` did not. Now `sendMsg ()` skips them for every
+sender (commands were already held back by `queSend ()`). UPSTREAM_BUGS.
+
+Bench: camd-dummy with `--server localhost:16170 --server
+10.255.255.1:617` (never answers, the connect stays in progress): before,
+the same drop as on lascaux right after the build line; after, none, and
+the local centrald link works (rts2-sendcmd `info`).
+

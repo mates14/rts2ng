@@ -93,6 +93,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   completes. Do not change this ordering: every client and device ever
   written depends on it. Clients must cope with it (see `gui/` viewer's
   cache-and-replay). `UPSTREAM_BUGS.md`, "PROTOCOL DESIGN NOTE".
+- `Connection::sendMsg ()` writes nothing while the link is
+  `CONN_INPROGRESS` (non-blocking connect not finished): the write would
+  fail with EAGAIN and drop the link for 60 s (UPSTREAM_BUGS, "Writes
+  before a non-blocking connect completes"). [MJ 2026-11-03]
 - `Connection::isName()` accepts `nullptr` (returns false). Callers rely on
   it; `getOpenConnection(nullptr)` used to crash `rts2-focusc`.
 - `Client::Client()` takes the user name from `getpwuid(geteuid())`, so

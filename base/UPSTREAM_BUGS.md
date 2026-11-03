@@ -1685,6 +1685,18 @@ short write - as a fatal error and drops the connection; `sendBinaryData ()`
 while a burst of values goes out loses its link. Not fixed in rts2ng yet;
 logged distinctly, to see whether it is what happens at SBT.
 
+## Writes before a non-blocking connect completes drop the link (`lib/rts2/connection.cpp`) [MJ 2026-11-03]
+
+`DevConnectionMaster::init ()` connects non-blocking and leaves the link in
+`CONN_INPROGRESS`; `queSend ()` holds commands back then, and
+`sendValue ()` skips such a link, but `sendMessage ()`, `sendProgress ()`
+and the other senders write anyway. The write fails with EAGAIN and
+`sendMsg ()` drops the connection, which is retried only 60 s later. A
+device logging anything while its link to a remote centrald is still
+connecting loses that link: rts2ng's build line at startup did it every
+time to the BART sensors' link to D50's centrald. Fixed in rts2ng:
+`sendMsg ()` writes nothing while `CONN_INPROGRESS`.
+
 ## A lost authorization handshake is never retried (`lib/rts2/connection.cpp`, `rts2-centrald`) [JS 2026-10-15]
 
 Nothing times out `CONN_AUTH_PENDING`: if one step of the key/authorize
