@@ -23,6 +23,8 @@
 // RTS2_HAVE_FLOCK / lockf() fallback in checkLockFile/init - both were for
 // platforms without flock(), which modern Linux always has.
 
+#include <algorithm>
+#include <map>
 #include <fcntl.h>
 #include <grp.h>
 #include <poll.h>
@@ -995,6 +997,28 @@ void Daemon::deleteTemporaryValues ()
 		else
 			iter++;
 	}
+}
+
+// base note: classic lists values in creation order, which follows the
+// class hierarchy (Device, then Camera's 75, then the driver's), so the ones
+// an operator wants are scattered. The order is a device-side choice only:
+// no client depends on it (clients look values up by name), and infotime,
+// uptime and the constant values are sent before this list anyway.
+void Daemon::sortValuesForDisplay ()
+{
+	std::map <const Value *, size_t> rank;
+	for (size_t i = 0; i < essentialValues.size (); i++)
+		rank.emplace (essentialValues[i], i);
+	const size_t normal = essentialValues.size ();
+	auto key = [&] (CondValue *cv) -> size_t
+	{
+		std::map <const Value *, size_t>::iterator it = rank.find (cv->getValue ());
+		if (it != rank.end ())
+			return it->second;
+		return cv->getValue ()->getDebugFlag () ? normal + 1 : normal;
+	};
+	std::stable_sort (values.begin (), values.end (), [&] (CondValue *a, CondValue *b) { return key (a) < key (b); });
+	essentialValues.clear ();
 }
 
 Value * Daemon::getOwnValue (const char *v_name)

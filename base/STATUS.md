@@ -135,6 +135,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   Debug menu item or `--show-debug` is on, and its Ctrl-F searches only
   what is shown. The flag is display only: FITS, scripts and `-s` are
   unaffected. Mark the internals of a new driver the same way.
+- `Device::beforeRun ()` reorders the value list once, before any client
+  gets it (`Daemon::sortValuesForDisplay`): values marked with
+  `markEssential ()` first, in the order marked, then the rest in creation
+  order, then the debug ones. No wire flag, nothing in classic or here
+  reads values by position. A driver that overrides `beforeRun ()` must
+  call `Device::beforeRun ()`. Camera marks exposure, IMAGETYP, OBJECT,
+  binning, WINDOW, exposure_end, que_exp_num, last_image, average, and
+  where they are created filter/FILTx, SHUTTER, CCD_TEMP, COOLING, CCD_SET.
 
 **Event loop**
 - Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
@@ -351,13 +359,12 @@ it, and say which classes you added.
   class (add `never` to `flipping`), with `AltAz` as its sibling. Deferred
   on purpose until all mounts in use are ported; `GEM` and `Fork` are
   faithful classic ports for now.
-- **Value order and shared device parts.** [MJ 2026-11-03] (1) A display
-  tier per value (identity, essential, normal, debug), sorted once in the
-  device's value vector before it serves anyone: no wire flag, so classic
-  clients see only a different order. (2) Components instead of copies in
-  every driver: a `Cooler` owned by `Camera` (COOLING/CCD_SET/CCD_TEMP/
+- **Shared device parts.** [MJ 2026-11-03] Components instead of copies
+  in every driver: a `Cooler` owned by `Camera` (COOLING/CCD_SET/CCD_TEMP/
   CCD_AIR/TEMPPWR, polling, history, nightcool, a temp_stable flag),
   connection health for serial/TCP/UDP devices, night-scheduled switches.
+  Also essential values for the other device types (teld, focusd, dome,
+  filterd); only the camera marks any so far.
 
 ## Open items
 

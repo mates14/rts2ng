@@ -4275,9 +4275,8 @@ Too many values: camd already had `RTS2_VALUE_DEBUG`, which rts2-mon hides
 by default, but nothing set it. Now the secondary camera values do (64
 visible of 93 in camd-dummy, 29 hidden). No wire change, the flag is classic.
 
-A server-side ordering by importance (tiers sorted in the device's value
-vector, no wire flag) and a shared cooling component were discussed and
-left for later (STATUS, "Agreed but not done").
+A shared cooling component was discussed and left for later (STATUS,
+"Agreed but not done"). The ordering was done the same day, below.
 
 Bench: private centrald + camd-dummy, the metadata dump read off the
 socket (identity values 3rd-5th, after `infotime`/`uptime`); dummy
@@ -4287,4 +4286,22 @@ in the header. Andor compiled against the SDK in `~/andor`, gxccd and FLI
 built; their version strings are untested without the cameras. rts2-mon's
 screen not looked at (no terminal to drive it here), only the flag on the
 wire it filters by.
+
+Ordering, same day [MJ]: `Daemon::markEssential ()` and
+`sortValuesForDisplay ()`, called from `Device::beforeRun ()`, after
+`initHardware ()` has created the driver's values and before the run loop
+accepts anyone. A stable sort of the `CondValue` pointers: marked values
+first in marking order, the rest in creation order, debug values last.
+Checked that nothing reads values by position: `Connection::valueAt ()`
+has no callers in base, db, web or gui, and lookups are by name;
+`ValueQue` holds `CondValue *`, which a sort of the vector does not move.
+No driver overrides `beforeRun ()`. A device-side order needs no flag on
+the wire, so classic clients just see another order.
+
+Bench: camd-dummy now lists infotime, uptime, DRIVER, BUILD, LINKED,
+chips (constant), exposure, IMAGETYP, OBJECT, binning, WINDOW,
+exposure_end, que_exp_num, last_image, average, CCD_TEMP, SHUTTER,
+COOLING, CCD_SET, then the rest, with the 29 debug values at the end.
+`exposure=2 E 1 E 1` through rts2-scriptexec still set its values by name
+and wrote both images. Hardened (dpkg-buildflags) build clean.
 

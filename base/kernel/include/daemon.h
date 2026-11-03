@@ -246,6 +246,13 @@ class Daemon:public Block
 		 */
 		int autosaveValues ();
 
+		/**
+		 * Mark a value as one of the essential ones, which an operator
+		 * looks for first. sortValuesForDisplay () puts them, in the order
+		 * they were marked, at the top of the value list.
+		 */
+		void markEssential (Value *value) { essentialValues.push_back (value); }
+
 	protected:
 		/**
 		 * Delete all saved reference of given value.
@@ -314,6 +321,15 @@ class Daemon:public Block
 		 * Called before main daemon loop.
 		 */
 		virtual void beforeRun () {}
+
+		/**
+		 * Reorder the value list for display: essential values first (in
+		 * the order marked), then the others in creation order, then
+		 * RTS2_VALUE_DEBUG ones. Called by Device::beforeRun (), before any
+		 * client gets the metadata dump; values created after it are
+		 * appended at the end as usual.
+		 */
+		void sortValuesForDisplay ();
 
 		/**
 		 * Returns true if connection is running.
@@ -704,6 +720,8 @@ class Daemon:public Block
 		rts2_status_t state;
 
 		CondValueVector values;
+		// base note: not in classic; see markEssential ()
+		std::vector <Value *> essentialValues;
 		// values which do not change, they are send only once at connection
 		// initialization
 		ValueVector constValues;

@@ -1139,6 +1139,7 @@ void Device::beforeRun ()
 		logStream (MESSAGE_ERROR) << "some values are not set. Please see above errors and fix them, or run driver with --nocheck option" << sendLog;
 		exit (1);
 	}
+	sortValuesForDisplay ();
 }
 
 int Device::authorize (int centrald_num, DevConnection * conn)

@@ -826,6 +826,7 @@ class Camera:public rts2core::ScriptDevice
 		void createExpType ()
 		{
 			createValue (expType, "SHUTTER", "shutter state", true, RTS2_VALUE_WRITABLE);
+			markEssential (expType);
 			expType->addSelVal ("LIGHT", nullptr);
 			expType->addSelVal ("DARK", nullptr);
 		}
@@ -839,7 +840,10 @@ class Camera:public rts2core::ScriptDevice
 		void createFilter (bool working = false)
 		{
 			if (camFilterVal == nullptr)
+			{
 				createValue (camFilterVal, "filter", "used filter number", false, RTS2_VALUE_WRITABLE, working ? CAM_WORKING : CAM_EXPOSING);
+				markEssential (camFilterVal);
+			}
 			if (camFilterOffsets == nullptr)
 				createValue (camFilterOffsets, "filter_offsets", "filter offsets", false, RTS2_VALUE_WRITABLE);
 
@@ -898,7 +902,7 @@ class Camera:public rts2core::ScriptDevice
 		/**
 		 * Create value for CCD temperature sensor.
 		 */
-		void createTempCCD () { createValue (tempCCD, "CCD_TEMP", "CCD temperature"); }
+		void createTempCCD () { createValue (tempCCD, "CCD_TEMP", "CCD temperature"); markEssential (tempCCD); }
 
 		/**
 		 * Create statistics value to hold array of temperatures histories.
@@ -931,6 +935,8 @@ class Camera:public rts2core::ScriptDevice
 		{
 			createValue (coolingOnOff, "COOLING", "camera cooling start/stop", true, RTS2_VALUE_WRITABLE | RTS2_DT_ONOFF | RTS2_VALUE_AUTOSAVE, CAM_WORKING);
 			createValue (tempSet, "CCD_SET", "CCD set temperature", true, RTS2_VALUE_WRITABLE, CAM_WORKING);
+			markEssential (coolingOnOff);
+			markEssential (tempSet);
 			createValue (nightCoolTemp, "nightcool", "night cooling temperature", false, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 			createValue (rts2ControlCooling, "autocooling", "turn off cooling after night", false, RTS2_VALUE_WRITABLE);
 			rts2ControlCooling->setValueBool (true);

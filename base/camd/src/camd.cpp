@@ -68,6 +68,7 @@ using namespace rts2camd;
 FilterVal::FilterVal (Camera *master, const char *n, char fil)
 {
 	master->createValue (filter, (std::string ("FILT") + fil).c_str (), "used filter number", true, RTS2_VALUE_WRITABLE, CAM_EXPOSING);
+	master->markEssential (filter);
 	master->createValue (offsets, (std::string ("filter_offsets_") + fil).c_str (), "filter offsets", false, RTS2_VALUE_WRITABLE);
 	master->createValue (moving, (std::string ("filter_moving_") + fil).c_str (), "if filter wheel is moving", false);
 
@@ -583,6 +584,19 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 	createValue (needReload, "need_reload", "camera needs to be reloaded after finishing the exposure", false, RTS2_VALUE_DEBUG);
 	needReload->setValueBool (false);
+
+	// base note: what an operator looks for first goes to the top of the
+	// list (Daemon::sortValuesForDisplay); the filter, shutter and
+	// temperature values are marked where they are created
+	markEssential (exposure);
+	markEssential (imageType);
+	markEssential (objectName);
+	markEssential (binning);
+	markEssential (chipUsedReadout);
+	markEssential (exposureEnd);
+	markEssential (quedExpNumber);
+	markEssential (lastImagePath);
+	markEssential (average);
 
 	// other options..
 	addOption (OPT_RTS2_COOLING, "no-autocooling", 0, "when set, RTS2 did not switch cooling off at the end of night");
