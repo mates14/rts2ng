@@ -175,6 +175,20 @@
 			<div id="year-legend" class="sky-legend"></div>
 			<div id="year-status" class="status-line"></div>
 		</section>
+
+		<section id="field-panel" class="panel target-box" hidden>
+			<h2>Field <span id="field-summary" class="sky-summary"></span></h2>
+			<p class="hint">
+				Our own sky maps (SBT, Makak) around the target, finest
+				covering map first; drag to pan, scroll to zoom.
+			</p>
+			<form id="field-form" class="inline-form">
+				<label>Map <select id="field-hips"></select></label>
+				<button type="button" id="field-recenter">recenter</button>
+			</form>
+			<div id="field-view"></div>
+			<div id="field-status" class="status-line"></div>
+		</section>
 	</div>
 
 	<section id="lc-panel" class="panel target-box" hidden>
@@ -203,6 +217,7 @@
 			</label>
 			<label>Other telescope's proxy path <input id="peer-prefix" type="text" placeholder="/d50 or /sbt"></label>
 			<label>Light curve service <input id="lcgen-base" type="text" placeholder="https://hog.asu.cas.cz/lcgen/ (empty: no light curve)"></label>
+			<label>Field maps (HiPS URLs, finest first) <input id="field-hips-urls" type="text" placeholder="space-separated (empty: no field view)"></label>
 			<button type="submit">Save</button>
 		</form>
 	</details>

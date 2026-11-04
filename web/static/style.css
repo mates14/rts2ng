@@ -976,11 +976,32 @@ header h1 {
 	margin-top: 16px;
 }
 
+/* the field map rides along as a fixed-width, square third column; the
+ * two plots keep sharing the rest. A hidden field panel leaves that
+ * column empty (zero width). Narrower screens fall back to the
+ * auto-fit stacking of .target-boxes. */
+@media (min-width: 1100px) {
+	#target-graphs {
+		grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr) auto;
+	}
+	#field-panel {
+		width: 380px;
+	}
+}
+
 /* the light curve sits under the visibility plots at full width, outside
  * their grid: spanning that grid's columns would keep its third (empty)
  * column from collapsing and squeeze the two plots to a third each */
 #lc-panel {
 	margin-top: 16px;
+}
+
+/* Aladin Lite fills its container, so the container needs a real size */
+#field-view {
+	width: 100%;
+	max-width: 560px;
+	aspect-ratio: 1;
+	margin-top: 8px;
 }
 
 .target-box {

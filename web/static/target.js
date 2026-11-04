@@ -230,6 +230,7 @@ async function loadTarget (id) {
 	document.getElementById ('sky-panel').hidden = true;
 	document.getElementById ('year-panel').hidden = true;
 	document.getElementById ('lc-panel').hidden = true;
+	document.getElementById ('field-panel').hidden = true;
 	document.getElementById ('create-type-row').hidden = true;
 
 	const [d50, sbt] = await Promise.all ([loadSiteData ('d50', id), loadSiteData ('sbt', id)]);
@@ -255,6 +256,7 @@ async function loadTarget (id) {
 	await loadVisibility ();
 	await loadYearVisibility ();
 	loadLightCurve ();
+	loadFieldView ();
 }
 
 document.getElementById ('load-form').addEventListener ('submit', (ev) => {
@@ -514,6 +516,7 @@ async function startNewTarget () {
 	document.getElementById ('sky-panel').hidden = true;
 	document.getElementById ('year-panel').hidden = true;
 	document.getElementById ('lc-panel').hidden = true;
+	document.getElementById ('field-panel').hidden = true;
 
 	const freeIdOn = async (site, after) => {
 		const url = 'api/db/new-target-id' + (after !== null ? `?after=${after}` : '');
@@ -842,6 +845,7 @@ document.getElementById ('peer-config-form').addEventListener ('submit', (ev) =>
 	document.getElementById ('peer-prefix').value = peerPrefix ();
 	localStorage.setItem (LCGEN_KEY, document.getElementById ('lcgen-base').value.trim ());
 	document.getElementById ('lcgen-base').value = lcgenBase ();
+	localStorage.setItem (FIELD_HIPS_KEY, document.getElementById ('field-hips-urls').value.trim ());
 	if (currentId !== null)
 		loadTarget (currentId);
 });
@@ -920,6 +924,213 @@ async function loadLightCurve () {
 }
 
 document.getElementById ('lcgen-base').value = lcgenBase ();
+
+// --- Field view (our own HiPS maps) ------------------------------------------
+//
+// A SIMBAD-style look at the target's surroundings, drawn by Aladin Lite
+// from our own HiPS (SBT gri, Makak G) on lascaux rather than from CDS.
+// Every survey is given to Aladin as a full URL: a bare CDS ID (and
+// Aladin's own default, P/DSS2/color, used when no `survey` is passed)
+// makes it ask the CDS MocServer first, and when CDS is unreachable that
+// stalls tile loading until the request times out. Each map's Moc.fits
+// decides which map is shown: the first one in the list (finest first)
+// that covers the position wins.
+
+const FIELD_HIPS_KEY = 'rts2-target-field-hips';
+const FIELD_HIPS_DEFAULT = 'https://lascaux.asu.cas.cz/m/hips/gri https://lascaux.asu.cas.cz/m/hips/G';
+const ALADIN_MODULE = 'https://cdn.jsdelivr.net/npm/aladin-lite@3.8.2/dist/aladin.js';
+// how many HiPS pixels the initial view spans - wide enough to recognise
+// the field, fine enough not to be just a few blurry pixels
+const FIELD_PIXELS_ACROSS = 300;
+
+function fieldHipsUrls () {
+	const stored = localStorage.getItem (FIELD_HIPS_KEY);
+	const s = stored !== null ? stored : FIELD_HIPS_DEFAULT;
+	// made absolute: Aladin takes anything that is not a full URL for a
+	// CDS ID and goes to ask the MocServer about it
+	return s.split (/\s+/).filter ((u) => u).map ((u) => new URL (u, location.href).href.replace (/\/+$/, ''));
+}
+
+let aladinPromise = null;
+
+function loadAladin () {
+	if (!aladinPromise) {
+		aladinPromise = import (ALADIN_MODULE).then (async (m) => {
+			await m.default.init;
+			return m.default;
+		});
+		aladinPromise.catch (() => { aladinPromise = null; }); // allow a retry
+	}
+	return aladinPromise;
+}
+
+const hipsInfoCache = new Map ();
+
+/** {url, title, fov} from a HiPS's properties file. */
+function hipsInfo (url) {
+	if (!hipsInfoCache.has (url)) {
+		const p = fetch (url + '/properties')
+			.then ((r) => {
+				if (!r.ok)
+					throw new Error (`${url}/properties: HTTP ${r.status}`);
+				return r.text ();
+			})
+			.then ((text) => {
+				const props = {};
+				for (const line of text.split ('\n')) {
+					const m = line.match (/^\s*([^#=\s]+)\s*=\s*(.*?)\s*$/);
+					if (m)
+						props[m[1]] = m[2];
+				}
+				const scale = parseFloat (props.hips_pixel_scale);
+				const fov = Number.isFinite (scale) ? Math.min (20, Math.max (0.05, scale * FIELD_PIXELS_ACROSS)) : 1;
+				return { url, title: props.obs_title || url.split ('/').pop (), fov };
+			});
+		p.catch (() => hipsInfoCache.delete (url));
+		hipsInfoCache.set (url, p);
+	}
+	return hipsInfoCache.get (url);
+}
+
+let fieldAladin = null;
+let fieldKey = null;      // the url list fieldAladin was built for
+let fieldInfos = [];      // hipsInfo () of the maps that answered
+let fieldMocs = null;     // url -> promise of a ready MOC (or null)
+let fieldMarker = null;
+let fieldCurrent = null;  // url of the map shown
+let fieldTarget = null;   // {ra, dec, fov}
+let fieldGen = 0;         // drops results of a superseded load
+
+function fieldShow (url, fov) {
+	if (url !== fieldCurrent) {
+		fieldAladin.setBaseImageLayer (url);
+		fieldCurrent = url;
+	}
+	document.getElementById ('field-hips').value = url;
+	if (fieldTarget) {
+		fieldAladin.gotoRaDec (fieldTarget.ra, fieldTarget.dec);
+		fieldAladin.setFoV (fov);
+		fieldTarget.fov = fov;
+	}
+}
+
+/** Resolves to the MOC once Aladin has loaded it, or null if it cannot
+ * (missing Moc.fits never calls back, hence the timeout). */
+function loadFieldMoc (A, url) {
+	return new Promise ((resolve) => {
+		const timer = setTimeout (() => resolve (null), 8000);
+		const moc = A.MOCFromURL (url + '/Moc.fits', { name: url, opacity: 0 },
+			() => { clearTimeout (timer); resolve (moc); },
+			() => { clearTimeout (timer); resolve (null); });
+		fieldAladin.addMOC (moc);
+	});
+}
+
+async function loadFieldView () {
+	const panel = document.getElementById ('field-panel');
+	const statusEl = document.getElementById ('field-status');
+	const summaryEl = document.getElementById ('field-summary');
+	const urls = fieldHipsUrls ();
+	const ra = parseCoordinate (document.getElementById ('f-ra').value, true);
+	const dec = parseCoordinate (document.getElementById ('f-dec').value, false);
+	if (!urls.length || currentId === null || document.getElementById ('position-fields').hidden || ra === null || dec === null) {
+		panel.hidden = true;
+		return;
+	}
+	const gen = ++fieldGen;
+	panel.hidden = false;
+	setStatus (statusEl, true, 'loading…');
+
+	let A;
+	try {
+		A = await loadAladin ();
+	} catch (er) {
+		setStatus (statusEl, false, `cannot load Aladin Lite (${ALADIN_MODULE}): ${er.message}`);
+		return;
+	}
+
+	const key = urls.join (' ');
+	if (!fieldAladin || fieldKey !== key) {
+		const settled = await Promise.allSettled (urls.map (hipsInfo));
+		if (gen !== fieldGen)
+			return;
+		const infos = settled.filter ((s) => s.status === 'fulfilled').map ((s) => s.value);
+		const failed = settled.filter ((s) => s.status === 'rejected').map ((s) => s.reason.message);
+		if (!infos.length) {
+			setStatus (statusEl, false, `no map could be read: ${failed.join (' / ')}`);
+			return;
+		}
+		const view = document.getElementById ('field-view');
+		view.innerHTML = '';
+		fieldInfos = infos;
+		fieldKey = key;
+		fieldCurrent = infos[0].url;
+		fieldAladin = A.aladin (view, {
+			survey: infos[0].url,
+			target: `${ra} ${dec}`,
+			fov: infos[0].fov,
+			showLayersControl: false,
+			showSimbadPointerControl: false,
+			showProjectionControl: false,
+			showShareControl: false,
+			showSettingsControl: false,
+			showContextMenu: false,
+			showCooGridControl: true,
+			showFullscreenControl: true,
+		});
+		fieldMarker = A.catalog ({ name: 'target', shape: 'cross', color: '#ff3030', sourceSize: 24 });
+		fieldAladin.addCatalog (fieldMarker);
+		fieldMocs = new Map (infos.map ((i) => [i.url, loadFieldMoc (A, i.url)]));
+		const select = document.getElementById ('field-hips');
+		select.innerHTML = infos.map ((i) => `<option value="${escapeHtml (i.url)}">${escapeHtml (i.title)}</option>`).join ('');
+		if (failed.length)
+			console.warn ('field view: ', failed);
+	}
+
+	fieldTarget = { ra, dec, fov: null };
+	fieldMarker.clear ();
+	fieldMarker.addSources ([A.source (ra, dec, { name: document.getElementById ('f-name').value.trim () })]);
+	fieldAladin.gotoRaDec (ra, dec);
+
+	let chosen = null;
+	for (const info of fieldInfos) {
+		const moc = await fieldMocs.get (info.url);
+		if (gen !== fieldGen)
+			return;
+		let inside = false;
+		try {
+			inside = moc !== null && moc.contains (ra, dec);
+		} catch (er) {
+			inside = false;
+		}
+		if (inside) {
+			chosen = info;
+			break;
+		}
+	}
+	fieldShow ((chosen || fieldInfos[0]).url, (chosen || fieldInfos[0]).fov);
+	summaryEl.textContent = chosen ? `- ${chosen.title}` : '- outside our maps';
+	setStatus (statusEl, !!chosen, chosen ? '' : 'none of the maps covers this position');
+}
+
+document.getElementById ('field-hips').addEventListener ('change', (ev) => {
+	const info = fieldInfos.find ((i) => i.url === ev.target.value);
+	if (fieldAladin && info)
+		fieldShow (info.url, info.fov);
+});
+
+document.getElementById ('field-recenter').addEventListener ('click', () => {
+	if (fieldAladin && fieldTarget) {
+		fieldAladin.gotoRaDec (fieldTarget.ra, fieldTarget.dec);
+		if (fieldTarget.fov)
+			fieldAladin.setFoV (fieldTarget.fov);
+	}
+});
+
+{
+	const stored = localStorage.getItem (FIELD_HIPS_KEY);
+	document.getElementById ('field-hips-urls').value = stored !== null ? stored : FIELD_HIPS_DEFAULT;
+}
 
 // --- Visibility plot ---------------------------------------------------------
 //
@@ -1734,6 +1945,7 @@ for (const elId of ['f-ra', 'f-dec']) {
 		loadVisibility ();
 		loadYearVisibility ();
 		loadLightCurve ();
+		loadFieldView ();
 	});
 }
 
@@ -1861,6 +2073,7 @@ async function prefillNewTarget (qs) {
 	await loadVisibility ();
 	await loadYearVisibility ();
 	loadLightCurve ();
+	loadFieldView ();
 }
 
 // Support ?id=N in the URL so a link (e.g. from a future target-list
