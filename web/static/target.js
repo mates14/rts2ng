@@ -939,9 +939,15 @@ document.getElementById ('lcgen-base').value = lcgenBase ();
 const FIELD_HIPS_KEY = 'rts2-target-field-hips';
 const FIELD_HIPS_DEFAULT = 'https://lascaux.asu.cas.cz/m/hips/gri https://lascaux.asu.cas.cz/m/hips/G';
 const ALADIN_MODULE = 'https://cdn.jsdelivr.net/npm/aladin-lite@3.8.2/dist/aladin.js';
-// how many HiPS pixels the initial view spans - wide enough to recognise
-// the field, fine enough not to be just a few blurry pixels
-const FIELD_PIXELS_ACROSS = 300;
+// The initial view: a finding-chart-sized 3', unless the map is too
+// coarse for that to be more than a few pixels (Makak, ~51"/pixel),
+// then FIELD_MIN_PIXELS map pixels across.
+const FIELD_FOV_DEG = 3 / 60;
+const FIELD_MIN_PIXELS = 30;
+// Gap the marker leaves around the target: twice the size of a star on
+// the map (~5" on SBT gri), but at least two map pixels.
+const FIELD_GAP_ARCSEC = 10;
+const FIELD_MARKER_COLOR = '#ff3030';
 
 function fieldHipsUrls () {
 	const stored = localStorage.getItem (FIELD_HIPS_KEY);
@@ -966,7 +972,7 @@ function loadAladin () {
 
 const hipsInfoCache = new Map ();
 
-/** {url, title, fov} from a HiPS's properties file. */
+/** {url, title, fov, gapArcsec} from a HiPS's properties file. */
 function hipsInfo (url) {
 	if (!hipsInfoCache.has (url)) {
 		const p = fetch (url + '/properties')
@@ -982,9 +988,15 @@ function hipsInfo (url) {
 					if (m)
 						props[m[1]] = m[2];
 				}
-				const scale = parseFloat (props.hips_pixel_scale);
-				const fov = Number.isFinite (scale) ? Math.min (20, Math.max (0.05, scale * FIELD_PIXELS_ACROSS)) : 1;
-				return { url, title: props.obs_title || url.split ('/').pop (), fov };
+				let scale = parseFloat (props.hips_pixel_scale); // degrees
+				if (!Number.isFinite (scale) || scale <= 0)
+					scale = 1 / 3600;
+				return {
+					url,
+					title: props.obs_title || url.split ('/').pop (),
+					fov: Math.min (20, Math.max (FIELD_FOV_DEG, scale * FIELD_MIN_PIXELS)),
+					gapArcsec: Math.max (FIELD_GAP_ARCSEC, 2 * scale * 3600),
+				};
 			});
 		p.catch (() => hipsInfoCache.delete (url));
 		hipsInfoCache.set (url, p);
@@ -999,19 +1011,48 @@ let fieldMocs = null;     // url -> promise of a ready MOC (or null)
 let fieldMarker = null;
 let fieldCurrent = null;  // url of the map shown
 let fieldTarget = null;   // {ra, dec, fov}
+let fieldGapArcsec = FIELD_GAP_ARCSEC;
 let fieldGen = 0;         // drops results of a superseded load
 
-function fieldShow (url, fov) {
-	if (url !== fieldCurrent) {
-		fieldAladin.setBaseImageLayer (url);
-		fieldCurrent = url;
+function fieldShow (info) {
+	if (info.url !== fieldCurrent) {
+		fieldAladin.setBaseImageLayer (info.url);
+		fieldCurrent = info.url;
 	}
-	document.getElementById ('field-hips').value = url;
+	fieldGapArcsec = info.gapArcsec;
+	document.getElementById ('field-hips').value = info.url;
 	if (fieldTarget) {
 		fieldAladin.gotoRaDec (fieldTarget.ra, fieldTarget.dec);
-		fieldAladin.setFoV (fov);
-		fieldTarget.fov = fov;
+		fieldAladin.setFoV (info.fov);
+		fieldTarget.fov = info.fov;
 	}
+}
+
+/** Finding-chart marker: an inverted V whose tip is left out, so the
+ * object sits uncovered in the gap where the two legs would meet. The
+ * gap is fixed on the sky (fieldGapArcsec), so it keeps framing the
+ * object as you zoom, down to a minimum on screen. Called by Aladin
+ * for every redraw with the source's canvas position. */
+function drawFieldMarker (src, ctx) {
+	const [fovDeg] = fieldAladin.getFov ();
+	const [width] = fieldAladin.getSize ();
+	const pxPerArcsec = width / (fovDeg * 3600);
+	const gap = Math.max (6, fieldGapArcsec * pxPerArcsec);
+	const len = Math.min (40, Math.max (14, 1.5 * gap));
+	const half = Math.PI / 6; // each leg 30 deg off the vertical
+	ctx.save ();
+	ctx.strokeStyle = FIELD_MARKER_COLOR;
+	ctx.lineWidth = 2;
+	ctx.lineCap = 'round';
+	ctx.beginPath ();
+	for (const side of [-1, 1]) {
+		const dx = side * Math.sin (half);
+		const dy = Math.cos (half); // canvas y grows downwards: legs below the object
+		ctx.moveTo (src.x + dx * gap, src.y + dy * gap);
+		ctx.lineTo (src.x + dx * (gap + len), src.y + dy * (gap + len));
+	}
+	ctx.stroke ();
+	ctx.restore ();
 }
 
 /** Resolves to the MOC once Aladin has loaded it, or null if it cannot
@@ -1077,8 +1118,9 @@ async function loadFieldView () {
 			showContextMenu: false,
 			showCooGridControl: true,
 			showFullscreenControl: true,
+			showReticle: false, // drawFieldMarker () marks the target instead
 		});
-		fieldMarker = A.catalog ({ name: 'target', shape: 'cross', color: '#ff3030', sourceSize: 24 });
+		fieldMarker = A.catalog ({ name: 'target', shape: drawFieldMarker, color: FIELD_MARKER_COLOR });
 		fieldAladin.addCatalog (fieldMarker);
 		fieldMocs = new Map (infos.map ((i) => [i.url, loadFieldMoc (A, i.url)]));
 		const select = document.getElementById ('field-hips');
@@ -1108,7 +1150,7 @@ async function loadFieldView () {
 			break;
 		}
 	}
-	fieldShow ((chosen || fieldInfos[0]).url, (chosen || fieldInfos[0]).fov);
+	fieldShow (chosen || fieldInfos[0]);
 	summaryEl.textContent = chosen ? `- ${chosen.title}` : '- outside our maps';
 	setStatus (statusEl, !!chosen, chosen ? '' : 'none of the maps covers this position');
 }
@@ -1116,7 +1158,7 @@ async function loadFieldView () {
 document.getElementById ('field-hips').addEventListener ('change', (ev) => {
 	const info = fieldInfos.find ((i) => i.url === ev.target.value);
 	if (fieldAladin && info)
-		fieldShow (info.url, info.fov);
+		fieldShow (info);
 });
 
 document.getElementById ('field-recenter').addEventListener ('click', () => {
