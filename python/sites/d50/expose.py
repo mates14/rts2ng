@@ -119,7 +119,9 @@ class Expose(scriptcomm.Rts2Comm):
         return True
 
     def wait_for_tracking(self):
-        if self.isParked('T0'):
+        # (getState & TEL_MASK_MOVING) == TEL_PARKED, spelled out: isParked() and those
+        # constants are missing from older rts2 packages that may come first on sys.path
+        if (self.getState('T0') & 0x007) == 0x002:
             raise TimeoutError("telescope is parked, not waiting for tracking")
         self.waitMask('T0', scriptcomm.TEL_TRACKING, 300)
 
