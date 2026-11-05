@@ -126,7 +126,8 @@ class GuideScript(scriptcomm.Rts2Comm):
         # how much of the detected offset to apply (to dump resonance)
         # self.aggresivity = [0.7, 0.7]  # included in factor
         #self.exp_time = 0.5             # initial exposure time
-        self.exp_time = 1.0             # initial exposure time
+        #self.exp_time = 1.0             # initial exposure time
+        self.exp_time = 2.0             # initial exposure time
         self.exp_snr = 100         # minimum signal to noise ratio of the guide star
 
         # multiply the position error in pixels by this to get the pulse time
