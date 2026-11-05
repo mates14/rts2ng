@@ -17,12 +17,12 @@ count.  Mount moves (centering) do not end it.
 
 | option | meaning |
 |---|---|
-| `--filters` | filters in order, `rzgi` or `r,z,g,i` |
+| `-f/--filters` | filters in order, `rzgi` or `r,z,g,i` |
 | `-s/--snr N`, `--magerr E` | SNR to reach in every filter (E = 1.0857/SNR) |
 | `-e` | without `--snr`: fixed exposure; with it: exposure of filters without any magnitude |
 | `-m/--mag` | target magnitude, `16.3` or `r=16.3,g=16.9` |
 | `--mag-source` | where to look it up, in order (`atlas,lcgen`) |
-| `-f/--fallback-mag` | magnitude when no source knows the target |
+| `-F/--fallback-mag` | magnitude when no source knows the target |
 | `--tmin`, `--tmax` | limits of the computed times (1, 300 s; with accumulation, of the total) |
 | `--acquire NxT` | N unfiltered frames of T s before the cycles, for the centering |
 | `--acquire-filter` | filter of those frames (N) |

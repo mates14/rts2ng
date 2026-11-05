@@ -178,7 +178,7 @@ def parse_arguments():
 
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0],
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--filters", required=True,
+    parser.add_argument("-f", "--filters", required=True,
                         help="filters in order, 'rzgi' or 'r,z,g,i'")
     parser.add_argument("-s", "--snr", type=positive_float, help="SNR to reach in each filter")
     parser.add_argument("--magerr", type=positive_float, help="magnitude error to reach (instead of --snr)")
@@ -186,7 +186,7 @@ def parse_arguments():
                         help="fixed exposure time; with --snr, the one of filters without any magnitude")
     parser.add_argument("-m", "--mag", help="target magnitude, '16.3' or 'r=16.3,g=16.9' (else --mag-source)")
     parser.add_argument("--mag-source", default="atlas,lcgen", help="where to look the magnitude up, in order")
-    parser.add_argument("-f", "--fallback-mag", type=float, help="magnitude when no source knows the target")
+    parser.add_argument("-F", "--fallback-mag", type=float, help="magnitude when no source knows the target")
     parser.add_argument("--tmin", type=positive_float, default=1.0, help="shortest exposure")
     parser.add_argument("--tmax", type=positive_float, default=300.0, help="longest exposure")
     parser.add_argument("--acquire", help="unfiltered frames before the cycles, NxT, e.g. 3x10")
