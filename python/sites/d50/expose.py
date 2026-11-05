@@ -30,17 +30,23 @@ import os
 import random
 from time import sleep, time
 
-from rts2 import scriptcomm
-# the calculator from this checkout, which the script itself comes from; the
-# installed rts2 package may carry an older snrexp
-_snrexp = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'rts2', 'snrexp.py')
-if os.path.exists(_snrexp):
+
+def _checkout(name):
+    """rts2.<name> from this checkout, which the script itself comes from: an older
+    rts2 package earlier on sys.path (D50's /usr/local) would shadow the installed one."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'rts2', name + '.py')
+    if not os.path.exists(path):
+        import importlib
+        return importlib.import_module('rts2.' + name)
     import importlib.util
-    _spec = importlib.util.spec_from_file_location('snrexp', _snrexp)
-    snrexp = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(snrexp)
-else:
-    from rts2 import snrexp
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+scriptcomm = _checkout('scriptcomm')
+snrexp = _checkout('snrexp')
 
 TELESCOPE = 'D50'
 
