@@ -51,7 +51,7 @@ class Filtros(scriptcomm.Rts2Comm):
     }
 
     def __init__(self, exptime=120, narrow=False, snr=None, mag=None, fallback_mag=None,
-                 mag_sources=('atlas', 'lcgen'), tmin=5, tmax=300):
+                 mag_sources=('lcgen', 'atlas'), tmin=5, tmax=300):
         """Initialize the Filtros instance.
 
         Args:
@@ -60,7 +60,7 @@ class Filtros(scriptcomm.Rts2Comm):
             snr (float, optional): Requested SNR; the exposure time of each filter
                 is then computed from the current conditions (COND) instead.
             mag (str, optional): With snr: target magnitude, '17.5' or 'r=17.5,g=18.1';
-                otherwise taken from mag_sources (local ATLAS, lcgen on hog).
+                otherwise taken from mag_sources (lcgen on hog: recent nights robustly averaged; local ATLAS).
             fallback_mag (float, optional): Magnitude when no source knows the target.
             mag_sources (tuple, optional): Where to look the magnitude up, in order.
             tmin, tmax (float, optional): Limits of the computed exposure times.
@@ -193,7 +193,7 @@ class Filtros(scriptcomm.Rts2Comm):
         self.log('I', f"{self.name}: Switched to {'narrow' if self.narrow else 'wide'} band mode")
 
     def target_magnitudes(self, filters):
-        """Target magnitude per filter (long names): --mag, ATLAS, lcgen, --fallback-mag.
+        """Target magnitude per filter (long names): --mag, lcgen or ATLAS, --fallback-mag.
 
         Returns:
             dict: filter -> (magnitude, origin); filters without one are left out
@@ -453,7 +453,7 @@ def parse_arguments():
 
     parser.add_argument(
         "--mag-source",
-        default="atlas,lcgen",
+        default="lcgen,atlas",
         help="with --snr and no --mag: where to look the target magnitude up, in order"
     )
 

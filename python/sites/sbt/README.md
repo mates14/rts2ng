@@ -25,7 +25,7 @@ synchronised run within the same script.
 
 ### Exposure for a requested SNR
 
-    exe "filtros.py --snr 30"                     # magnitude from ATLAS / lcgen
+    exe "filtros.py --snr 30"                     # magnitude from lcgen / ATLAS
     exe "filtros.py --snr 30 -e 120"              # 120 s where no magnitude is found
     exe "filtros.py --snr 50 -m 15.2"             # same magnitude in all filters
     exe "filtros.py --snr 50 -m r=15.2,g=15.8"    # per filter (i takes r, ...)
@@ -35,7 +35,7 @@ synchronised run within the same script.
 |---|---|
 | `-s/--snr N`, `--magerr E` | SNR to reach in every filter (E = 1.0857/SNR) |
 | `-m/--mag` | target magnitude, `17.5` or `r=17.5,g=18.1` |
-| `--mag-source` | where to look it up, in order (`atlas,lcgen`) |
+| `--mag-source` | where to look it up (`lcgen,atlas`): its own band from any source beats a substitute band; lcgen is the median of the newest 5 nights within 60 d |
 | `-f/--fallback-mag` | magnitude when no source knows the target |
 | `-e` | with `--snr`: exposure of filters without any magnitude (300, at most `--tmax`) |
 | `--tmin`, `--tmax` | limits of the computed times (5 s; 120 s, with `-u` 300 s) |

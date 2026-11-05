@@ -26,9 +26,11 @@ smallest that reaches the SNR with N read-noise floors.  In a
 rising twilight the sky is extrapolated from the frame it was measured on
 to the end of the planned exposure (~1 mag per degree of solar altitude).
 
-The target magnitude comes from the first of: the local ATLAS RefCat2
-(`atlas` command, g r i z), lcgen on hog (the latest photometry), a
-fallback given by the caller.
+The target magnitude comes from lcgen on hog (our own photometry: median of
+the nightly medians of the newest few nights, so a regularly observed variable
+target follows its level) or the local ATLAS RefCat2 (`atlas` command, g r i z),
+the filter's own band from either before a substitute band; else a fallback
+given by the caller.
 
 Pure python (math, json, subprocess, urllib) so that it runs in any RTS2
 exe script.
@@ -549,8 +551,17 @@ def atlas_mags(ra, dec, radius=3.0, atlas_dir=ATLAS_DIR, timeout=20.0):
     return best[1] if best else {}
 
 
-def lcgen_mags(ra, dec, radius=5.0, timeout=15.0, auth_files=LCGEN_AUTH):
-    """{filter: mag} - median of the newest night per filter in lcgen."""
+LCGEN_NIGHTS = 5            # robust average over the newest nights with data ...
+LCGEN_SPAN = 60.0           # ... within this many days of the newest one
+LCGEN_MAX_DMAG = 0.2
+
+
+def lcgen_fetch(ra, dec, radius=5.0, timeout=15.0, auth_files=LCGEN_AUTH):
+    """lcgen's light curve around ra, dec: ({filter name: [(jd, mag, dmag), ...]}, note).
+
+    note is '' or why the newest data may be missing: without credentials
+    (user:password in one of auth_files) lcgen serves only the public part,
+    older than its embargo."""
     url = f'{LCGEN_URL}?ra={ra:.6f}&dec={dec:.6f}&r={radius}'
     req = urllib.request.Request(url, headers={'User-Agent': 'rts2-snrexp'})
     for f in auth_files:
@@ -564,16 +575,59 @@ def lcgen_mags(ra, dec, radius=5.0, timeout=15.0, auth_files=LCGEN_AUTH):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         d = json.loads(r.read().decode())
     names = d.get('filters', [])
+    jds, mags = d.get('jd', []), d.get('mag', [])
+    dmags = d.get('dmag') or [0.0] * len(jds)
     per = {}
-    for jd, fi, mag in zip(d.get('jd', []), d.get('filter', []), d.get('mag', [])):
+    for jd, fi, mag, dm in zip(jds, d.get('filter', []), mags, dmags):
         name = names[fi] if isinstance(fi, int) and fi < len(names) else str(fi)
-        per.setdefault(name, []).append((jd, mag))
+        per.setdefault(name, []).append((jd, mag, dm))
+    note = ''
+    if not d.get('user'):
+        pu = d.get('public_until')
+        note = 'anonymous, no ' + ' or '.join(auth_files) + (
+            f': nothing newer than {time.strftime("%Y-%m-%d", time.gmtime((pu - 2440587.5) * 86400))}'
+            if pu else '')
+    return per, note
+
+
+def robust_mag(pts, nights=LCGEN_NIGHTS, span=LCGEN_SPAN, max_dmag=LCGEN_MAX_DMAG, now_jd=None):
+    """(mag, n_nights, age_days) of one filter's photometry [(jd, mag, dmag)], or None.
+
+    Each night (changing at local noon) gives the median of its good points; the
+    result is the median of the newest `nights` nightly values within `span` days
+    of the newest one - a variable target follows its recent level, while a
+    single bad night or frame cannot pull it.
+    """
+    good = [(j, m) for j, m, dm in pts if m == m and (dm is None or dm <= max_dmag)]
+    if not good:
+        return None
+    per = {}
+    for j, m in good:
+        per.setdefault(math.floor(j + SITE_LON / 360), []).append(m)
+    keys = sorted(per, reverse=True)
+    keys = [k for k in keys if keys[0] - k <= span][:nights]
+    vals = sorted(sorted(per[k])[len(per[k]) // 2] for k in keys)
+    n = len(vals)
+    med = vals[n // 2] if n % 2 else 0.5 * (vals[n // 2 - 1] + vals[n // 2])
+    last = max(j for j, _ in good)
+    now_jd = now_jd or time.time() / 86400 + 2440587.5
+    return med, n, now_jd - last
+
+
+def lcgen_mags(ra, dec, **kw):
+    """{filter: mag} - robust average of the newest nights per filter in lcgen."""
+    return {k: v[0] for k, v in lcgen_stats(ra, dec, **kw)[0].items()}
+
+
+def lcgen_stats(ra, dec, **kw):
+    """({filter: (mag, n_nights, age_days)}, note) from lcgen."""
+    per, note = lcgen_fetch(ra, dec, **kw)
     out = {}
     for name, pts in per.items():
-        last = max(j for j, _ in pts)
-        night = sorted(m for j, m in pts if last - j < 0.5)
-        out[name] = night[len(night) // 2]
-    return out
+        r = robust_mag(pts)
+        if r:
+            out[name] = r
+    return out, note
 
 
 def parse_mag(spec):
@@ -586,12 +640,14 @@ def parse_mag(spec):
     return {long_filter(k.strip()): float(v) for k, v in (kv.split('=') for kv in spec.split(','))}
 
 
-def target_mags(filters, ra=None, dec=None, mag=None, sources=('atlas', 'lcgen'),
+def target_mags(filters, ra=None, dec=None, mag=None, sources=('lcgen', 'atlas'),
                 fallback=None, log=None):
     """{filter: (mag, origin)} for each of filters that can get one.
 
-    mag (parse_mag output) wins; then each source in turn, each filter taking
-    the first name of MAG_FALLBACK that the source has; then fallback.
+    mag (parse_mag output) wins; then the sources: for each filter the best name
+    of MAG_FALLBACK that any source has (the filter itself before a substitute
+    band), sources in order breaking the tie - so ATLAS's own i beats lcgen's r
+    for i, while lcgen's r beats ATLAS's r; then fallback.
     """
     log = log or (lambda level, text: None)
     out = {}
@@ -604,21 +660,34 @@ def target_mags(filters, ra=None, dec=None, mag=None, sources=('atlas', 'lcgen')
                 if cand in given:
                     out[f] = (given[cand], f'given {cand}')
                     break
-    for src in sources:
-        missing = [f for f in filters if f not in out]
-        if not missing or ra is None:
-            break
+    missing = [f for f in filters if f not in out]
+    have = []
+    for src in sources if missing and ra is not None else ():
         try:
-            have = atlas_mags(ra, dec) if src == 'atlas' else lcgen_mags(ra, dec)
+            if src == 'lcgen':
+                st, note = lcgen_stats(ra, dec)
+                if note:
+                    log('W', f'lcgen: {note}')
+                got = {k: v[0] for k, v in st.items()}
+                desc = ', '.join(f'{k}={v[0]:.2f} ({v[1]}n, {v[2]:.0f}d)' for k, v in sorted(st.items()))
+            else:
+                got = atlas_mags(ra, dec)
+                desc = ', '.join(f'{k}={v:.2f}' for k, v in sorted(got.items()))
         except Exception as e:
             log('W', f'{src} failed: {e}')
             continue
-        log('I', f'{src}: ' + (', '.join(f'{k}={v:.2f}' for k, v in sorted(have.items())) or 'nothing'))
-        for f in missing:
-            for cand in MAG_FALLBACK.get(f, [f]):
-                if cand in have:
-                    out[f] = (have[cand], f'{src} {cand}')
+        log('I', f'{src}: ' + (desc or 'nothing'))
+        have.append((src, got))
+    for f in missing:
+        best = None
+        for si, (src, got) in enumerate(have):
+            for rank, cand in enumerate(MAG_FALLBACK.get(f, [f])):
+                if cand in got:
+                    if best is None or (rank, si) < best[0]:
+                        best = ((rank, si), (got[cand], f'{src} {cand}'))
                     break
+        if best:
+            out[f] = best[1]
     if fallback is not None:
         for f in filters:
             out.setdefault(f, (fallback, 'fallback'))

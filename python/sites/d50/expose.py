@@ -6,7 +6,8 @@ until the executor wants another target.
 
 The exposure time of each filter is computed before every cycle from the
 current conditions (the COND device) and the target magnitude (--mag, else
-the local ATLAS, else lcgen on hog, else --fallback-mag).  There is no
+lcgen on hog, a robust average of our recent nights, or the local ATLAS;
+else --fallback-mag).  There is no
 repetition count: the cycles go on while the queuer keeps the target, and
 the script ends at an exposure boundary once EXEC has another target as next.
 The mount may move meanwhile (centering), that does not end it.
@@ -55,7 +56,7 @@ class Expose(scriptcomm.Rts2Comm):
     """Filter cycles at a requested SNR (or a fixed exposure) on one camera."""
 
     def __init__(self, filters, snr=None, exptime=None, mag=None, fallback_mag=None,
-                 mag_sources=('atlas', 'lcgen'), tmin=1, tmax=300, acquire=None,
+                 mag_sources=('lcgen', 'atlas'), tmin=1, tmax=300, acquire=None,
                  acquire_filter='N', dither=0.0):
         super().__init__()
         self.filters = filters
@@ -191,7 +192,7 @@ def parse_arguments():
     parser.add_argument("-e", "--exptime", type=positive_float,
                         help="fixed exposure time; with --snr, the one of filters without any magnitude")
     parser.add_argument("-m", "--mag", help="target magnitude, '16.3' or 'r=16.3,g=16.9' (else --mag-source)")
-    parser.add_argument("--mag-source", default="atlas,lcgen", help="where to look the magnitude up, in order")
+    parser.add_argument("--mag-source", default="lcgen,atlas", help="where to look the magnitude up, in order")
     parser.add_argument("-F", "--fallback-mag", type=float, help="magnitude when no source knows the target")
     parser.add_argument("--tmin", type=positive_float, default=1.0, help="shortest exposure")
     parser.add_argument("--tmax", type=positive_float, default=300.0, help="longest exposure")

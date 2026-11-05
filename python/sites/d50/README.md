@@ -21,7 +21,7 @@ count.  Mount moves (centering) do not end it.
 | `-s/--snr N`, `--magerr E` | SNR to reach in every filter (E = 1.0857/SNR) |
 | `-e` | without `--snr`: fixed exposure; with it: exposure of filters without any magnitude |
 | `-m/--mag` | target magnitude, `16.3` or `r=16.3,g=16.9` |
-| `--mag-source` | where to look it up, in order (`atlas,lcgen`) |
+| `--mag-source` | where to look it up (`lcgen,atlas`): its own band from any source beats a substitute band; lcgen is the median of the newest 5 nights within 60 d |
 | `-F/--fallback-mag` | magnitude when no source knows the target |
 | `--tmin`, `--tmax` | limits of the computed times (1, 300 s; with accumulation, of the total) |
 | `--acquire NxT` | N unfiltered frames of T s before the cycles, for the centering |
