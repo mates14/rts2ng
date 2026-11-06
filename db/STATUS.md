@@ -1078,3 +1078,12 @@ torman; built with `rts2-builddb -A` as torman, so no C functions and no
   on a target without coordinates left the dummy mount at 30 40 and
   recorded the observation with NULL position; the control target moved
   the mount to 10 -5.
+
+## EllTarget, TargetPlanet: -Woverloaded-virtual (2026-11-06) [JS]
+
+Both override only `getPosition (pos, JD)`, which hid
+`Rts2Target::getPosition (pos)` (the "now" overload), and GCC warned on
+every file that includes `target.h`. Each class now has
+`using Rts2Target::getPosition;`, so nothing changes in behaviour. The web
+and db builds (GCC 15) are free of warnings again and the db tests pass.
+Not built with GCC 12.

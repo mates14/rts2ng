@@ -49,6 +49,8 @@ class TargetPlanet:public Target
 		virtual ~ TargetPlanet (void);
 
 		virtual void load ();
+		// Keeps the one-argument (now) overload visible (-Woverloaded-virtual).
+		using Rts2Target::getPosition;
 		virtual void getPosition (struct ln_equ_posn *pos, double JD);
 		virtual int getRST (struct ln_rst_time *rst, double JD, double horizon);
 

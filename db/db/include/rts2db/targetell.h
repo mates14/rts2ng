@@ -46,6 +46,8 @@ class EllTarget:public Target
 		 */
 		int orbitFromMPC (const char *mpc);
 
+		// Keeps the one-argument (now) overload visible (-Woverloaded-virtual).
+		using Rts2Target::getPosition;
 		virtual void getPosition (struct ln_equ_posn *pos, double JD);
 		virtual int getRST (struct ln_rst_time *rst, double jd, double horizon);
 
