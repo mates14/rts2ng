@@ -691,6 +691,9 @@ async function saveScript (site, camera, input, defaultBtn, hint, statusEl) {
 			setStatus (statusEl, false, r.body.error || `${r.status}`);
 			return;
 		}
+		// the server stores the script on one line; show what it stored
+		if (typeof r.body.script === 'string')
+			input.value = r.body.script;
 		defaultBtn.className = 'script-default-btn';
 		setStatus (statusEl, true, 'saved');
 	} catch (e) {

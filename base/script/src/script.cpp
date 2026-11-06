@@ -188,6 +188,15 @@ void Script::parseScript (Rts2Target *target)
 		// it might be initialized before in Script::Script (or might not), so better reset it
 		wholeScript = std::string ("");
 
+	// base note: a script from the database may span lines (the web
+	// editor's textarea). SCRIPT goes to the camera as one protocol line,
+	// where a newline ends the command: the camera refused it, kept the
+	// previous target's script and took the rest as unknown commands. Each
+	// line break or tab becomes one space, so scriptPosition still matches.
+	for (char *p = cmdBuf; *p; p++)
+		if (*p == '\n' || *p == '\r' || *p == '\t')
+			*p = ' ';
+
 	// find any possible comment and mark it
 	cmdBufTop = cmdBuf;
 	while (*cmdBufTop && *cmdBufTop != '#')

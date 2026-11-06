@@ -1982,3 +1982,15 @@ for every exposure, in rts2-mon and the web monitors alike.
 rts2ng: `blockScriptRet` keeps the element that returned
 (`reported_element`), and the block reports that one; a nested block
 reports its own.
+
+## A script with a line break cannot be sent to the camera (`lib/rts2script/script.cpp`, `devscript.cpp`) [JS 2026-11-06]
+
+`DevScript` sends the whole script as `X SCRIPT = "..."`, one protocol
+line. A database script with a line break in it (any client can store
+one) ends that command early: the camera refuses it ("invalid
+parameters"), keeps the previous script in SCRIPT (likely in the FITS header
+too, not checked), and takes each further line as an unknown command, so the
+executor's connection gets several replies for one command.
+
+rts2ng: `Script::parseScript` turns line breaks and tabs into blanks, one
+for one, before parsing; rts2-httpd stores scripts on one line.

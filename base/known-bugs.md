@@ -125,7 +125,7 @@ kseq-expose.py` overrides `getExecDevice ()`.
 grows by the separating space and by 3 for a `#` comment, not by the
 length of the earlier lines. Elements on the second and later lines of a
 script read from a file by rts2-scriptexec, and those after a comment,
-get `scriptPosition` values too small. Database scripts are one line
-with no comments (none at SBT or D50, 2026-10-26), so the observatories
-are not affected. Fix: set `lineOffset = wholeScript.length ()` just
+get `scriptPosition` values too small. Database scripts are parsed as
+one buffer (line breaks become blanks since 2026-11-06, HISTORY), so the
+observatories are not affected unless a script has a comment. Fix: set `lineOffset = wholeScript.length ()` just
 before each line is appended.

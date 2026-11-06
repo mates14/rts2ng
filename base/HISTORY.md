@@ -4561,3 +4561,29 @@ T9 TEL TEL_ ORI OFFS TRACKING target_distance after its constants
 W9 filter. Domes and sensors built only (no hardware here); hardened
 build clean.
 
+
+## A script on several lines (2026-11-06) [JS]
+
+D50's highlight for target 8071 made no sense, in rts2-mon too: C0's
+SCRIPT held the previous target's script while scriptPosition counted in
+8071's. 8071's C0 script was stored on three lines (the web editor's
+textarea, web/STATUS). The executor sends SCRIPT as `X SCRIPT = "..."` on
+one protocol line; the line break ended it, C0 answered "invalid
+parameters" and then "unknow command T0.WOFFS=..." for each further line,
+and the executor's C0 connection got three replies for one command
+("Connection::commandReturn null on connection with 'C0'"). The script
+itself ran right (the executor parses its own copy).
+
+`Script::parseScript` now turns each line break or tab into one space
+before parsing, so SCRIPT goes out as one line and the positions, counted
+in the same buffer, still match. Bench: a script with LF, CR LF and a
+tab: SCRIPT set whole, no error from the camera, each exposure started
+with its own element marked.
+
+Not explained yet: during 8071's first `E 300` (after `filter=r` and the
+focuser's filter offset, with the mount offsetting) D50 showed the next
+loop's WOFFS, while the second `E 300` showed itself. The bench (scriptexec,
+dummy wheel, a mount offset taking 13 s, the same multi-line script and
+its triple reply) marks each exposure right. It may be the triple reply in
+rts2-executor, which this fix removes; to be checked on the first exposure
+of a target at D50.

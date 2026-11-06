@@ -3869,3 +3869,20 @@ Built warning-free; not run against a database (none on this machine).
 Records already saved as `""` stay until they are cleared, either by
 pressing "default" for that camera or with
 `DELETE FROM scripts WHERE btrim(script) = '';`.
+
+## Target editor: scripts are stored on one line (2026-11-06) [JS]
+
+The How box is a textarea, and Enter puts a line break into the script:
+D50 had four such C0 scripts (8058, 8071, 8073, 53457; SBT none). A line
+break ends the `X SCRIPT = "..."` command the executor sends to the
+camera, so C0 refused it, kept the previous target's script in SCRIPT
+(rts2-mon, the monitors; probably the FITS SCRIPT key too, not checked) and answered the other lines as
+unknown commands. `dbSaveScript` now stores the script with each line
+break or tab, and the blanks around it, folded into one space, trailing
+blanks dropped, and returns what it stored; the editor puts that back
+into the box. The executor flattens line breaks too (base/HISTORY), so
+the rows already stored work; they get cleaned when saved again.
+
+Tested: the folding function alone (8071's script, CR/LF, a leading
+break, a tab, double blanks inside kept, a quoted value); not run
+against a database (none on this machine).

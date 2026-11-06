@@ -514,9 +514,39 @@ void rts2web::dbListScripts (int targetId, std::ostringstream &os)
 	os << "}}";
 }
 
-void rts2web::dbSaveScript (int targetId, const std::string &camera, const std::string &script, std::ostringstream &os)
+// A script is one line: the editor's textarea lets Enter in, and a line
+// break would end the SCRIPT command sent to the camera. Each break or tab,
+// with the blanks around it, becomes one space; trailing blanks go.
+static std::string oneLineScript (const std::string &script)
+{
+	std::string out;
+	bool brk = false;
+	for (char c : script)
+	{
+		if (c == '\n' || c == '\r' || c == '\t')
+		{
+			brk = true;
+			continue;
+		}
+		if (brk && c == ' ')
+			continue;
+		if (brk)
+		{
+			if (!out.empty () && out.back () != ' ')
+				out += ' ';
+			brk = false;
+		}
+		out += c;
+	}
+	while (!out.empty () && out.back () == ' ')
+		out.pop_back ();
+	return out;
+}
+
+void rts2web::dbSaveScript (int targetId, const std::string &camera, const std::string &rawScript, std::ostringstream &os)
 {
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+	const std::string script = oneLineScript (rawScript);
 
 	rts2db::Target *tar = createTarget (targetId, rts2core::Configuration::instance ()->getObserver (), rts2core::Configuration::instance ()->getObservatoryAltitude ());
 	try
