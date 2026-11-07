@@ -408,6 +408,10 @@ class Device:public Daemon
 		// device current full BOP state
 		int fullBopState;
 
+		// BOP state as the centrald last sent it, before the queued values
+		// masked it - what checkQueChanges () recomputes fullBopState from
+		rts2_status_t masterBopState;
+
 		bool doCheck;
 		bool doAuth;
 

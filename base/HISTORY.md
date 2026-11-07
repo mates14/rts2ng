@@ -4587,3 +4587,44 @@ dummy wheel, a mount offset taking 13 s, the same multi-line script and
 its triple reply) marks each exposure right. It may be the triple reply in
 rts2-executor, which this fix removes; to be checked on the first exposure
 of a target at D50.
+
+## Exposures during mount moves: a queued value wiped the BOP state (2026-11-07) [JS]
+
+D50's guider (C1) stopped for whole C0 300 s exposures. That part is by
+design: a WOFFS or correction arriving during C0's exposure holds the block
+until the move runs, and guide.py's light frames wait for it (its dark
+frames do not - camd lets darks through a block, which is why script
+exposures can look unblocked).
+
+Looking at it found worse: since 2026-10-29 C0 often started its exposure
+while T0 was still offsetting - right after its readout, 1-4 s into the
+move. From the rotated logs: up to 2026-10-28 0-4 such starts a night
+against 28-269 held to the move's end; on 10-29 72 against 6, on 11-05 123
+against 65. C0's camd logged "should ask for exposure block" hundreds of
+times a night until 10-28 and never since. The change came with the restart
+on 10-29 onto 9a87880, which included 94dbbcf (scriptPosition/scriptLen
+queued while the camera works).
+
+The bench (centrald, teld-dummy, camd-dummy, scriptexec and then the real
+rts2-executor against `rts2test`, `blocked_by` as on D50) held every
+exposure on master. `rts2-bopwatch` (dome/tests) run at D50 caught it: C0
+ended its readout during an offset, reported `bop 0x8` - its own state -
+and started its exposure 436 ms later, 0.6 s before the move ended.
+
+Cause, a classic bug (UPSTREAM_BUGS.md): `Device::checkQueChanges` set the
+full BOP state to the device's own state after applying queued values,
+wiping every block the centrald had sent. Before 94dbbcf only a filter or
+exposure change queued during an exposure triggered it, hence the few a
+night; with the script position queued it ran after every readout. The
+bench shows the wipe too (`bop 0x8` at each readout end), but there it was
+put right in the same millisecond because no exposure was waiting yet; the
+exposure during a move itself was not reproduced on the bench.
+
+Fix: Device keeps the centrald's state as sent (`masterBopState`) and
+`checkQueChanges` recomputes from it. Bench with the fix: no `bop 0x8`, all
+exposures held to the move's end. Not yet checked at D50 - that needs the
+release and the Andor driver rebuilt, since the kernel is compiled into it.
+
+Possibly the same bug: on 11-06 18:14 T0 ran a second offset (18.436) into
+C0's running exposure; teld's own queued values reach `setFullBopState`
+the same way. Not verified.

@@ -532,6 +532,7 @@ Device::Device (int in_argc, char **in_argv, int in_device_type, const char *def
 	device_name = default_name;
 
 	fullBopState = 0;
+	masterBopState = 0;
 
 	log_option = 0;
 
@@ -1042,9 +1043,16 @@ void Device::checkQueChanges (rts2_status_t fakeState)
 			iter++;
 		}
 	}
+	// base note: classic passed fakeState - the device's own state (0x8
+	// after a readout), not a BOP state - so applying a queued value wiped
+	// every block the centrald had sent. A camera then started its waiting
+	// exposure while the mount still moved (Camera::setFullBopState): D50
+	// since 2026-10-29, when scriptPosition became queued and this ran after
+	// every readout. Recompute from what the centrald sent instead; the
+	// masks of the values still queued are added back by setFullBopState.
 	if (changed)
 	{
-		setFullBopState (fakeState);
+		setFullBopState (masterBopState);
 	}
 }
 
@@ -1224,6 +1232,7 @@ int Device::statusInfo (Connection * conn)
 
 void Device::setFullBopState (rts2_status_t new_state)
 {
+	masterBopState = new_state;
 	for (rts2core::ValueQueVector::iterator iter = queValues.begin (); iter != queValues.end (); iter++)
 	{
 		new_state = maskQueValueBopState (new_state, (*iter)->getStateCondition ());

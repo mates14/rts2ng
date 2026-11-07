@@ -1994,3 +1994,23 @@ executor's connection gets several replies for one command.
 
 rts2ng: `Script::parseScript` turns line breaks and tabs into blanks, one
 for one, before parsing; rts2-httpd stores scripts on one line.
+
+## Applying a queued value wipes the device's BOP state (`lib/rts2/device.cpp`, `checkQueChanges`) [JS 2026-11-07]
+
+After it applies queued value changes, `Device::checkQueChanges
+(fakeState)` calls `setFullBopState (fakeState)`. `fakeState` is the
+device's own state (`stateChanged` passes `new_state`; 0x8 after a camera
+readout), not a BOP state, so every block the centrald had sent is gone
+until the centrald sends the next one. `Camera::setFullBopState` sees no
+`BOP_EXPOSURE` and starts a waiting exposure at once
+(`camStartExposureWithoutCheck`); the executor's BOP check on that camera
+passes too, since the camera reports the wiped state. A telescope's
+`setFullBopState` can likewise start a move that waits for the cameras.
+
+Seen on D50 (2026-11-07, a client printing the BOP bits): C0 ended its
+readout during a mount offset, reported `bop 0x8`, started a 20 s exposure
+436 ms later, 0.6 s before the offset ended. Any value queued while the
+camera works (filter, exposure, ...) triggers it at the next readout.
+
+rts2ng: `Device::setFullBopState` keeps the centrald's state as sent
+(`masterBopState`), and `checkQueChanges` recomputes from that.
