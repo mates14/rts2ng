@@ -2030,3 +2030,31 @@ restart in 1-2 s.
 rts2ng: `Camera::endRunLoop` defers the exit while the chip exposes or reads
 out; the main loop (`Camera::idle`) aborts an exposure, lets a readout
 finish (at most 15 s) and exits. A second signal exits at once.
+
+## D50 path finding gives up when the Sun is between the mount and the target (`src/teld/d50.cpp`, `findPath`) [JS 2026-11-07]
+
+`findPath ()` tries a straight move, "HA first, Dec delayed" and "Dec
+first, HA delayed", and fails when all three cross the hard horizon, the
+ceiling or the Sun's 10 deg (the TODO at its end). A park around noon goes
+to the south horizon (HA 0, Dec -40) under the Sun: D50 2026-11-06 11:21,
+from HA +32 Dec +63 with the Sun at HA +9 Dec -16, straight passes 1.5 deg
+from the Sun, HA-first 8.8 deg, Dec-first below the horizon. The park
+failed, and the dome, which waits for the park, could not close until the
+mount was moved east of the Sun by hand.
+
+Smaller ones in the same code:
+- The Sun was avoided in every master state but night, so a Sun below the
+  horizon blocked moves at dusk and dawn (D50: 17 failed moves 2026-10-16 -
+  11-06, most 15:40-16:25 UTC).
+- `computeMovement ()` leaves `*speedAtInspectionTime` unset for an axis
+  that does not move, so the "HA-first" strategy passed an uninitialised Dec
+  speed to `checkPassage ()`.
+- `checkPassage ()` checks every 0.2 s up to the end of the movement but
+  not the target itself, and `computeSuccessivePointInterval ()` never tries
+  the moment of arrival.
+- The Sun position (libnova's full solar theory) is recomputed at every
+  sample of every passage.
+
+rts2ng: `D50Path` (`base/teld/d50/d50path.cpp`) - the classic tries, then
+an A* search over a 5 deg grid of intermediate safe targets; the Sun avoided
+while above the horizon (-0.833 deg); the fixes above.

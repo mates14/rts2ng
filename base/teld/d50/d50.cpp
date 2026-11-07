@@ -32,6 +32,7 @@
 //#define DEBUG_BRUTAL
 
 #include "tgdrive.h"
+#include "d50path.h"
 #include "connremotes.h"
 #include "fork.h"
 
@@ -80,21 +81,12 @@
 // absolute encoders (connected via remotes, placed directly on axes)
 #define ABS_ENC_REMOTES_STEPSPERREVOLUTION	8192
 
-// timestep [s] for tracing path in checkPassage routine
-#define CHECKPASSAGE_TIME_RESOLUTION	0.2
-// timestep [s] for examining path in findPath routine
-#define FINDPATH_TIME_RESOLUTION	1.0
-// minimal step size in degrees for findPath routine
-#define FINDPATH_MIN_STEP_SIZE		5
-#define MAX_NUMBER_OF_SUCCESSIVE_POINTS	20
+// path finding constants (CHECKPASSAGE_TIME_RESOLUTION, SUN_AVOID_DISTANCE, ...) are in d50path.h
 
 // backlashCrossStrategy selection values
 #define BACKLASH_CROSS_STRATEGY_TIME_INTERVAL	0
 #define BACKLASH_CROSS_STRATEGY_ENCODER_TICKS	1
 #define BACKLASH_CROSS_STRATEGY_MIND_DIRECTION_AND_SIZE	2
-
-// We should never get closer to Sun than... [deg]
-#define SUN_AVOID_DISTANCE 10.0
 
 // how long [s] to wait for the servos to report they stopped
 #define DRIVES_STOP_TIMEOUT 30.0
@@ -144,7 +136,7 @@ class D50:public Fork
 		int runD50 ();
 
 		/**
-		* Try to find path from actual telescope position to the target.
+		* Try to find path from actual telescope position to the target (see D50Path::findPath ()).
 		* Sets values to successivePointsAC[], successivePointsDC[] fields.
 		*
 		* @return <0 when path not found, =0 when simple ("straight") movement strategy
@@ -153,75 +145,20 @@ class D50:public Fork
 		int findPath ();
 
 		/**
-		* Find shortest possible successivePointInterval, after which can be movement from*->to* updated to target next*.
-		*
-		* @param fromAC		initial position of HA [counts] of preceding movement
-		* @param fromDC		initial position of Dec [counts] of preceding movement
-		* @param toAC		final position of HA [counts] of preceding movement
-		* @param toDC		final position of Dec [counts] of preceding movement
-		* @param initSpeedAC	initial speed in HA [counts/s] of preceding movement
-		* @param initSpeedDC	initial speed in Dec [counts/s] of preceding movement
-		* @param nextAC		next position of HA [counts]
-		* @param nextDC		next position of Dec [counts]
-		*
-		* @return shortest found interval [s] for realizing the target transition, negative number when nothing found
-		*/
-		double computeSuccessivePointInterval (int32_t fromAC, int32_t fromDC, int32_t toAC, int32_t toDC, int32_t nextAC, int32_t nextDC, double initSpeedAC=0, double initSpeedDC=0);
+		 * Fill in path with the current drive parameters, limits, horizon and ceiling, and the time.
+		 */
+		void preparePath ();
 
 		/**
-		* Check, whether the considered simple "two points" passage of the telescope
-		* will not conflict with the defined hard-horizon.
-		* Also returns the expected time of movement.
-		* Takes into account current values of acc/decc and max speed for both axes, as well as initial speeds in both axes.
-		*
-		* @param fromAC		initial position of HA [counts]
-		* @param fromDC		initial position of Dec [counts]
-		* @param toAC		final position of HA [counts]
-		* @param toDC		final position of Dec [counts]
-		* @param initSpeedAC	initial speed in HA [counts/s]
-		* @param initSpeedDC	initial speed in Dec [counts/s]
-		*
-		* @return >0 success, expected time needed to finish movement [s]
-		* @return <=0 conflict with horizon recognized at fabs() [s] from start
-		*/
-		double checkPassage (int32_t fromAC, int32_t fromDC, int32_t toAC, int32_t toDC, double initSpeedAC=0, double initSpeedDC=0);
+		 * Park a mount standing still (not tracking) when the Sun is going to come
+		 * within SUN_AVOID_DISTANCE in SUN_APPROACH_LEAD, or already has; only
+		 * report, when block_move is set. Called from idle (), once a minute.
+		 */
+		void checkSunApproach ();
 
-		/**
-		* Simply return time needed to fully complete complex both-axis movement, no checks performed.
-		*
-		* @param fromAC		initial position of HA [counts]
-		* @param fromDC		initial position of Dec [counts]
-		* @param toAC		final position of HA [counts]
-		* @param toDC		final position of Dec [counts]
-		* @param initSpeedAC	initial speed in HA [counts/s]
-		* @param initSpeedDC	initial speed in Dec [counts/s]
-		*
-		* @return time [s] till the movement is done
-		*/
-		double computeFullMovementTime (int32_t fromAC, int32_t fromDC, int32_t toAC, int32_t toDC, double initSpeedAC=0, double initSpeedDC=0);
-
-		/**
-		* Compute actual position of specified movement at specific time inspectionTime, for one axis only.
-		* Negative value of inspectionTime changes meaning, in this case return time in miliseconds needed to travel the full distance.
-		* When double * speedAtInspectionTime is defined, also compute an actual speed.
-		*
-		* @param isDec				0 for HA, other (typically 1) for Dec axis
-		* @param fromCount			initial position [counts]
-		* @param toCount			final position [counts]
-		* @param initSpeed			initial speed [counts/s]
-		* @param inspectionTime			time (from the beginning of movement) for which the result is requested, value <0 means full travel time requested
-		* @param *speedAtInspectionTime		where the computed speed at inspectionTime is stored (only when pointer differs from nullptr)
-		*
-		* @return computed position [counts] at inspectionTime, or time [ms] needed to complete all movemens, if inspectionTime<0
-		*/
-		int32_t computeMovement (int isDec, int32_t fromCount, int32_t toCount, double initSpeed, double inspectionTime, double* speedAtInspectionTime = nullptr);
-
-		/**
-		* Check potential conflict with a hard-horizon, Sun distance and dome's ceiling for the position in raw coordinates.
-		*
-		* @return 1 if position is ok, 0 when collision with hard-horizon, Sun proximity or dome's ceiling (when checked) detected
-		*/
-		int checkRawPosition (int32_t AC, int32_t DC, bool checkSunDistance = true, bool checkCeiling = false);
+		D50Path path;
+		double sunCheckNext;
+		double sunReported;
 
 		int numberOfSuccesivePoints;
 		int32_t successivePointsAC[MAX_NUMBER_OF_SUCCESSIVE_POINTS + 1], successivePointsDC[MAX_NUMBER_OF_SUCCESSIVE_POINTS + 1];
@@ -729,6 +666,8 @@ int D50::init ()
 
 	// safe initial values for low-level "last safe" ac/dc - 0:0 is close to the "park" position
 	lastSafeRaPos = 0;
+	sunCheckNext = 0;
+	sunReported = 0;
 	lastSafeDecPos = 0;
 
 	numberOfSuccesivePoints = 0;
@@ -815,6 +754,7 @@ int D50::idle ()
 #ifdef DEBUG_BRUTAL
 	logStream (MESSAGE_DEBUG) << "****** D50:idle ()" << sendLog;
 #endif
+	checkSunApproach ();
 	runD50 ();
 	return Fork::idle ();
 }
@@ -1458,14 +1398,74 @@ int D50::scriptEnds ()
 	return Telescope::scriptEnds ();
 }
 
+void D50::preparePath ()
+{
+	// current max speed in degrees/s, converted to counts/s
+	double v_max = moveTurboSwitch->getValueBool () ? moveSpeedTurbo->getValueDouble () : moveSpeedFull->getValueDouble ();
+	path.vMax[0] = std::min (v_max * fabs (haCpd), raDrive->getPhysicalSpeedLimit () * (double) SERVO_COUNTS_PER_ROUND);
+	path.vMax[1] = std::min (v_max * fabs (decCpd), decDrive->getPhysicalSpeedLimit () * (double) SERVO_COUNTS_PER_ROUND);
+	path.accel[0] = raDrive->getAccel () * (double) SERVO_COUNTS_PER_ROUND;
+	path.decel[0] = raDrive->getDecel () * (double) SERVO_COUNTS_PER_ROUND;
+	path.accel[1] = decDrive->getAccel () * (double) SERVO_COUNTS_PER_ROUND;
+	path.decel[1] = decDrive->getDecel () * (double) SERVO_COUNTS_PER_ROUND;
+	path.haCpd = haCpd;
+	path.decCpd = decCpd;
+	path.haZero = haZero;
+	path.decZero = decZero;
+	path.acMin = acMin;
+	path.acMax = acMax;
+	path.dcMin = dcMin;
+	path.dcMax = dcMax;
+	path.observer = observerLongLat;
+	path.hardHorizon = &hardHorizon;
+	path.hardCeiling = &hardCeiling;
+	path.checkCeiling = insideDomeOnlyMovement->getValueBool ();
+	path.setTime (ln_get_julian_from_sys ());
+}
+
+void D50::checkSunApproach ()
+{
+	if (getNow () < sunCheckNext)
+		return;
+	sunCheckNext = getNow () + 60;
+
+	// moving, parking or parked: findPath () took care of the Sun, the park position is far from it
+	if ((getState () & TEL_MASK_MOVING) != TEL_OBSERVING)
+		return;
+	// tracking keeps the distance from the Sun (1 deg a day, well inside the 10 deg)
+	if (trackingRequested () != 0)
+		return;
+	// under a closed roof the Sun cannot reach the telescope
+	rts2core::Connection *connDome = getOpenConnection (domeDevice);
+	if (connDome != nullptr && (connDome->getState () & DOME_DOME_MASK) == DOME_CLOSED)
+		return;
+
+	preparePath ();
+	double distanceNow;
+	double in = path.sunApproach (raDrive->getPosition (), decDrive->getPosition (), false, SUN_APPROACH_LEAD, distanceNow);
+	if (in < 0)
+		return;
+
+	if (getBlockMove ())
+	{
+		if (getNow () - sunReported >= 300)
+		{
+			logStream (MESSAGE_CRITICAL | MESSAGE_REPORTIT) << "the Sun comes within " << SUN_AVOID_DISTANCE << " deg of the telescope in " << (int) in << " s (now " << distanceNow << " deg) and block_move is set - move the telescope away" << sendLog;
+			sunReported = getNow ();
+		}
+		return;
+	}
+	logStream (MESSAGE_WARNING | MESSAGE_REPORTIT) << "the Sun comes within " << SUN_AVOID_DISTANCE << " deg of the telescope in " << (int) in << " s (now " << distanceNow << " deg), parking" << sendLog;
+	// already too close, findPath () leaves the Sun's proximity moving away from it first
+	Telescope::startPark (nullptr);
+}
+
 int D50::findPath ()
 {
 #ifdef DEBUG_BRUTAL
 	logStream (MESSAGE_DEBUG) << "****** findPath ()" << sendLog;
 #endif
 	int32_t acStart, dcStart, acFin, dcFin;
-
-	double acOnlyMoveTime, dcOnlyMoveTime, movementDelay;
 
         acStart = raDrive->getPosition ();
         dcStart = decDrive->getPosition ();
@@ -1474,285 +1474,40 @@ int D50::findPath ()
 	if (ret)
 		return -1;
 
-	// The essential approach used for dealing the problematic movements is to change the final target positon of servos gradually,
-	// while all the temporary targets (as well as the way to them) are safe and don't collide with the hard-horizon (as we cannot
-	// guarantee that the following change of coordinates will really happen). We call this approach "Successive Safe Targets" strategy.
-	//
-	// The chosen strategy for finding the path is quite simple, we don't fully solve a complexity of the problem, as our hard-horizon is
-	// quite decent (however, we still add more complexity for potential future usage of "closed dome" constrains, which would add other
-	// "hard-horizon-like" definition for ceiling).
-	//
-	// For finding the path we prefer movement in HA and enable only it's "toward target" direction, while for Dec axis we accept
-	// variantion in both directions.
+	preparePath ();
 
-	if (checkPassage(acStart, dcStart, acFin, dcFin) > 0)	// simple (straight) movement is possible
+	int n = path.findPath (acStart, dcStart, acFin, dcFin);
+	if (n < 0)
 	{
-		successivePointsAC[0] = acFin;
-		successivePointsDC[0] = dcFin;
-		numberOfSuccesivePoints = 0;
-
-		successivePointsActualPosition = 0;
-		return numberOfSuccesivePoints;
+		if (path.searchedNodes > 0)
+			logStream (MESSAGE_ERROR) << "findPath: no safe way to the target, " << path.searchedNodes << " intermediate targets tried" << (path.avoidingSun () ? " (avoiding the Sun)" : "") << sendLog;
+		return -1;
 	}
 
-	acOnlyMoveTime = checkPassage(acStart, dcStart, acFin, dcStart);
-
-	if (acOnlyMoveTime > 0)	// HA-only movement is possible, we will follow a "HA-first, Dec-delayed" strategy
+	numberOfSuccesivePoints = n;
+	for (int k = 0; k <= n; k++)
 	{
-		movementDelay = computeSuccessivePointInterval (acStart, dcStart, acFin, dcStart, acFin, dcFin);
-		if (movementDelay > 0)
+		successivePointsAC[k] = path.successivePointsAC[k];
+		successivePointsDC[k] = path.successivePointsDC[k];
+		if (k < n)
+			successivePointsIntervals[k] = path.successivePointsIntervals[k];
+	}
+	successivePointsActualPosition = 0;
+
+	if (path.searchedNodes > 0)
+	{
+		std::ostringstream os;
+		os.setf (std::ios::fixed);
+		os.precision (1);
+		for (int k = 0; k <= n; k++)
 		{
-			successivePointsAC[0] = acFin;
-			successivePointsDC[0] = dcStart;
-			successivePointsIntervals[0] = movementDelay;
-			successivePointsAC[1] = acFin;
-			successivePointsDC[1] = dcFin;
-			numberOfSuccesivePoints = 1;
-
-			successivePointsActualPosition = 0;
-			return numberOfSuccesivePoints;
+			os << " " << (successivePointsAC[k] / haCpd + haZero) << "/" << (successivePointsDC[k] / decCpd + decZero);
+			if (k < n)
+				os << " (next after " << successivePointsIntervals[k] << " s)";
 		}
-		// We should never get to this point, as the D50's hard horizon is quite decent :-).
-		// However, if this happens, it should safe to pass through to the other attempts.
+		logStream (MESSAGE_INFO) << "findPath: the direct ways are not safe" << (path.avoidingSun () ? " (avoiding the Sun)" : "") << ", " << n << " successive points (HA/Dec) from " << path.searchedNodes << " tried:" << os.str () << sendLog;
 	}
-
-	dcOnlyMoveTime = checkPassage(acStart, dcStart, acStart, dcFin);
-	if (dcOnlyMoveTime > 0)	// Dec-only movement is possible, we will follow "Dec-first, HA-delayed" strategy (OK, this is probably just for completeness, for current configuration this probably will not be needed)
-	{
-		movementDelay = computeSuccessivePointInterval (acStart, dcStart, acStart, dcFin, acFin, dcFin);
-		if (movementDelay > 0)
-		{
-			successivePointsAC[0] = acStart;
-			successivePointsDC[0] = dcFin;
-			successivePointsIntervals[0] = movementDelay;
-			successivePointsAC[1] = acFin;
-			successivePointsDC[1] = dcFin;
-			numberOfSuccesivePoints = 1;
-
-			successivePointsActualPosition = 0;
-			return numberOfSuccesivePoints;
-		}
-		// We should never get to this point, as the D50's hard horizon is quite decent :-).
-		// However, if this happens, it should safe to pass through to the other attempts.
-	}
-
-	// TODO: need to add surely the "SAFE POSITION" or to implement more robust search, which will try to do at least several "jumps" (in both directions) in Dec, yet better would be not to search for the acFin, but enabling multiple successivePoints and to try to minimize abs(acReachable - acFin) by changing the reachable values of Dec (in steps)...
-
-	return -1;
-}
-
-double D50::computeSuccessivePointInterval (int32_t fromAC, int32_t fromDC, int32_t toAC, int32_t toDC, int32_t nextAC, int32_t nextDC, double initSpeedAC, double initSpeedDC)
-{
-#ifdef DEBUG_BRUTAL
-	logStream (MESSAGE_DEBUG) << "****** computeSuccessivePointInterval ()" << sendLog;
-#endif
-	double initialMoveTime, movementDelay, acSpeedTemp, dcSpeedTemp;
-	int32_t acTemp, dcTemp;
-
-	initialMoveTime = computeFullMovementTime (fromAC, fromDC, toAC, toDC, initSpeedAC, initSpeedDC);
-
-	for (movementDelay = FINDPATH_TIME_RESOLUTION; movementDelay <= initialMoveTime; movementDelay += FINDPATH_TIME_RESOLUTION)
-	{
-		acTemp = computeMovement (0, fromAC, toAC, initSpeedAC, movementDelay, &acSpeedTemp);
-		dcTemp = computeMovement (1, fromDC, toDC, initSpeedDC, movementDelay, &dcSpeedTemp);
-		if (checkPassage(acTemp, dcTemp, nextAC, nextDC, acSpeedTemp, dcSpeedTemp) > 0)	// we've found the earliest delay of setting the next target!
-			return movementDelay;
-	}
-
-	return -1;
-}
-
-double D50::checkPassage (int32_t fromAC, int32_t fromDC, int32_t toAC, int32_t toDC, double initSpeedAC, double initSpeedDC)
-{
-#ifdef DEBUG_BRUTAL
-	logStream (MESSAGE_DEBUG) << "****** checkPassage ()" << sendLog;
-#endif
-	double fullMovementTime, inspectionTime;
-	int32_t posAC, posDC;
-	bool checkSunDistance;
-
-	if ((getMasterState () & SERVERD_STATUS_MASK) == SERVERD_NIGHT)
-		checkSunDistance = false;
-	else
-		checkSunDistance = true;
-
-	fullMovementTime = computeFullMovementTime (fromAC, fromDC, toAC, toDC, initSpeedAC, initSpeedDC);
-
-	for (inspectionTime = CHECKPASSAGE_TIME_RESOLUTION; inspectionTime <= fullMovementTime; inspectionTime += CHECKPASSAGE_TIME_RESOLUTION)
-	{
-		posAC = computeMovement (0, fromAC, toAC, initSpeedAC, inspectionTime);
-		posDC = computeMovement (1, fromDC, toDC, initSpeedDC, inspectionTime);
-#ifdef DEBUG_EXTRA
-		logStream (MESSAGE_DEBUG) << "------ checkPassage () fromAC/fromDC: " << fromAC << "/" << fromDC << ", toAC:toDC " << toAC << "/" << toDC << ", posAC/posDC: " << posAC << "/" << posDC << ", inspectionTime: " << inspectionTime << sendLog;
-#endif
-		if (!checkRawPosition (posAC, posDC, checkSunDistance, insideDomeOnlyMovement->getValueBool ()))
-			return -1.0 * inspectionTime;
-	}
-
-	return fullMovementTime;
-}
-
-double D50::computeFullMovementTime (int32_t fromAC, int32_t fromDC, int32_t toAC, int32_t toDC, double initSpeedAC, double initSpeedDC)
-{
-#ifdef DEBUG_BRUTAL
-	logStream (MESSAGE_DEBUG) << "****** computeFullMovementTime ()" << sendLog;
-#endif
-	double movementTimeAC, movementTimeDC;
-
-	movementTimeAC = (double) computeMovement (0, fromAC, toAC, initSpeedAC, -1) / 1000.0;
-	movementTimeDC = (double) computeMovement (1, fromDC, toDC, initSpeedDC, -1) / 1000.0;
-	if (movementTimeAC > movementTimeDC)
-		return movementTimeAC;
-	return movementTimeDC;
-}
-
-int32_t D50::computeMovement (int isDec, int32_t fromCount, int32_t toCount, double v0, double inspectionTime, double* speedAtInspectionTime)
-{
-#ifdef DEBUG_BRUTAL
-	logStream (MESSAGE_DEBUG) << "****** computeMovement ()" << sendLog;
-#endif
-	if (fromCount == toCount)
-	{
-		if (inspectionTime < 0)         // i.e., only the time of whole movement is expected from this routine
-			return 0;
-		return toCount;
-	}
-
-	double v_max, a1, a2, v_physmax;
-
-	if (moveTurboSwitch->getValueBool ())	// first get current maxspeed in degrees/s, we will convert it to counts/s later
-		v_max = moveSpeedTurbo->getValueDouble ();
-	else
-		v_max = moveSpeedFull->getValueDouble ();
-
-
-	if (isDec == 0)		// i.e. this all relates to RA axis
-	{
-		v_max = v_max * fabs (haCpd);
-		v_physmax = raDrive->getPhysicalSpeedLimit () * (double) SERVO_COUNTS_PER_ROUND;
-		a1 = raDrive->getAccel () * (double) SERVO_COUNTS_PER_ROUND;
-		a2 = raDrive->getDecel () * (double) SERVO_COUNTS_PER_ROUND;
-	}
-	else			// i.e. this all relates to Dec axis
-	{
-		v_max = v_max * fabs (decCpd);
-		v_physmax = decDrive->getPhysicalSpeedLimit () * (double) SERVO_COUNTS_PER_ROUND;
-		a1 = decDrive->getAccel () * (double) SERVO_COUNTS_PER_ROUND;
-		a2 = decDrive->getDecel () * (double) SERVO_COUNTS_PER_ROUND;
-	}
-
-	if (v_max > v_physmax)
-		v_max = v_physmax;
-
-	double T_ramp1, T_ramp2;
-	int32_t S_ramp1, S_ramp2, S_const, movementDirection;
-
-	T_ramp1 = (v_max - v0) / a1;
-	T_ramp2 = v_max / a2;
-	S_ramp1 = T_ramp1 * (v_max + v0) / 2;
-	S_ramp2 = T_ramp2 * v_max / 2;
-	S_const = abs (toCount - fromCount) - S_ramp1 - S_ramp2;
-
-	if (toCount > fromCount)
-		movementDirection = (int32_t) 1;
-	else
-		movementDirection = (int32_t) -1;
-
-	if (S_const >= 0)	// i.e., we reach the full speed during the transition
-	{
-		double T_const = (double) S_const/v_max;
-		if (inspectionTime < 0)		// i.e., only the time of whole movement is expected from this routine
-		{
-			return (int32_t) ((T_ramp1 + T_ramp2 + T_const) * 1000.0 + 0.5);
-		}
-
-		if (inspectionTime <= T_ramp1)
-		{
-			if (speedAtInspectionTime != nullptr)
-				*speedAtInspectionTime = v0 + a1 * inspectionTime;
-			return fromCount + movementDirection * (int32_t) ((v0 + a1 * inspectionTime / 2) * inspectionTime + 0.5);
-		}
-		if (inspectionTime <= T_ramp1 + T_const)
-		{
-			if (speedAtInspectionTime != nullptr)
-				*speedAtInspectionTime = v_max;
-			return fromCount + movementDirection * (int32_t) (S_ramp1 + v_max * (inspectionTime - T_ramp1) + 0.5);
-		}
-		if (inspectionTime <= T_ramp1 + T_const + T_ramp2)
-		{
-			double T_reversed = T_ramp1 + T_ramp2 + T_const - inspectionTime;
-			if (speedAtInspectionTime != nullptr)
-				*speedAtInspectionTime = a2 * T_reversed;
-			return fromCount + movementDirection * (int32_t) (S_ramp1 + S_const + S_ramp2 - a2 * T_reversed * T_reversed / 2.0 + 0.5);
-		}
-		if (speedAtInspectionTime != nullptr)
-			*speedAtInspectionTime = 0.0;
-		return toCount;
-	}
-	// case when S_const<0, i.e., full speed is not reached during the transition
-	double T_full = ((1.0 + a1/a2) * sqrt ((v0*v0 + 2*a1*abs(toCount-fromCount)) / (1.0 + a1/a2)) - v0) / a1;
-	double T1 = (T_full * a2 - v0)/(a1 + a2);
-	if (inspectionTime < 0)		// i.e., only the time of whole movement is expected from this routine
-		return (int32_t) (T_full * 1000.0 + 0.5);
-	if (inspectionTime <=  T1)
-	{
-		if (speedAtInspectionTime != nullptr)
-			*speedAtInspectionTime = v0 + a1 * inspectionTime;
-		return fromCount + movementDirection * (int32_t) ((v0 + a1 * inspectionTime / 2) * inspectionTime + 0.5);
-	}
-	if (inspectionTime <=  T_full)
-	{
-		double T_reversed = T_full - inspectionTime;
-		if (speedAtInspectionTime != nullptr)
-			*speedAtInspectionTime = a2 * T_reversed;
-		return fromCount + movementDirection * (int32_t) (abs(toCount-fromCount) - a2 * T_reversed * T_reversed / 2.0 + 0.5);
-	}
-	if (speedAtInspectionTime != nullptr)
-		*speedAtInspectionTime = 0.0;
-	return toCount;
-}
-
-int D50::checkRawPosition (int32_t AC, int32_t DC, bool checkSunDistance, bool checkCeiling)
-{
-#ifdef DEBUG_BRUTAL
-	logStream (MESSAGE_DEBUG) << "****** checkRawPosition ()" << sendLog;
-#endif
-	struct ln_equ_posn equPosition;
-	struct ln_hrz_posn hrzPosition;
-
-	equPosition.ra = - ( (double) (AC / haCpd) + haZero);
-	equPosition.dec = (double) (DC / decCpd) + decZero;
-
-	ln_get_hrz_from_equ_sidereal_time (&equPosition, &observerLongLat, -observerLongLat.lng/15.0, &hrzPosition);
-#ifdef DEBUG_EXTRA
-	logStream (MESSAGE_DEBUG) << "------ checkRawPosition () ac/dc: " << AC << "/" << DC << ", ra0/dec: " << equPosition.ra << "/" << equPosition.dec << ", alt/az: " << hrzPosition.alt << "/" << hrzPosition.az << sendLog;
-#endif
-
-	if (!hardHorizon.is_good (&hrzPosition))
-		return 0;
-
-	if (checkCeiling)
-	{
-#ifdef DEBUG_EXTRA
-		logStream (MESSAGE_DEBUG) << "------ checkRawPosition () checkCeiling"  << sendLog;
-#endif
-		if (hardCeiling.is_good (&hrzPosition))		// !!! we use the "horizon" object, but need a ceiling test, so the logic is reversed
-			return 0;
-	}
-	else if (checkSunDistance)
-	{
-		double JD;
-		struct ln_equ_posn eq_sun;
-		JD = ln_get_julian_from_sys ();
-		ln_get_solar_equ_coords (JD, &eq_sun);
-		equPosition.ra = equPosition.ra + ln_get_mean_sidereal_time (JD)*15.0 + observerLongLat.lng;
-#ifdef DEBUG_EXTRA
-		logStream (MESSAGE_DEBUG) << "------ checkRawPosition () angular distance to Sun: " << ln_get_angular_separation (&eq_sun, &equPosition) << ", ra/dec: " << equPosition.ra << "/" << equPosition.dec << sendLog;
-#endif
-		if (ln_get_angular_separation (&eq_sun, &equPosition) < SUN_AVOID_DISTANCE)
-			return 0;
-	}
-	return 1;
+	return numberOfSuccesivePoints;
 }
 
 int D50::remotesGetMCRegister (rts2core::ConnREMOTES * connRem, unsigned char * mcReg)

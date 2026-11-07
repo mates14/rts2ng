@@ -4699,3 +4699,94 @@ the readout", exit when it ended (7.1 s); a 20 s readout - exit at the 15 s
 cap with a warning; a second SIGTERM - exit at once; `E 3 E 3` - the second
 exposure not started. Not run on a Moravian camera yet: that needs a daytime
 test on SBT C1 or C2 (stop mid-readout, restart, expect 1-2 s).
+
+## D50 path finding: around the Sun with several successive points (2026-11-07) [JS]
+
+On 2026-11-06 11:21:15, after drying the dew (telescope at alt 68, az 140,
+80-90 deg from the Sun), the move to standby made the dome close, and the
+dome asked T0 to park. `findPath ()` returned an error: the park position
+(HA 0, Dec -40.09, the south horizon) lay under the noon Sun (HA +9, Dec
+-16), the straight way passing 1.5 deg from it, HA-first 8.8 deg (the
+limit is 10), Dec-first below the hard horizon. The dome's park requests
+every 30 s were refused, the roof stayed open with "the mount is at rest
+outside the dome limit", until the mount was moved by hand to HA -15 Dec
++26 at 11:22:52; from there the park at 11:23:17 went through. JS: the
+telescope must never get closer to the Sun than the limit (drying
+included); the Sun check should apply only while the Sun is above the
+horizon.
+
+The path code moved out of `D50` into `D50Path` (`teld/d50/d50path.{h,cpp}`)
+with JS's functions and comments, so that it runs without the mount; D50
+fills in the drive speeds and accelerations, the limits, the horizon and
+ceiling, and the time before each `findPath ()`, then copies the targets
+and intervals into the arrays the move code already used
+(`RTS2_D50_SUCCESSIVE_POINTS` timer, up to 20 points). Changes:
+- When the three classic tries fail, an A* search over a grid of
+  intermediate targets 5 deg apart (HA one step inside its limits, as
+  `sky2counts` keeps targets): a target counts when safe, a step when
+  `checkPassage ()` accepts it from rest, cost = movement time. Targets a
+  direct safe passage skips are then dropped, and each next target is set as
+  early as the rest of the way to it is safe from where the mount is by
+  then, at the latest when it has stopped. A moving axis is only given a
+  target further on in its direction and far enough to stop in, because
+  `computeMovement ()` takes the initial speed in the direction of the move.
+- The Sun is avoided while above the horizon (centre at -0.833 deg, upper
+  limb with refraction), not in every state but night; computed once per
+  `findPath ()`.
+- `checkPassage ()` also checks the target itself, `computeSuccessivePoint
+  Interval ()` also the moment of arrival, `computeMovement ()` sets the
+  speed of an axis that does not move (was uninitialised).
+- A grid path is logged at INFO with its targets and intervals; a failed
+  search at ERROR with the number of targets tried.
+- New: a mount standing still (sidereal tracking off) is checked once a
+  minute (`D50::checkSunApproach ()`, `D50Path::sunApproach ()`): when the
+  Sun, above the horizon, will come within 10 deg in the next 10 min - it
+  crosses a fixed HA/Dec at ~15 deg/h - or already has, the mount parks
+  (by `findPath ()`, so around the Sun; the park position is never closer
+  than ~16 deg to the Sun at D50), reported as a warning. With `block_move`
+  set (`--block-on-standby` in the day) it does not move, JS's choice, and
+  reports critically every 5 min instead. Not while tracking (the Sun's
+  ~1 deg a day is well inside the 10 deg, JS), with the roof closed, nor
+  while moving, parking or parked.
+- New: leaving the Sun's proximity without any setup (JS: it must start
+  moving away from the Sun first). A passage starting closer than 10 deg
+  is allowed when every sample, sampled every 0.01 s instead of 0.2 s, is
+  farther from the Sun than the one before, until it is out; from then on,
+  and for the target, the usual rules. Horizon and ceiling hold throughout.
+  The grid search then also looks at targets up to 4 steps (20 deg) around
+  such a start. Applies to every move, the park after `checkSunApproach ()`
+  included.
+
+Test `teld/tests/test_d50path` (D50's hard horizon and ceiling files as
+written there - tabs and signed altitudes matter, ObjectCheck reads
+"125 29" as 125 deg 29 arcmin -, drive values and site):
+the 11:21:15 park - the three classic tries refused, the grid gives HA +65
+Dec +30 then the park, 12.7 deg from the Sun at the closest, 8 ms; the
+15:50:45 dusk move that failed (Sun at -4.1 deg) goes straight. A mount
+standing 12 deg west of the Sun at 11:21 (11.5 deg away): within 10 deg in
+390 s, so it parks, and the park from there is found; the drying position
+(81 deg), the same spot tracking, 20 deg west and the Sun set: no action;
+5 deg west: at once. Leaving the proximity, parks from 5 deg west of the
+Sun (via HA +15 Dec -25), 5 deg east and 3 deg below (straight), 3 deg
+above and 1 deg off (via HA -5 Dec -10), all moving away from the Sun from
+the first step; a passage that would cross the Sun is refused; of 1067
+random starts within 10 deg of the Sun over a year (to the park or a random
+target) 1066 left it - the replay checking at 5 ms that the distance never
+shrinks by more than a few counts' rounding (1e-5 deg) -, the one without
+a way sits on the horizon with the Sun rising 1.9 deg from it; slowest
+search 5 ms. (With 0.2 s samples the escape let a curving way come
+1.6e-5 deg closer to the Sun between two samples, 2.3 s into the move - the
+reason for 0.01 s; what is left at 0.01 s is rounding, 1.9e-7 deg.)
+Under the
+roof (ceiling checked), from the park: `altaz 2 270` (east, ceiling +10)
+fails the classic tries and goes by HA -45 Dec -30, HA -60 Dec -20;
+`altaz 2 90` (west) is refused - the ceiling is at 0 there, the target is
+above it -, and the 1 deg west band (-1 .. 0) is too thin for the 5 deg grid;
+of 132 random moves under the roof 127 found (82 on the grid). 762 random
+daytime moves (741 with the Sun up): 741 by the classic tries, 21 on the
+grid, none without a way. Every path is replayed at 0.05 s through the
+movement model with the horizon, the ceiling and the Sun distance computed
+separately: closest to the Sun 10.00 deg, slowest search 26 ms. Same
+results built with GCC 12 on lascaux50, no warnings. Not verified on the
+mount: the real checks are a daytime park at D50 with the Sun in the way,
+and a move under the closed roof, e.g. `altaz 2 270` from the park.
