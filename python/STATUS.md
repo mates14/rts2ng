@@ -51,3 +51,19 @@ flats.py and `domeDevice=None` (darks under the open roof, DF filter). Now
 `python/sites/d50/flatC0.py`, same settings, packaged flats.py, closing the
 dome; the D50 dome parks T0 before it closes (06:04 that morning: park 12 s,
 close 27 s).
+
+### A script whose pipes RTS2 closed ends quietly (2026-11-07) [JS]
+
+When RTS2 drops a running script but the process lives on, the script's
+next write raised `BrokenPipeError` (and an empty read returned `''` to the
+caller): a traceback plus "Exception ignored in: <stdout>" in the log, 20-80
+a night at SBT (guideccd.py, 2026-11-07 04:45:20 and 04:47:19), harmless but
+burying real script errors. scriptcomm now turns both into `Rts2NotActive`,
+which every site script already treats as "RTS2 ended me", points stdout at
+/dev/null and makes `log ()` a no-op, so the handlers' last log line and
+Python's flush at exit raise nothing. Bench (a harness that answers a few
+queries, then closes stdin/stdout and keeps reading stderr): old - exit 120,
+BrokenPipeError traceback, in a write and in a read; new - exit 0, stderr
+empty, both. Through rts2-scriptexec ending (SIGTERM) the script gets
+SIGTERM from ConnFork's `kill (-childPid)` and ends either way, so that is
+not the path seen at SBT. Needs the rts2-python package from this date.
