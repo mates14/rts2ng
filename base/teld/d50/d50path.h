@@ -29,6 +29,9 @@
 // - the Sun position is computed once per findPath (), not at every 0.2 s
 //   sample of every passage.
 // - sunApproach (): D50 parks a standing mount the Sun drifts towards (new).
+// - checkPassage () samples as densely as the distance to the nearest limit
+//   requires, down to 5 ms at it (classic: every 0.2 s, up to 1.4 deg on
+//   the sky at full speed).
 // - a mount already in the Sun's proximity may leave it, moving away from
 //   the Sun from the first step on (checkPassage (), new).
 
@@ -39,19 +42,24 @@
 #include <libnova/libnova.h>
 
 #include <cstdint>
+#include <vector>
 
-// timestep [s] for tracing path in checkPassage routine
-#define CHECKPASSAGE_TIME_RESOLUTION	0.2
-// ... and while leaving the Sun's proximity
-#define CHECKPASSAGE_ESCAPE_RESOLUTION	0.01
+// timestep [s] for tracing path in checkPassage routine: the longest, where no limit is near
+#define CHECKPASSAGE_TIME_RESOLUTION	1.0
+// ... the shortest, at a limit (horizon, ceiling, the Sun's) and while leaving the Sun's proximity: at 5 deg/s in
+// both axes (7 deg/s on the sky) 0.035 deg
+#define CHECKPASSAGE_FINE_RESOLUTION	0.005
 // timestep [s] for examining path in findPath routine
 #define FINDPATH_TIME_RESOLUTION	1.0
 // grid step in degrees of the intermediate targets findPath searches
 #define FINDPATH_MIN_STEP_SIZE		5
 #define MAX_NUMBER_OF_SUCCESSIVE_POINTS	20
 
-// We should never get closer to Sun than... [deg]
-#define SUN_AVOID_DISTANCE 10.0
+// We should never get closer to Sun than... [deg] (classic 10; 15 since 2026-11-07, JS: a straight move passed 14 deg
+// from the Sun and looked too close)
+#define SUN_AVOID_DISTANCE 15.0
+// what a few counts of rounding make of the Sun distance [deg] while leaving its proximity
+#define SUN_ESCAPE_ROUNDING 1e-5
 // how far ahead [s] a standing mount is checked for the Sun drifting towards it
 #define SUN_APPROACH_LEAD 600.0
 // ...while the Sun is above the horizon: centre altitude of a Sun whose upper
@@ -181,6 +189,14 @@ class D50Path
 		int checkRawPosition (int32_t AC, int32_t DC, double *sunDist = nullptr);
 
 		/**
+		* The longest time step [s] from (AC, DC) in which no limit - horizon, ceiling, the Sun's - can be reached,
+		* between CHECKPASSAGE_FINE_RESOLUTION and CHECKPASSAGE_TIME_RESOLUTION: checkPassage () samples that far
+		* ahead. Bounds: the mount covers at most the drives' full speeds on the sky; the Sun's distance changes no
+		* faster, the margin to a horizon line that times (1 + its steepest slope there / cos (alt)).
+		*/
+		double safeStep (int32_t AC, int32_t DC, double sunDist);
+
+		/**
 		* Distance [deg] of the position from the Sun, INFINITY when the Sun is not avoided (below the horizon, or the roof is not open).
 		*/
 		double sunDistance (int32_t AC, int32_t DC);
@@ -203,6 +219,11 @@ class D50Path
 	private:
 		int findPathOnGrid (int32_t acStart, int32_t dcStart, int32_t acFin, int32_t dcFin);
 		int planIntervals (int32_t acStart, int32_t dcStart, int n);
+
+		// the steepest slopes [deg alt / deg az] of a horizon line, per degree of azimuth (setTime ()), and within az +- daz
+		void slopeBins (ObjectCheck *oc, std::vector <double> &bins);
+		double steepest (const std::vector <double> &bins, double az, double daz);
+		std::vector <double> horizonBins, ceilingBins;
 
 		double JD;
 		double gmst;			// mean sidereal time at JD [deg]

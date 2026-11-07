@@ -9,9 +9,9 @@
 // the same day (15:50:45, Sun just set but still avoided).
 //
 // Every path found is replayed here on its own: the movement model is
-// stepped through the successive targets with their intervals, and each
-// sample is checked against the D50 hard horizon and the Sun distance
-// computed separately, not with D50Path::checkRawPosition ().
+// stepped every 5 ms through the successive targets with their intervals,
+// and each sample is checked against the D50 hard horizon (and ceiling) and
+// the Sun distance computed separately, not with D50Path::checkRawPosition ().
 
 #include "d50path.h"
 
@@ -203,7 +203,7 @@ static double replay (D50Path &p, int n, int32_t ac, int32_t dc, double JD, bool
 		double full = p.computeFullMovementTime (ac, dc, tac, tdc, vac, vdc);
 		double until = (k < n) ? p.successivePointsIntervals[k] : full;
 		assert (until <= full + 1e-9);
-		for (double t = 0; ; t += escaping ? 0.005 : 0.05)
+		for (double t = 0; ; t += 0.005)
 		{
 			if (t > until)
 				t = until;
@@ -319,15 +319,16 @@ int main ()
 		assert (p.sunApproach (acD, dcD, false, SUN_APPROACH_LEAD, now) < 0);
 		assert (now > 80);
 
-		// 12 deg west of the Sun on its declination: the Sun closes in at ~15 deg/h * cos (dec)
-		int32_t acW = acOf (p, sha + 12), dcW = dcOf (p, sdec);
+		// 2 deg outside the limit, west of the Sun on its declination: the Sun closes in at ~15 deg/h * cos (dec)
+		const double W = (SUN_AVOID_DISTANCE + 2) / cos (sdec * M_PI / 180);
+		int32_t acW = acOf (p, sha + W), dcW = dcOf (p, sdec);
 		double in = p.sunApproach (acW, dcW, false, SUN_APPROACH_LEAD, now);
-		printf ("standing 12 deg west of the Sun: within %g deg in %.0f s (now %.1f deg)\n", SUN_AVOID_DISTANCE, in, now);
+		printf ("standing %.0f deg west of the Sun: within %g deg in %.0f s (now %.1f deg)\n", W, SUN_AVOID_DISTANCE, in, now);
 		assert (now > SUN_AVOID_DISTANCE && in > 0 && in < SUN_APPROACH_LEAD);
 		// tracking there, the Sun keeps its distance (1 deg a day)
 		assert (p.sunApproach (acW, dcW, true, SUN_APPROACH_LEAD, now) < 0);
-		// 20 deg west: more than the lead away
-		assert (p.sunApproach (acOf (p, sha + 20), dcW, false, SUN_APPROACH_LEAD, now) < 0);
+		// 10 deg farther: more than the lead away
+		assert (p.sunApproach (acOf (p, sha + W + 10), dcW, false, SUN_APPROACH_LEAD, now) < 0);
 		// 5 deg west: already too close
 		assert (p.sunApproach (acOf (p, sha + 5), dcW, false, SUN_APPROACH_LEAD, now) == 0);
 		// what D50 does then: park, around the Sun
@@ -360,15 +361,15 @@ int main ()
 			printf ("\n");
 			assert (n >= 0);
 			double closest = replay (p, n, ac0, dc0, JD, true, acOf (p, 0), 0);
-			assert (closest >= SUN_AVOID_DISTANCE - 1.0);
+			assert (closest >= SUN_AVOID_DISTANCE - 0.04);
 		}
 		// a move that would go closer first is refused: from 5 deg west straight across the Sun
 		int32_t acW = acOf (p, sha + 5), dcW = dcOf (p, sdec);
-		assert (p.checkPassage (acW, dcW, acOf (p, sha - 20), dcW) <= 0);
+		assert (p.checkPassage (acW, dcW, acOf (p, sha - 25), dcW) <= 0);
 
 		// random starts in the proximity over a year, to the park and to random targets
 		std::mt19937 rng (11);
-		std::uniform_real_distribution <double> uday (0, 365), uhour (7, 15), ur (0.5, 9.9), uang (0, 2 * M_PI), uha (-175, 175), udec (-40, 89);
+		std::uniform_real_distribution <double> uday (0, 365), uhour (7, 15), ur (0.5, SUN_AVOID_DISTANCE - 0.1), uang (0, 2 * M_PI), uha (-175, 175), udec (-40, 89);
 		int tried = 0, found = 0;
 		double escMs = 0;
 		for (int i = 0; i < 1500; i++)
@@ -408,7 +409,7 @@ int main ()
 			}
 			found++;
 			double closest = replay (p, n, ac0, dc0, JDr, true, ac1, dc1);
-			if (closest < SUN_AVOID_DISTANCE - 1.0)
+			if (closest < SUN_AVOID_DISTANCE - 0.04)
 			{
 				fprintf (stderr, "case %d: from %.1f/%.1f (%.1f deg from the Sun) %d points, replay %.2f\n", i, ha0, d0, sd, n, closest);
 				assert (false);
@@ -525,8 +526,12 @@ int main ()
 				fprintf (stderr, "case %d: horizon hit, from %.1f/%.1f to %.1f/%.1f, %d points\n", i, ha0, d0, ha1, d1, n);
 				assert (false);
 			}
-			// the model samples every 0.2 s and the replay every 0.05 s: allow what a 5 deg/s move covers in between
-			assert (closest >= SUN_AVOID_DISTANCE - 1.0);
+			// checkPassage () bounds the way between its samples; the replay samples every 5 ms: 0.035 deg at 7 deg/s
+			if (closest < SUN_AVOID_DISTANCE - 0.04)
+			{
+				fprintf (stderr, "case %d: %.3f deg from the Sun\n", i, closest);
+				assert (false);
+			}
 			worstClosest = std::min (worstClosest, closest);
 		}
 		printf ("random daytime moves: %d tried (%d with the Sun up), %d by the classic strategies, %d on the grid, %d without a safe way; closest to the Sun %.2f deg; slowest findPath %.1f ms\n",

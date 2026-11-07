@@ -4810,3 +4810,31 @@ successive points are due and for 1 s after any target is set;
 or interrupted path counts as finished. The Sun watchdog now also checks a
 "parked" mount (that one stood parked at HA 55, 26 deg from the Sun), and
 a path under the roof no longer logs "avoiding the Sun".
+
+`altaz 45 90` from the park at 13:02:56 (5147c1e) went straight and looked
+close to the Sun to JS. Reconstructed through the model: closest 14.1 deg,
+8.1 s in, at alt ~30 az ~28 with the Sun at alt 17 az 36 (HA 35, Dec -16)
+- legal under the 10 deg limit. JS: the checked positions are too sparse.
+`checkPassage ()` sampled every 0.2 s, up to 1.4 deg on the sky at full
+speed, with nothing said about the way in between. Now the next sample
+comes as late as no limit can be reached before it (`safeStep ()`): the
+mount covers at most the drives' full speeds on the sky (7 deg/s); the Sun
+distance changes no faster; the margin to a horizon or ceiling line that
+times (1 + the line's steepest slope there / cos alt), from 1 deg azimuth
+bins of slopes made in `setTime ()`. Up to 1 s far from all limits, down
+to 5 ms (0.035 deg) at one; leaving the Sun's proximity always 5 ms, with
+a few counts' rounding (1e-5 deg) not taken for an approach. The test
+replays every path at 5 ms with 0.04 deg tolerance (was 0.05 s and 1 deg):
+all pass; the committed (0.2 s) planner passed it too, so no real gap was
+found - the guarantee is new, the paths are the same (`altaz 45 90` still
+14.1 deg). Slowest search 27 ms (was 26).
+
+JS then raised the Sun limit to 15 deg (`SUN_AVOID_DISTANCE`, classic 10).
+`altaz 45 90` at 13:02:56 would now go by one successive point (a classic
+try), 17.7 deg from the Sun at the closest; the Nov 6 noon park by HA +65
+Dec +25, 16.1 deg. The park position stays outside the limit: the lowest
+noon Sun at D50 (winter solstice) is 16.6 deg above it. Test: 43 of 737
+random daytime moves on the grid (21 at 10 deg), none without a way,
+closest 15.05 deg; of 1049 starts within 15 deg of the Sun, 1042 leave
+it, the 7 others all at the horizon (alt -1 .. 1.5) with the Sun low;
+slowest search 30 ms.

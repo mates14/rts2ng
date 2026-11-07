@@ -270,10 +270,13 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - Every move goes by `D50Path::findPath ()` (`teld/d50/d50path.cpp`):
   the classic straight / HA-first / Dec-first tries, then a 5 deg grid of
   intermediate targets. Every target, intermediate ones included, must be
-  safe to stop at (horizon, ceiling with the roof not open, 10 deg from the
-  Sun while it is above the horizon); a target given early is only one a
-  moving axis can reach without reversing. A mount already within 10 deg
-  of the Sun may only move away from it until out (sampled every 0.01 s).
+  safe to stop at (horizon, ceiling with the roof not open, 15 deg from the
+  Sun while it is above the horizon - classic 10); a target given early is only one a
+  moving axis can reach without reversing. A passage is sampled as densely
+  as its distance to the nearest limit requires (1 s to 5 ms, bounded by
+  the drives' speeds and the horizon slopes), so no limit is crossed
+  between samples. A mount already within 15 deg of the Sun may only move
+  away from it until out (sampled every 5 ms).
   A mount standing still (tracking off) that the Sun will reach within
   10 min, or has, parks (checked once a minute), unless `block_move` is set
   (then a critical report). `teld/tests/test_d50path`

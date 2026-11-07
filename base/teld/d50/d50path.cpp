@@ -16,6 +16,7 @@
 #include "d50path.h"
 
 #include <algorithm>
+#include <iterator>
 #include <cmath>
 #include <cstdlib>
 #include <queue>
@@ -39,6 +40,38 @@ D50Path::D50Path ()
 	checkSunDistance = true;
 }
 
+void D50Path::slopeBins (ObjectCheck *oc, std::vector <double> &bins)
+{
+	// bins[i]: the steepest slope [deg alt / deg az] of the horizon line in azimuths i .. i + 1
+	bins.assign (360, 0);
+	if (oc == nullptr || oc->begin () == oc->end ())
+		return;
+	for (auto it = oc->begin (); it != oc->end (); it++)
+	{
+		auto next = std::next (it);
+		if (next == oc->end ())
+			next = oc->begin ();
+		double a1 = (*it).hrz.az, len = ln_range_degrees ((*next).hrz.az - a1);
+		if (len <= 0)
+			continue;
+		double slope = fabs ((*next).hrz.alt - (*it).hrz.alt) / len;
+		for (int i = (int) floor (a1); i <= (int) floor (a1 + len); i++)
+			bins[((i % 360) + 360) % 360] = std::max (bins[((i % 360) + 360) % 360], slope);
+	}
+}
+
+double D50Path::steepest (const std::vector <double> &bins, double az, double daz)
+{
+	if (bins.empty ())
+		return 0;
+	if (daz >= 180)
+		return *std::max_element (bins.begin (), bins.end ());
+	double slope = 0;
+	for (int i = (int) floor (az - daz); i <= (int) floor (az + daz); i++)
+		slope = std::max (slope, bins[((i % 360) + 360) % 360]);
+	return slope;
+}
+
 void D50Path::setTime (double _JD)
 {
 	JD = _JD;
@@ -47,6 +80,31 @@ void D50Path::setTime (double _JD)
 	struct ln_hrz_posn sunHrz;
 	ln_get_hrz_from_equ (&sun, &observer, JD, &sunHrz);
 	checkSunDistance = sunHrz.alt > SUN_AVOID_ALTITUDE;
+	slopeBins (hardHorizon, horizonBins);
+	slopeBins (hardCeiling, ceilingBins);
+}
+
+double D50Path::safeStep (int32_t AC, int32_t DC, double sunDist)
+{
+	// the fastest the mount moves on the sky [deg/s]; the Sun's distance changes no faster
+	const double v = hypot (vMax[0] / fabs (haCpd), vMax[1] / fabs (decCpd));
+	double dt = CHECKPASSAGE_TIME_RESOLUTION;
+	if (std::isfinite (sunDist))
+		dt = std::min (dt, (sunDist - SUN_AVOID_DISTANCE) / v);
+	struct ln_equ_posn equPosition;
+	struct ln_hrz_posn hrzPosition;
+	equPosition.ra = - ( (double) (AC / haCpd) + haZero);
+	equPosition.dec = (double) (DC / decCpd) + decZero;
+	ln_get_hrz_from_equ_sidereal_time (&equPosition, &observer, -observer.lng/15.0, &hrzPosition);
+	// within a coarse step the azimuth changes by at most step / cos (alt) (bounded near the zenith, where no horizon
+	// line is), and the margin to a horizon line by v (1 + its steepest slope there / cos (alt)) per second
+	const double step = v * CHECKPASSAGE_TIME_RESOLUTION;
+	const double c = std::max (cos ((fabs (hrzPosition.alt) + step) * M_PI / 180.0), 0.2);
+	const double daz = step / c;
+	dt = std::min (dt, (hrzPosition.alt - hardHorizon->getHorizonHeight (&hrzPosition, 0)) / (v * (1 + steepest (horizonBins, hrzPosition.az, daz) / c)));
+	if (checkCeiling && hardCeiling != nullptr)
+		dt = std::min (dt, (hardCeiling->getHorizonHeight (&hrzPosition, 0) - hrzPosition.alt) / (v * (1 + steepest (ceilingBins, hrzPosition.az, daz) / c)));
+	return std::max (dt, CHECKPASSAGE_FINE_RESOLUTION);
 }
 
 int D50Path::findPath (int32_t acStart, int32_t dcStart, int32_t acFin, int32_t dcFin)
@@ -301,8 +359,12 @@ double D50Path::checkPassage (int32_t fromAC, int32_t fromDC, int32_t toAC, int3
 
 	fullMovementTime = computeFullMovementTime (fromAC, fromDC, toAC, toDC, initSpeedAC, initSpeedDC);
 
-	// while leaving the proximity the samples are much denser: between two 0.2 s samples the way could still curve towards the Sun
-	for (inspectionTime = escaping ? CHECKPASSAGE_ESCAPE_RESOLUTION : CHECKPASSAGE_TIME_RESOLUTION; ; inspectionTime += escaping ? CHECKPASSAGE_ESCAPE_RESOLUTION : CHECKPASSAGE_TIME_RESOLUTION)
+	// The next sample comes as late as no limit can be reached before it: up to 1 s when none is near, down to 5 ms at
+	// a limit (there at most 0.035 deg on the sky), and 5 ms while leaving the Sun's proximity, where the way could
+	// curve towards the Sun between two samples. Classic sampled every 0.2 s, up to 1.4 deg at full speed, with no
+	// bound in between. [JS 2026-11-07]
+	double dt = escaping ? CHECKPASSAGE_FINE_RESOLUTION : safeStep (fromAC, fromDC, previous);
+	for (inspectionTime = dt; ; inspectionTime += dt)
 	{
 		bool last = false;
 		if (inspectionTime >= fullMovementTime)
@@ -317,7 +379,8 @@ double D50Path::checkPassage (int32_t fromAC, int32_t fromDC, int32_t toAC, int3
 			return -1.0 * inspectionTime;
 		if (escaping)
 		{
-			if (sunDist <= previous)
+			// positions are whole counts (2.4e-6 deg in HA): at 5 ms steps from rest a few counts' rounding is no approach
+			if (sunDist < previous - SUN_ESCAPE_ROUNDING)
 				return -1.0 * inspectionTime;
 			previous = sunDist;
 			escaping = sunDist < SUN_AVOID_DISTANCE;
@@ -328,6 +391,7 @@ double D50Path::checkPassage (int32_t fromAC, int32_t fromDC, int32_t toAC, int3
 		}
 		if (last)
 			break;
+		dt = escaping ? CHECKPASSAGE_FINE_RESOLUTION : safeStep (posAC, posDC, sunDist);
 	}
 	// the target itself must be out of the Sun's proximity
 	if (escaping)

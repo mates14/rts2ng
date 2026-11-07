@@ -1447,7 +1447,7 @@ void D50::checkSunApproach ()
 	// "parked" wherever it stopped (12:47); at the park position itself the Sun never comes within ~16 deg
 	if ((getState () & TEL_MASK_MOVING) == TEL_MOVING || (getState () & TEL_MASK_MOVING) == TEL_PARKING)
 		return;
-	// tracking keeps the distance from the Sun (1 deg a day, well inside the 10 deg)
+	// tracking keeps the distance from the Sun (1 deg a day, well inside SUN_AVOID_DISTANCE)
 	if (trackingRequested () != 0)
 		return;
 	// under a closed roof the Sun cannot reach the telescope
