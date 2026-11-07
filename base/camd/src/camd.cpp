@@ -456,6 +456,9 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 
 	lastCareBlock = true;
 
+	exitPending = 0;
+	exitDeadline = NAN;
+
 	createValue (ccdRealType, "CCD_TYPE", "camera type", true, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 	createValue (serialNumber, "CCD_SER", "camera serial number", true, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
 	createValue (ccdChipType, "CCD_CHIP", "camera chip type", true, RTS2_VALUE_WRITABLE | RTS2_VALUE_AUTOSAVE);
@@ -1674,7 +1677,48 @@ int Camera::idle ()
 {
 	checkExposures ();
 	checkReadouts ();
+	if (exitPending)
+	{
+		const rts2_status_t busy = CAM_EXPOSING | CAM_EXPOSING_NOIM | CAM_READING;
+		if (std::isnan (exitDeadline))
+		{
+			// a readout of SBT's G4 cameras takes 9.2 s; rts2-start waits
+			// 20 s before SIGKILL, systemd TimeoutStopSec 20 s
+			exitDeadline = getNow () + 15;
+			quedExpNumber->setValueInteger (0);
+			if (getStateChip (0) & (CAM_EXPOSING | CAM_EXPOSING_NOIM))
+			{
+				logStream (MESSAGE_INFO) << "stopping: aborting the exposure before exiting" << sendLog;
+				killAll (false);
+			}
+			if (getStateChip (0) & CAM_READING)
+				logStream (MESSAGE_INFO) << "stopping: waiting for the readout to end before exiting" << sendLog;
+		}
+		if (!(getStateChip (0) & busy) || getNow () > exitDeadline)
+		{
+			if (getStateChip (0) & busy)
+				logStream (MESSAGE_WARNING) << "stopping: the camera is still busy, exiting anyway" << sendLog;
+			rts2core::ScriptDevice::endRunLoop ();
+		}
+	}
 	return rts2core::ScriptDevice::idle ();
+}
+
+void Camera::endRunLoop ()
+{
+	// base note: classic exited at once, from the signal handler
+	// (Daemon::endRunLoop () calls exit ()), whatever the camera did. A
+	// Moravian G4 stopped 1.5 s into its readout did not answer the next
+	// start (gxccd_initialize_usb timed out after 120 s) until power-cycled
+	// (SBT C1 and C2, 2026-11-07 02:10). A busy chip now defers the exit to
+	// idle (); nothing here calls the SDK - this runs in the signal handler.
+	// A second signal exits at once (killSignal () maps it to exit ()).
+	if (!exitPending && (getStateChip (0) & (CAM_EXPOSING | CAM_EXPOSING_NOIM | CAM_READING)))
+	{
+		exitPending = 1;
+		return;
+	}
+	rts2core::ScriptDevice::endRunLoop ();
 }
 
 void Camera::changeMasterState (rts2_status_t old_state, rts2_status_t new_state)
@@ -1863,6 +1907,13 @@ int Camera::camStartExposureWithoutCheck ()
 int Camera::camExpose (rts2core::Connection * conn, int chipState, bool fromQue, bool careBlock)
 {
 	int ret;
+
+	if (exitPending)
+	{
+		if (conn)
+			conn->sendCommandEnd (DEVDEM_E_HW, "camera daemon is stopping");
+		return -1;
+	}
 
 	// if it is currently exposing
 	// or performing other op that can block command execution

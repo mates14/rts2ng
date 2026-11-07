@@ -20,6 +20,7 @@
 #pragma once
 
 #include <sys/time.h>
+#include <csignal>
 #include <ctime>
 #include <type_traits>
 
@@ -200,6 +201,13 @@ class Camera:public rts2core::ScriptDevice
 		virtual void changeMasterState (rts2_status_t old_state, rts2_status_t new_state);
 
 		virtual int idle ();
+
+		/**
+		 * SIGTERM/SIGINT while the chip exposes or reads out: the exit waits
+		 * for the main loop, which aborts an exposure and lets a readout
+		 * finish first. [JS 2026-11-07]
+		 */
+		virtual void endRunLoop ();
 
 		virtual rts2core::DevClient *createOtherType (rts2core::Connection * conn, int other_device_type);
 		virtual int info ();
@@ -1503,6 +1511,12 @@ class Camera:public rts2core::ScriptDevice
 		}
 
 		bool lastCareBlock;
+
+		// set by endRunLoop () (in the signal handler) while the chip was
+		// busy; the main loop (idle ()) then ends the exposure or waits for
+		// the readout, at most until exitDeadline, and exits
+		volatile sig_atomic_t exitPending;
+		double exitDeadline;
 };
 
 }

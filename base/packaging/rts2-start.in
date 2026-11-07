@@ -69,7 +69,9 @@ progname=$(basename "$0")
 mode=start
 interactive=0
 foreground=0
-stop_timeout=10
+# a camera finishes its readout before it exits (9.2 s on SBT's G4,
+# camd's Camera::endRunLoop); systemd's TimeoutStopSec is 20 s as well
+stop_timeout=20
 ret=0
 
 usage ()

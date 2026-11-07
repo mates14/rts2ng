@@ -4667,3 +4667,35 @@ moves in the log: 60 of 60 frames right after the teld fix (52 dropped, 27
 wrongly, before it). An exe argument goes inside the quotes: `exe "guide.py
 noblock"`. Not run on the hardware yet; the guide scripts were not run at all
 (they need the sites' cameras).
+
+## A camera stopped mid-readout: the exit waits for the readout (2026-11-07) [JS]
+
+The slow SBT restart at 02:10 (`rts2-start -r C1 C2 C3 T0 EXEC HTTPD`, ~6
+min): C1 and C2 had ended their exposures at 02:10:06.36 and were 1.5 s into
+their 9.2 s readouts when they were stopped. Their cameras then did not
+answer: `gxccd_initialize_usb` returned nothing after exactly 120 s ("cannot
+find device with id 6166" / 6167; also with `rts2-start -i C1`, so not the
+daemonize handshake, whose own 120 s wait made the steps look like a
+start-up timeout), and C3 took the same 120 s to come up. A power cycle of
+both cameras cured it. Every earlier SBT restart (2026-11-03 x6, 11-06
+15:29) stopped idle cameras, all up in 1-2 s; so did the repeat at 02:28.
+
+Cause (UPSTREAM_BUGS.md): the daemon exits from the signal handler
+(`Daemon::endRunLoop` -> `exit`) whatever the camera does, and the driver's
+destructor never runs. The 2026-10-27 fix covered a client leaving
+mid-exposure, not the daemon itself going away.
+
+Fix: `Camera::endRunLoop` only notes the request while the chip exposes or
+reads out (nothing in the signal handler touches the SDK); `Camera::idle`
+then aborts an exposure (harmless mid-exposure, 2026-10-27 tests), drops
+queued exposures, refuses new ones ("camera daemon is stopping"), waits for
+a readout to end - at most 15 s - and exits. A second signal exits at once.
+rts2-start waits 20 s before SIGKILL (was 10; a G4 readout is 9.2 s;
+systemd's TimeoutStopSec was already 20).
+
+Bench (camd-dummy, scriptexec): SIGTERM idle - exit 0.06 s; mid-exposure -
+"aborting the exposure", exit 0.08 s; during an 8 s readout - "waiting for
+the readout", exit when it ended (7.1 s); a 20 s readout - exit at the 15 s
+cap with a warning; a second SIGTERM - exit at once; `E 3 E 3` - the second
+exposure not started. Not run on a Moravian camera yet: that needs a daytime
+test on SBT C1 or C2 (stop mid-readout, restart, expect 1-2 s).

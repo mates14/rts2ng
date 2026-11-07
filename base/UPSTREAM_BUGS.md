@@ -2014,3 +2014,19 @@ camera works (filter, exposure, ...) triggers it at the next readout.
 
 rts2ng: `Device::setFullBopState` keeps the centrald's state as sent
 (`masterBopState`), and `checkQueChanges` recomputes from that.
+
+## A camera daemon exits in the middle of a readout (`lib/rts2/daemon.cpp`, `endRunLoop`) [JS 2026-11-07]
+
+SIGTERM/SIGINT run `killSignal ()`, which calls `Daemon::endRunLoop ()`,
+which calls `exit (0)` - from the signal handler, whatever the camera does.
+The driver's object is on `main`'s stack, so its destructor (gxccd:
+`gxccd_release`) does not run either. A Moravian G4 (SBT C1, C2) stopped
+1.5 s into its 9.2 s readout did not answer the next start:
+`gxccd_initialize_usb` timed out after 120 s ("cannot find device"), and
+every later gxccd start waited the same 120 s, until both cameras were
+power-cycled (2026-11-07 02:10). Stopped while idle, the same cameras
+restart in 1-2 s.
+
+rts2ng: `Camera::endRunLoop` defers the exit while the chip exposes or reads
+out; the main loop (`Camera::idle`) aborts an exposure, lets a readout
+finish (at most 15 s) and exits. A second signal exits at once.
