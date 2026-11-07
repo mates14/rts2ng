@@ -103,7 +103,10 @@ async function loadNightsLevel (year, month, day) {
 // The images come a page at a time (api/db/images with limit=), filtered
 // by target (a click on a target in the observations), cameras and
 // photometric filters (checkboxes, with the counts the other two filters
-// leave). A click on a thumbnail opens it big (lightbox.js, with zoom);
+// leave), and the kind of frame: science (the DB's images), flats and
+// darks (files only, which the list adds). A click on a thumbnail opens it
+// big (lightbox.js, with zoom; the arrow keys go to the neighbours, across
+// pages);
 // images are selected with their checkboxes - the selection survives
 // paging and filtering - and downloaded as one tar (POST api/download), or
 // one at a time as FITS (fits/<path>).
@@ -111,6 +114,7 @@ async function loadNightsLevel (year, month, day) {
 const PAGE_SIZES = [24, 48, 96, 192];
 const THUMB_SIZE = 200;				// preview/?ps= of a thumbnail
 const BIG_SIZE = 2048;				// and of the enlarged image
+const KIND_LABELS = { object: 'science', flat: 'flats', dark: 'darks' };
 
 const archive = {
 	year: 0, month: 0, day: 0,
@@ -118,6 +122,7 @@ const archive = {
 	targetNames: new Map (),
 	cameras: null,					// Set of camera names, null: all
 	filters: null,					// Set of filter names, null: all
+	kinds: new Set (['object']),	// of object, flat, dark; null: all. Kept across nights
 	offset: 0,
 	limit: 48,
 	total: 0,
@@ -133,6 +138,9 @@ try {
 		archive.limit = saved;
 	archive.calibrated = localStorage.getItem ('archiveCalibrated') !== '0';
 	archive.newestFirst = localStorage.getItem ('archiveNewestFirst') === '1';
+	const kinds = localStorage.getItem ('archiveKinds');
+	if (kinds !== null)
+		archive.kinds = kinds === '*' ? null : new Set (kinds.split (',').filter (k => k));
 } catch (e) {
 }
 
@@ -154,11 +162,14 @@ function imagesQuery (offset, limit) {
 		q += `&cameras=${encodeURIComponent ([...archive.cameras].join (','))}`;
 	if (archive.filters && archive.filters.size)
 		q += `&filters=${encodeURIComponent ([...archive.filters].join (','))}`;
+	if (archive.kinds && archive.kinds.size)
+		q += `&kinds=${[...archive.kinds].join (',')}`;
 	return q;
 }
 
 function noneTicked () {
-	return (archive.cameras && archive.cameras.size === 0) || (archive.filters && archive.filters.size === 0);
+	return (archive.cameras && archive.cameras.size === 0) || (archive.filters && archive.filters.size === 0)
+		|| (archive.kinds && archive.kinds.size === 0);
 }
 
 async function loadNightDetail (year, month, day) {
@@ -208,13 +219,14 @@ async function loadNightDetail (year, month, day) {
 			</div>`;
 		imagesContentEl.innerHTML = obsTable + `
 			<div class="arch-filters">
+				<div class="arch-row"><span class="arch-label">Frames</span><span id="arch-kinds"></span></div>
 				<div class="arch-row"><span class="arch-label">Target</span><span id="arch-target"></span></div>
 				<div class="arch-row"><span class="arch-label">Cameras</span><span id="arch-cameras"></span></div>
 				<div class="arch-row"><span class="arch-label">Filters</span><span id="arch-filters"></span></div>
 				<div class="arch-row"><span class="arch-label">Previews</span><span class="arch-previews">
 					<label><input type="radio" name="arch-cal" value="1"${archive.calibrated ? ' checked' : ''}> dark/flat corrected</label>
 					<label><input type="radio" name="arch-cal" value="0"${archive.calibrated ? '' : ' checked'}> raw</label>
-					<span class="arch-hint">corrected with the site pipeline's master frames, where they are there; the enlarged image says what was applied</span>
+					<span class="arch-hint">corrected with the site pipeline's master frames, where they are there (a flat by the dark only, a dark not at all); the enlarged image says what was applied</span>
 				</span></div>
 			</div>
 			<div class="arch-selbar">
@@ -309,7 +321,7 @@ function setTarget (tar) {
 function goPage (offset) {
 	archive.offset = Math.max (0, Math.min (offset, Math.max (0, archive.total - 1)));
 	archive.offset -= archive.offset % archive.limit;
-	loadImagesPage ();
+	return loadImagesPage ();
 }
 
 async function loadImagesPage () {
@@ -355,29 +367,42 @@ function renderFacets (facets) {
 		x.addEventListener ('click', () => setTarget (-1));
 	document.querySelectorAll ('.obs-table tr[data-tar]').forEach (tr => tr.classList.toggle ('active', Number (tr.dataset.tar) === archive.target));
 
-	const boxes = (el, list, chosen, key) => {
+	// labels: shown instead of the names; the kinds are kept in the browser
+	const boxes = (el, list, chosen, key, labels) => {
+		const set = value => {
+			archive[key] = value;
+			if (key === 'kinds')
+				try {
+					localStorage.setItem ('archiveKinds', value ? [...value].join (',') : '*');
+				} catch (e) {
+				}
+			goPage (0);
+		};
 		el.innerHTML = list.map (f => `<label class="facet"><input type="checkbox" value="${escapeHtml (f.name)}"${!chosen || chosen.has (f.name) ? ' checked' : ''}>
-			${f.name === '' ? '<i>none</i>' : escapeHtml (f.name)} <span class="facet-count">${f.count}</span></label>`).join ('')
+			${labels ? escapeHtml (labels[f.name] || f.name) : f.name === '' ? '<i>none</i>' : escapeHtml (f.name)} <span class="facet-count">${f.count}</span></label>`).join ('')
 			+ (list.length > 1 ? ' <button type="button" class="facet-all">all</button><button type="button" class="facet-none">none</button>' : '');
 		el.querySelectorAll ('input').forEach (box => box.addEventListener ('change', () => {
 			const ticked = [...el.querySelectorAll ('input')].filter (b => b.checked).map (b => b.value);
-			archive[key] = ticked.length === list.length ? null : new Set (ticked);
-			goPage (0);
+			if (key !== 'kinds') {
+				set (ticked.length === list.length ? null : new Set (ticked));
+				return;
+			}
+			// a kind this night does not have stays as it was chosen
+			const all = Object.keys (KIND_LABELS);
+			for (const k of all)
+				if (!list.some (f => f.name === k) && (!chosen || chosen.has (k)))
+					ticked.push (k);
+			set (all.every (k => ticked.includes (k)) ? null : new Set (ticked));
 		}));
 		const all = el.querySelector ('.facet-all');
 		if (all)
-			all.addEventListener ('click', () => {
-				archive[key] = null;
-				goPage (0);
-			});
+			all.addEventListener ('click', () => set (null));
 		// none: then tick the ones wanted
 		const none = el.querySelector ('.facet-none');
 		if (none)
-			none.addEventListener ('click', () => {
-				archive[key] = new Set ();
-				goPage (0);
-			});
+			none.addEventListener ('click', () => set (new Set ()));
 	};
+	boxes (document.getElementById ('arch-kinds'), facets.kinds || [], archive.kinds, 'kinds', KIND_LABELS);
 	boxes (document.getElementById ('arch-cameras'), facets.cameras, archive.cameras, 'cameras');
 	boxes (document.getElementById ('arch-filters'), facets.filters, archive.filters, 'filters');
 }
@@ -390,7 +415,8 @@ function renderThumbs (images) {
 	}
 	grid.innerHTML = images.map (im => {
 		const target = im.targetName || '#' + im.targetId;
-		const info = `${utTime (im.exposureStart)} UT · ${im.exposure} s · ${im.filter || 'no filter'}${im.binning ? ' · ' + im.binning : ''} · ${im.cameraName}`;
+		const kind = im.kind && im.kind !== 'object' ? im.kind + ' · ' : '';
+		const info = `${kind}${utTime (im.exposureStart)} UT · ${im.exposure ?? '?'} s · ${im.filter || 'no filter'}${im.binning ? ' · ' + im.binning : ''} · ${im.cameraName}`;
 		const p = im.previewPath;
 		return `
 			<div class="thumb-cell${p && archive.selected.has (p) ? ' selected' : ''}"${p ? ` data-path="${escapeHtml (p)}"` : ''}
@@ -411,9 +437,7 @@ function renderThumbs (images) {
 			</div>`;
 	}).join ('');
 	grid.querySelectorAll ('.thumb-cell[data-path]').forEach (cell => {
-		cell.querySelector ('img').addEventListener ('click', () =>
-			openLightboxFetch (`preview/${encPath (cell.dataset.path)}?ps=${BIG_SIZE}&cal=${archive.calibrated ? 1 : 0}`,
-				cell.dataset.title, cell.dataset.info, 'X-RTS2-Calibration'));
+		cell.querySelector ('img').addEventListener ('click', () => openArchiveImage (cell, false));
 		cell.querySelector ('.thumb-select').addEventListener ('change', ev => {
 			if (ev.target.checked)
 				archive.selected.add (cell.dataset.path);
@@ -422,6 +446,38 @@ function renderThumbs (images) {
 			showSelection ();
 		});
 	});
+}
+
+// The image shown big; the arrow keys go to its neighbours in the list,
+// over to the next or previous page at the page's edge, at the same zoom.
+function openArchiveImage (cell, keep) {
+	openLightboxFetch (`preview/${encPath (cell.dataset.path)}?ps=${BIG_SIZE}&cal=${archive.calibrated ? 1 : 0}`,
+		cell.dataset.title, cell.dataset.info, 'X-RTS2-Calibration',
+		{ keep, nav: dir => archiveNeighbour (cell.dataset.path, dir) });
+}
+
+let archivePaging = false;			// a page for the arrow keys is loading
+
+async function archiveNeighbour (path, dir) {
+	const cells = () => [...document.querySelectorAll ('#arch-grid .thumb-cell[data-path]')];
+	const here = cells ();
+	const i = here.findIndex (c => c.dataset.path === path);
+	if (i >= 0 && here[i + dir]) {
+		openArchiveImage (here[i + dir], true);
+		return;
+	}
+	const offset = archive.offset + dir * archive.limit;
+	if (i < 0 || archivePaging || offset < 0 || offset >= archive.total)
+		return;
+	archivePaging = true;
+	try {
+		await goPage (offset);
+	} finally {
+		archivePaging = false;
+	}
+	const next = cells ();
+	if (next.length && !lightbox.el.hidden)
+		openArchiveImage (dir > 0 ? next[0] : next[next.length - 1], true);
 }
 
 function showPager () {

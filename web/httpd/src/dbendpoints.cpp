@@ -20,6 +20,10 @@
 #include "configuration.h"
 
 #include <fitsio.h>
+#include <glob.h>
+#include <atomic>
+#include <thread>
+#include <sys/stat.h>
 #include <libnova/libnova.h>
 #include <cmath>
 #include <cstring>
@@ -814,8 +818,158 @@ static std::string fitsBinning (const char *path)
 	return std::to_string (binx) + "x" + std::to_string (sy || biny <= 0 ? binx : biny);
 }
 
+// One image of the archive's list: a DB image, or a flat or dark frame,
+// which only exist as files (ImageDb keeps no row of them).
+struct ArchiveRow
+{
+	std::string path, camera, filter;
+	const char *kind;				// "object", "flat", "dark"
+	int targetId = -1, obsId = -1, imgId = -1;
+	double exposure = NAN, start = NAN;
+};
+
+// The night's files of an observatory path pattern (flat_path, dark_path):
+// %N is the night, %f a FITS file, every other expansion any one path
+// component (%Y included: a night's morning can be in the next year).
+static std::vector <std::string> nightFiles (const std::string &pattern, int year, int month, int day)
+{
+	std::vector <std::string> ret;
+	if (pattern.empty ())
+		return ret;
+	char night[40];
+	snprintf (night, sizeof (night), "%04d%02d%02d", year, month, day);
+	std::string g;
+	for (size_t i = 0; i < pattern.size (); i++)
+	{
+		if (pattern[i] != '%' || i + 1 == pattern.size ())
+		{
+			g += pattern[i];
+			continue;
+		}
+		char c = pattern[++i];
+		if (c == 'N')
+			g += night;
+		else if (c == '%')
+			g += '%';
+		else if (c == 'f')
+			g += "*.fits";
+		else
+			g += '*';
+	}
+	glob_t gl;
+	if (glob (g.c_str (), 0, nullptr, &gl) == 0)
+		for (size_t i = 0; i < gl.gl_pathc; i++)
+			ret.push_back (gl.gl_pathv[i]);
+	globfree (&gl);
+	return ret;
+}
+
+static double fitsUtTime (const std::string &dateObs)
+{
+	struct tm t = {};
+	double sec = 0;
+	if (sscanf (dateObs.c_str (), "%d-%d-%dT%d:%d:%lf", &t.tm_year, &t.tm_mon, &t.tm_mday, &t.tm_hour, &t.tm_min, &sec) != 6)
+		return NAN;
+	t.tm_year -= 1900;
+	t.tm_mon -= 1;
+	return timegm (&t) + sec;
+}
+
+// A frame file's row from its header, kept while its mtime stays: a night
+// has a few hundred of them, read again for every page and facet click.
+// Thread-safe; the header is read outside the cache's lock.
+static std::mutex frameCacheMutex;
+static std::map <std::string, std::pair <time_t, ArchiveRow>> frameCache;
+
+static bool frameRow (const std::string &path, const char *kind, ArchiveRow &row)
+{
+	struct stat st;
+	if (stat (path.c_str (), &st))
+		return false;
+	{
+		std::lock_guard <std::mutex> lock (frameCacheMutex);
+		auto it = frameCache.find (path);
+		if (it != frameCache.end () && it->second.first == st.st_mtime)
+		{
+			row = it->second.second;
+			return true;
+		}
+	}
+	fitsfile *f;
+	int status = 0;
+	if (fits_open_file (&f, path.c_str (), READONLY, &status))
+		return false;
+	auto text = [f] (const char *key) {
+		char v[FLEN_VALUE] = "";
+		int s = 0;
+		fits_read_key (f, TSTRING, key, v, nullptr, &s);
+		std::string r = s ? "" : v;
+		size_t e = r.find_last_not_of (' ');
+		return e == std::string::npos ? std::string () : r.substr (0, e + 1);
+	};
+	auto number = [f] (const char *key, double dflt) {
+		double v = dflt;
+		int s = 0;
+		fits_read_key (f, TDOUBLE, key, &v, nullptr, &s);
+		return s ? dflt : v;
+	};
+	row = ArchiveRow ();
+	row.path = path;
+	row.kind = kind;
+	row.camera = text ("CCD_NAME");
+	row.filter = text ("FILTER");
+	row.targetId = (int) number ("TARGET", -1);
+	row.obsId = (int) number ("OBSID", -1);
+	row.exposure = number ("EXPTIME", NAN);
+	row.start = fitsUtTime (text ("DATE-OBS"));
+	if (std::isnan (row.start))
+		row.start = st.st_mtime;	// still in the order, which NaN breaks
+	fits_close_file (f, &status);
+	std::lock_guard <std::mutex> lock (frameCacheMutex);
+	if (frameCache.size () > 200000)
+		frameCache.clear ();
+	frameCache[path] = std::make_pair (st.st_mtime, row);
+	return true;
+}
+
+// The night's flats and darks. Not under dbAccessMutex: a night's first
+// listing reads some 500-1000 headers from the archive's disks (25-45 ms
+// each at SBT, cold), so eight at a time.
+static std::vector <ArchiveRow> nightFrames (int year, int month, int day)
+{
+	rts2core::Configuration *config = rts2core::Configuration::instance ();
+	std::vector <std::pair <std::string, const char *>> files;
+	const std::pair <std::string, const char *> patterns[] = {{config->observatoryFlatPath (), "flat"}, {config->observatoryDarkPath (), "dark"}};
+	for (const auto &p : patterns)
+		for (const std::string &path : nightFiles (p.first, year, month, day))
+			files.emplace_back (path, p.second);
+
+	std::vector <ArchiveRow> rows (files.size ());
+	std::vector <char> ok (files.size (), 0);
+	std::atomic <size_t> next (0);
+	auto work = [&] () {
+		for (size_t i; (i = next++) < files.size (); )
+			ok[i] = frameRow (files[i].first, files[i].second, rows[i]);
+	};
+	std::vector <std::thread> threads;
+	for (int t = 0; t < 8 && (size_t) t < files.size (); t++)
+		threads.emplace_back (work);
+	for (std::thread &t : threads)
+		t.join ();
+
+	std::vector <ArchiveRow> ret;
+	for (size_t i = 0; i < rows.size (); i++)
+		if (ok[i])
+			ret.push_back (rows[i]);
+	return ret;
+}
+
 void rts2web::dbImagesPage (const std::string &imagesDir, const ImageQuery &q, std::ostringstream &os)
 {
+	std::vector <ArchiveRow> frames;
+	if (q.byTarget < 0 && q.day > 0)
+		frames = nightFrames (q.year, q.month, q.day);
+
 	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
 
 	rts2db::ImageSet *is;
@@ -836,45 +990,68 @@ void rts2web::dbImagesPage (const std::string &imagesDir, const ImageQuery &q, s
 	std::unique_ptr <rts2db::ImageSet> owner (is);
 	is->load ();
 
-	std::map <int, std::string> nameCache;
-	struct Facet { std::string name; int count = 0; };
-	std::map <int, Facet> targets;
-	std::map <std::string, int> cameras, filters;
-	std::vector <rts2image::Image *> matching;
-
+	std::vector <ArchiveRow> rows;
 	for (rts2db::ImageSet::iterator iter = is->begin (); iter != is->end (); iter++)
 	{
 		rts2image::Image *img = *iter;
-		const char *cam = img->getCameraName () ? img->getCameraName () : "";
-		const char *flt = img->getFilter () ? img->getFilter () : "";
-		bool okTarget = q.target < 0 || img->getTargetId () == q.target;
-		bool okCamera = q.cameras.empty () || q.cameras.count (cam);
-		bool okFilter = q.filters.empty () || q.filters.count (flt);
-		// each facet with the other two filters applied
-		if (okCamera && okFilter)
-		{
-			Facet &t = targets[img->getTargetId ()];
-			if (t.count++ == 0)
-				t.name = resolveTargetName (img->getTargetId (), nameCache);
-		}
-		if (okTarget && okFilter)
-			cameras[cam]++;
-		if (okTarget && okCamera)
-			filters[flt]++;
-		if (okTarget && okCamera && okFilter)
-			matching.push_back (img);
+		ArchiveRow row;
+		row.path = img->getFileName () ? img->getFileName () : "";
+		row.camera = img->getCameraName () ? img->getCameraName () : "";
+		row.filter = img->getFilter () ? img->getFilter () : "";
+		row.kind = "object";
+		row.targetId = img->getTargetId ();
+		row.obsId = img->getObsId ();
+		row.imgId = img->getImgId ();
+		row.exposure = img->getExposureLength ();
+		row.start = img->getExposureStart ();
+		rows.push_back (row);
+	}
+	// a night's flats and darks, from the files: not in the DB
+	if (!frames.empty ())
+	{
+		rows.insert (rows.end (), frames.begin (), frames.end ());
+		// the DB set comes sorted by img_date (whole seconds); all by the
+		// exposure start
+		std::stable_sort (rows.begin (), rows.end (), [] (const ArchiveRow &a, const ArchiveRow &b) { return a.start < b.start; });
 	}
 
-	// the set comes in time order (img_date ASC); the page is cut from
-	// the sorted list
+	std::map <int, std::string> nameCache;
+	struct Facet { std::string name; int count = 0; };
+	std::map <int, Facet> targets;
+	std::map <std::string, int> cameras, filters, kinds;
+	std::vector <const ArchiveRow *> matching;
+
+	for (const ArchiveRow &row : rows)
+	{
+		bool okTarget = q.target < 0 || row.targetId == q.target;
+		bool okCamera = q.cameras.empty () || q.cameras.count (row.camera);
+		bool okFilter = q.filters.empty () || q.filters.count (row.filter);
+		bool okKind = q.kinds.empty () || q.kinds.count (row.kind);
+		// each facet with the other three filters applied
+		if (okCamera && okFilter && okKind)
+		{
+			Facet &t = targets[row.targetId];
+			if (t.count++ == 0)
+				t.name = resolveTargetName (row.targetId, nameCache);
+		}
+		if (okTarget && okFilter && okKind)
+			cameras[row.camera]++;
+		if (okTarget && okCamera && okKind)
+			filters[row.filter]++;
+		if (okTarget && okCamera && okFilter)
+			kinds[row.kind]++;
+		if (okTarget && okCamera && okFilter && okKind)
+			matching.push_back (&row);
+	}
+
 	if (q.newestFirst)
 		std::reverse (matching.begin (), matching.end ());
 
 	os << "{\"total\":" << matching.size () << ",\"offset\":" << q.offset << ",\"limit\":" << q.limit << ",\"images\":[";
 	for (size_t i = q.offset; i < matching.size () && i < (size_t) q.offset + q.limit; i++)
 	{
-		rts2image::Image *img = matching[i];
-		const char *path = img->getFileName () ? img->getFileName () : "";
+		const ArchiveRow &row = *matching[i];
+		const char *path = row.path.c_str ();
 		const char *slash = strrchr (path, '/');
 		if (i > (size_t) q.offset)
 			os << ",";
@@ -884,18 +1061,19 @@ void rts2web::dbImagesPage (const std::string &imagesDir, const ImageQuery &q, s
 		jsonString (computePreviewPath (imagesDir, path).c_str (), os);
 		os << ",\"file\":";
 		jsonString (slash ? slash + 1 : path, os);
-		os << ",\"obsId\":" << img->getObsId () << ",\"imgId\":" << img->getImgId () << ",\"targetId\":" << img->getTargetId () << ",\"targetName\":";
-		jsonString (resolveTargetName (img->getTargetId (), nameCache).c_str (), os);
+		os << ",\"kind\":\"" << row.kind << "\"";
+		os << ",\"obsId\":" << row.obsId << ",\"imgId\":" << row.imgId << ",\"targetId\":" << row.targetId << ",\"targetName\":";
+		jsonString (resolveTargetName (row.targetId, nameCache).c_str (), os);
 		os << ",\"cameraName\":";
-		jsonString (img->getCameraName () ? img->getCameraName () : "", os);
+		jsonString (row.camera.c_str (), os);
 		os << ",\"filter\":";
-		jsonString (img->getFilter () ? img->getFilter () : "", os);
+		jsonString (row.filter.c_str (), os);
 		os << ",\"exposure\":";
-		jsonNumber (img->getExposureLength (), os);
+		jsonNumber (row.exposure, os);
 		os << ",\"binning\":";
 		jsonString (fitsBinning (path).c_str (), os);
 		os << ",\"exposureStart\":";
-		jsonTime (img->getExposureStart (), os);
+		jsonTime (row.start, os);
 		os << "}";
 	}
 	os << "],\"facets\":{\"targets\":[";
@@ -907,24 +1085,21 @@ void rts2web::dbImagesPage (const std::string &imagesDir, const ImageQuery &q, s
 		jsonString (iter->second.name.c_str (), os);
 		os << ",\"count\":" << iter->second.count << "}";
 	}
-	os << "],\"cameras\":[";
-	for (std::map <std::string, int>::iterator iter = cameras.begin (); iter != cameras.end (); iter++)
-	{
-		if (iter != cameras.begin ())
-			os << ",";
-		os << "{\"name\":";
-		jsonString (iter->first.c_str (), os);
-		os << ",\"count\":" << iter->second << "}";
-	}
-	os << "],\"filters\":[";
-	for (std::map <std::string, int>::iterator iter = filters.begin (); iter != filters.end (); iter++)
-	{
-		if (iter != filters.begin ())
-			os << ",";
-		os << "{\"name\":";
-		jsonString (iter->first.c_str (), os);
-		os << ",\"count\":" << iter->second << "}";
-	}
+	// cameras, filters, kinds: {"name","count"}
+	auto facet = [&os] (const char *name, const std::map <std::string, int> &m) {
+		os << "],\"" << name << "\":[";
+		for (std::map <std::string, int>::const_iterator iter = m.begin (); iter != m.end (); iter++)
+		{
+			if (iter != m.begin ())
+				os << ",";
+			os << "{\"name\":";
+			jsonString (iter->first.c_str (), os);
+			os << ",\"count\":" << iter->second << "}";
+		}
+	};
+	facet ("cameras", cameras);
+	facet ("filters", filters);
+	facet ("kinds", kinds);
 	os << "]}}";
 }
 

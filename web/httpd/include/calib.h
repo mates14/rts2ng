@@ -39,7 +39,8 @@ struct CalibFrames
  * Finds the masters for the frame at fullPath. Never fails: what is not
  * found is left out and named in out.text ("dark and flat corrected",
  * "dark only, no flat for halpha", "raw: no dark (chip mi2065, -20 C, bin
- * 1, 60 s), no flat for B"). Thread-safe: the master indexes and the chip
+ * 1, 60 s), no flat for B"). A flat (IMAGETYP flat) gets the dark only, a
+ * dark none ("raw: a dark frame"). Thread-safe: the master indexes and the chip
  * ids are cached behind a mutex.
  */
 void findCalibration (const CalibConfig &config, const std::string &fullPath, CalibFrames &out);

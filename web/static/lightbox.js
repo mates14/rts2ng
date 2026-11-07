@@ -7,8 +7,10 @@
 // pixels per image pixel; the mouse at the view's edge shows the image's
 // edge, with LIGHTBOX_PAN_EDGE already counting as the edge, which also
 // keeps the point under the mouse where it is while zooming; from 200 %
-// the pixels are drawn sharp. Builds its own markup; plain script, no
-// modules.
+// the pixels are drawn sharp. Opened with options.nav (a function of -1
+// or +1), the arrow keys go to the neighbours; options.keep keeps the
+// zoom and the view, and the image until the next one is there. Builds
+// its own markup; plain script, no modules.
 
 const LIGHTBOX_MAX_PIXEL = 8;		// screen pixels per image pixel, at most
 const LIGHTBOX_PAN_EDGE = 0.1;
@@ -28,6 +30,7 @@ const lightbox = (() => {
 		zoom: 1,
 		mouse: { x: 0.5, y: 0.5 },
 		text: '',
+		nav: null,					// the arrow keys' neighbour (-1, +1), or null
 	};
 }) ();
 
@@ -76,24 +79,32 @@ function lightboxMouse (ev) {
 	};
 }
 
-function openLightbox (src, title, info) {
+function lightboxHelp () {
+	return (lightbox.nav ? '← → the neighbours, ' : '') + 'scroll to zoom, move the mouse to look around, click or Esc to close';
+}
+
+function openLightbox (src, title, info, options = {}) {
 	lightboxSeq++;
-	lightbox.zoom = 1;
-	lightbox.img.style.transform = '';
-	lightbox.img.classList.remove ('zoomed', 'pixels');
-	lightbox.img.removeAttribute ('src');
-	lightbox.img.style.width = lightbox.img.style.height = '';
+	lightbox.nav = options.nav || null;
+	if (!options.keep) {
+		lightbox.zoom = 1;
+		lightbox.img.style.transform = '';
+		lightbox.img.classList.remove ('zoomed', 'pixels');
+		lightbox.img.removeAttribute ('src');
+		lightbox.img.style.width = lightbox.img.style.height = '';
+		releaseBlob ();
+	}
 	lightbox.title.textContent = title || '';
-	lightbox.text = (info ? info + ' - ' : '') + 'scroll to zoom, move the mouse to look around, click or Esc to close';
+	lightbox.text = (info ? info + ' - ' : '') + lightboxHelp ();
 	lightbox.info.textContent = 'loading… ' + lightbox.text;
 	lightbox.el.hidden = false;
-	releaseBlob ();
 	if (src)
 		lightbox.img.src = src;
 }
 
 function closeLightbox () {
 	lightbox.el.hidden = true;
+	lightbox.nav = null;
 	lightbox.img.removeAttribute ('src');
 	releaseBlob ();
 }
@@ -111,9 +122,8 @@ function releaseBlob () {
 // As openLightbox (), but loads the image itself, so that a response
 // header can go to the info line: header names the header (e.g.
 // X-RTS2-Calibration, what rts2-httpd's preview is).
-async function openLightboxFetch (src, title, info, header) {
-	openLightbox ('', title, info);
-	lightbox.img.removeAttribute ('src');
+async function openLightboxFetch (src, title, info, header, options = {}) {
+	openLightbox ('', title, info, options);
 	const shown = ++lightboxSeq;
 	try {
 		const res = await fetch (src);
@@ -124,7 +134,7 @@ async function openLightboxFetch (src, title, info, header) {
 		if (shown !== lightboxSeq || lightbox.el.hidden)
 			return;
 		if (extra)
-			lightbox.text = `${info ? info + ' · ' : ''}${extra} - scroll to zoom, move the mouse to look around, click or Esc to close`;
+			lightbox.text = `${info ? info + ' · ' : ''}${extra} - ${lightboxHelp ()}`;
 		releaseBlob ();
 		lightboxBlob = URL.createObjectURL (blob);
 		lightbox.img.src = lightboxBlob;
@@ -165,8 +175,14 @@ lightbox.el.addEventListener ('mousemove', ev => {
 lightbox.el.addEventListener ('click', closeLightbox);
 
 document.addEventListener ('keydown', ev => {
-	if (ev.key === 'Escape' && !lightbox.el.hidden)
+	if (lightbox.el.hidden)
+		return;
+	if (ev.key === 'Escape')
 		closeLightbox ();
+	else if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && lightbox.nav) {
+		ev.preventDefault ();
+		lightbox.nav (ev.key === 'ArrowLeft' ? -1 : 1);
+	}
 });
 
 window.addEventListener ('resize', () => {

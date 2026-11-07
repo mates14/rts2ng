@@ -254,6 +254,7 @@ struct ImageQuery
 	int target = -1;						//!< filter: only this target (-1: all)
 	std::set <std::string> cameras;			//!< filter: only these cameras (empty: all)
 	std::set <std::string> filters;			//!< filter: only these filters (empty: all)
+	std::set <std::string> kinds;			//!< filter: only these of object, flat, dark (empty: all)
 	int offset = 0;
 	int limit = 48;
 	bool newestFirst = false;				//!< order=desc: the latest image first
@@ -261,7 +262,8 @@ struct ImageQuery
 
 /**
  * GET /api/db/images?year=&month=&day=|target=N&limit=N[&offset=N]
- * [&tar=ID][&cameras=C1,C2][&filters=R,V][&order=desc]: one page of the
+ * [&tar=ID][&cameras=C1,C2][&filters=R,V][&kinds=object,flat,dark]
+ * [&order=desc]: one page of the
  * images (in time order, the latest first with order=desc), as
  * `{"total":N,"offset":N,"limit":N,"images":[...],"facets":{"targets":
  * [{"id","name","count"}],"cameras":[{"name","count"}],"filters":[...]}}`.
@@ -272,6 +274,13 @@ struct ImageQuery
  * other two filters let through, so a count is what ticking it shows.
  * All from the DB rows, but the binning: only the page's images are opened
  * (their headers).
+ *
+ * A night's list also has its flat and dark frames, which ImageDb does not
+ * put in the DB: the files of observatory/flat_path and dark_path for the
+ * night, described by their headers (TARGET, OBSID, CCD_NAME, FILTER,
+ * EXPTIME, DATE-OBS), cached while the file is unchanged. Each image has
+ * "kind" ("object", "flat", "dark"; imgId -1 for a frame), and the facets
+ * a fourth, "kinds". A target's list (target=N) has none. [JS 2026-11-07]
  */
 void dbImagesPage (const std::string &imagesDir, const ImageQuery &q, std::ostringstream &os);
 

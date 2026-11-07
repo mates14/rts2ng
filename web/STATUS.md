@@ -3931,3 +3931,60 @@ note; with everything 200 they load as before, the camera images
 included. rts2-httpd (built without DB): `status.html` and `/` carry
 `no-store`, `.js`/`.css` not. Not tested: Brave on Android itself, and
 the Apache lines.
+
+## Image archive: arrow keys, flats and darks (2026-11-07) [JS]
+
+**Arrow keys.** The enlarged image (lightbox.js) goes to its neighbours
+with ← and → when its opener gives it `options.nav`; the archive does, and
+at the page's edge it loads the next or previous page and opens its first
+or last image. A neighbour keeps the zoom and the view (`options.keep`),
+and the image stays until the next one is there, so frames can be
+compared. nightreport.js is unchanged (no neighbours).
+
+**Flats and darks.** ImageDb keeps no DB row of them (imagedb.ec,
+renameImage), so they were never in the archive. `api/db/images` for a
+night now adds the files of `observatory/flat_path` and `dark_path` (at
+both sites `/images/%Y/%N/%c/flats/%f`, `.../darks/%f`): %N the night, %f
+`*.fits`, any other expansion one path component (%Y too, a night's
+morning can be in the next year). A frame is described by its header
+(TARGET, OBSID, CCD_NAME, FILTER, EXPTIME, DATE-OBS; the file's mtime when
+DATE-OBS is missing), cached while the file's mtime stays: a night has
+some 100-1000 of them (D50's C1 had 705 darks on 2026-11-04). A cold
+header costs 25-45 ms on SBT's archive disks, so they are read eight at a
+time and before dbAccessMutex is taken (cfitsio is reentrant at both
+sites): the first listing of a night does not hold up the other DB
+requests. Each image
+has "kind" (object, flat, dark), the facets "kinds", and `kinds=` filters.
+A target's list (target=N) has no frames. The page has a "Frames" row:
+science, flats, darks, science only at first; the choice is kept in the
+browser across nights. A frame's caption starts with "flat" or "dark".
+The frames are under the observation of their TARGET (the flat target, or
+a science target for D50's guider darks), so a click on it in the
+observations shows them.
+
+**Their previews.** findCalibration () reads IMAGETYP: a flat is corrected
+by the dark only ("dark corrected (a flat frame)"), a dark not at all
+("raw: a dark frame"). The masters are made of these, and correcting them
+by the masters hides what they are.
+
+**Tested:**
+- nightFiles () and frameRow (), compiled alone, on the headers of three
+  real SBT frames (C1 flat and dark, C3 flat of 2026-11-06) in a copy of
+  the directory tree: the right night only, a .txt skipped, camera,
+  filter, target, observation, exposure as in the header, the start
+  equal to DATE-OBS to the ms; the second pass from the cache.
+- findCalibration () on the same headers: with no masters, the flat asks
+  for a dark only, the dark for nothing; with a stand-in master dark
+  (legacy `<template>/<CCD_NAME>/` layout, the registry not being here),
+  "dark corrected (a flat frame)", the dark still raw, a science frame
+  "dark only, no flat for sii".
+- The page in headless Chromium against a mock API (30 science, 20 flats,
+  10 darks): the Frames row, science only at first (`kinds=object`), all
+  three ticked sends no `kinds`, kept as `*`; → and ← inside a page, over
+  the page's edge both ways, the zoom kept, nothing after Esc.
+- Against the real DB and /images at SBT: a private centrald and the
+  test rts2-httpd in JS's account on lascaux (plain build, GCC 12, no
+  warnings; own preview cache). 2026-11-06: 671 science, 321 flats, 241
+  darks, fields right; 2026-11-04 (240 frames) 2.9 s the first time, 0.04
+  s after. Serially, before the threads, 2026-11-06 took 24 s. D50 not
+  tried.

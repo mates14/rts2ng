@@ -405,6 +405,12 @@ void rts2web::findCalibration (const CalibConfig &config, const std::string &ful
 	std::string date = keyText (f, "DATE-OBS");
 	std::string ccdName = keyText (f, "CCD_NAME");
 	std::string filter = keyText (f, "FILTER");
+	// a flat is shown dark corrected only, a dark raw: either is what the
+	// masters are made of, and a correction by them hides what it is
+	// [JS 2026-11-07]
+	std::string imageType = keyText (f, "IMAGETYP");
+	bool isDark = imageType == "dark";
+	bool isFlat = imageType == "flat";
 	double temp = NAN, expt = NAN, binx = 1;
 	bool haveTemp = keyDouble (f, "CCD_TEMP", temp);
 	bool haveExpt = keyDouble (f, "EXPTIME", expt);
@@ -416,6 +422,12 @@ void rts2web::findCalibration (const CalibConfig &config, const std::string &ful
 	fits_close_file (f, &status);
 
 	int year = atoi (date.substr (0, date.find ('-')).c_str ());
+
+	if (isDark)
+	{
+		out.text = "raw: a dark frame";
+		return;
+	}
 
 	std::lock_guard <std::mutex> lock (calibMutex);
 	askRegistry (config.chipIdCmd, {{fp, fullPath}});
@@ -440,10 +452,10 @@ void rts2web::findCalibration (const CalibConfig &config, const std::string &ful
 					dark = loaded.darkInMemory (rtemp, (long) binx, expt);
 			}
 		}
-		flat = loaded.flatInMemory (filter, (long) binx);
+		flat = isFlat ? nullptr : loaded.flatInMemory (filter, (long) binx);
 		for (int y : yearSearchOrder (year))
 		{
-			if (flat)
+			if (flat || isFlat)
 				break;
 			if (loaded.loadYear (y).second > 0)
 				flat = loaded.flatInMemory (filter, (long) binx);
@@ -499,7 +511,9 @@ void rts2web::findCalibration (const CalibConfig &config, const std::string &ful
 		out.cropH = crop->second.y1 - crop->second.y0;
 	}
 
-	if (dark && flat)
+	if (isFlat)
+		out.text = dark ? "dark corrected (a flat frame)" : "raw: a flat frame, " + whyDark.str ();
+	else if (dark && flat)
 		out.text = "dark and flat corrected";
 	else if (dark)
 		out.text = "dark only, " + whyFlat.str ();

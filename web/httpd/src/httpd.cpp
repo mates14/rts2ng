@@ -2024,6 +2024,7 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 			// no filter
 			if (MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, "cameras"))
 				split (getParam (connection, "cameras", ""), q.cameras);
+			split (getParam (connection, "kinds", ""), q.kinds);
 			if (MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, "filters"))
 			{
 				const char *f = getParam (connection, "filters", "");
