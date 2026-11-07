@@ -4863,3 +4863,24 @@ the mount may not stand at is refused at once: "findPath: the target
 (HA/Dec ...) is too close to the Sun (x deg, the limit is 15)" - or below
 the hard horizon, or above the ceiling (`D50Path::whyNot ()`). The test of
 a mount the Sun drifts to (`checkSunApproach ()`) is postponed.
+
+## C0 skipped for an hour of a GRB: a queued value counted as a failure (2026-11-07) [JS]
+
+JS: on 2026-11-06 around 22:20 UT the Andor (D50 C0) kept setting its
+parameters without exposing, during the bright EP trigger (target 53486,
+a flare star; MJ changed its script several times). Log: from 21:43:36
+C0 took 10 kinetic series of 100 frames normally (n=99/100 ret=20024 is
+the frame count, 20024 = no new frame yet; ~112 s per series). At
+22:02:13.025, as the last series ended, the executor logged "disabling
+target 53486 on device C0, because previous execution was with error";
+from then on "device C0 ignores next target (53486,53486)" - C0 got no
+script, only its values reset ("scriptEnds: reset values", setTiming,
+box) each time the guider script ended ("C1 guide: C0 inactive for ...
+- ending", every ~11 s), until the next target at 23:04. No error from
+C0 anywhere. Cause (UPSTREAM_BUGS.md): DevClient counts the camera's
+DEVDEM_I_QUED reply to the executor's scriptPosition/scriptLen updates as
+a failure. The same disabling: 40 times on D50 2026-11-04 .. 07, and in
+every SBT C1 `rts2-scriptexec` run of the gxccd test that day. Fix: only
+replies < 0 count. Bench (dummy camera, scriptexec): "E 1", "E 1 E 1",
+"for 3 { E 1 }" no longer disabled; "E 1 nonexist=5" (last reply -2)
+still is. Needs the next build (kernel header: executor and scriptexec).

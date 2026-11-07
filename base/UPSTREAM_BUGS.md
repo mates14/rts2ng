@@ -2065,3 +2065,23 @@ Smaller ones in the same code:
 rts2ng: `D50Path` (`base/teld/d50/d50path.cpp`) - the classic tries, then
 an A* search over a 5 deg grid of intermediate safe targets; the Sun avoided
 while above the horizon (-0.833 deg); the fixes above.
+
+## A script that ends at an exposure end counts as failed, and the device is skipped for the rest of the observation (`include/devclient.h`, `commandReturn`) [JS 2026-11-07]
+
+`DevClient::commandReturn ()` raises the device's failure count for any
+non-zero reply and clears it on 0. A reply of `DEVDEM_I_QUED` (1) - the
+device was busy and queued a value change - is no failure. The executor
+sends `scriptPosition`/`scriptLen` to a camera as its script moves on and
+ends; a camera at the end of its exposure queues them. When the script
+then ends, `DevScript::deleteScript ()` sees `getFailedCount () > 0`,
+logs "disabling target N on device C0, because previous execution was
+with error", and skips the device for the rest of that observation
+("device C0 ignores next target"). Happens every night on D50 (40 times
+2026-11-04 .. 07) and at SBT; mostly unnoticed, as the target changes
+anyway. On 2026-11-06 22:02 it was a GRB (EP, target 53486) whose scripts
+restart within one observation: C0 did nothing until 23:04, only reset
+its values every ~11 s whenever the guider script ended for "C0
+inactive". Bench: `rts2-scriptexec -s "E 1"` on a dummy camera logs the
+disabling after a perfect exposure.
+
+rts2ng: only replies < 0 count.

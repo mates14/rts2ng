@@ -119,7 +119,11 @@ class DevClient:public Object
 
 		void commandReturn (Command * cmd, int status)
 		{
-			if (status)
+			// base note: classic counted any non-zero reply as a failure, DEVDEM_I_QUED (1, the device queued a value
+			// change while busy) too. The executor queues scriptPosition/scriptLen on a camera ending its exposure, so a
+			// script that ended there always "failed" and the device was skipped for the rest of the observation ("ignores
+			// next target"): D50 C0 2026-11-06 22:02-23:04, a whole GRB hour. Only errors (< 0) count.
+			if (status < 0)
 				incFailedCount ();
 			else
 				clearFailedCount ();
