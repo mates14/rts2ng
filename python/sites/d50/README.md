@@ -91,3 +91,12 @@ a move is dropped and guiding restarts. Needs the rts2-python package from
 that date (`noblock`, `mountMoving`). Lascaux50 runs `/etc/rts2/guide.py`
 (-> `guidecmosdec.py`, an older copy); `[C1] script = "exe
 /etc/rts2/scripts/guide.py"` runs this one.
+
+## flatC0.py - C0 flats and darks (2026-11-07) [JS]
+
+Target 2's C0 script, moved here from `/etc/rts2/flatC0_nobin.py` with the
+same settings. It uses the packaged `rts2.flats` (not the 2023 copy
+`/etc/rts2/flats.py`) and closes the dome after the morning flats:
+the dome parks T0 first, then the darks run under the closed roof until the
+sun reaches -0.5 deg. Needs the rts2-python package from that date, then
+target 2's C0 script `VSPEED=3 exe /etc/rts2/scripts/flatC0.py`.

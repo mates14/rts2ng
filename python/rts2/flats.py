@@ -556,7 +556,14 @@ class FlatScript (scriptcomm.Rts2Comm):
             self.takeFlats(False)
             if domeDevice:
                 self.log('I', 'finished skyflats, closing dome')
-                self.sendCommand('close_for 3600', domeDevice)
+                # A plain close, not 'close_for 3600': close_for makes the
+                # dome report bad weather until next_open, centrald goes to
+                # standby, EXEC ends the target and every flat script dies
+                # with Rts2NotActive a second into the darks below - which
+                # are what the dome is closed for. SBT C3 got no morning
+                # darks at all (2026-11-05..07). The morning state closes
+                # the dome again by itself. [JS 2026-11-07]
+                self.sendCommand('close', domeDevice)
             else:
                 self.log('I', 'finished skyflats')
 
