@@ -87,7 +87,8 @@ class D50Path
 		 */
 		void setTime (double JD);
 
-		bool avoidingSun () { return checkSunDistance; }
+		// under a not open roof the Sun is not checked (the ceiling is)
+		bool avoidingSun () { return checkSunDistance && !checkCeiling; }
 
 		/**
 		* Try to find path from (acStart, dcStart) to (acFin, dcFin).

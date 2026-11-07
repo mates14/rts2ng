@@ -2054,6 +2054,13 @@ Smaller ones in the same code:
   the moment of arrival.
 - The Sun position (libnova's full solar theory) is recomputed at every
   sample of every passage.
+- `isMoving ()` ends a move when both drives stand still, also at a
+  successive point before the next is set, and just after a target is set
+  (the cached drive status still says stopped); `endMove ()`/`endPark ()`
+  leave the successive-point timer running. Hidden while every path
+  switched in motion; with a switch at a standstill a park "finished" at
+  the intermediate target and the rest crept on at the backlash speed
+  (D50 2026-11-07 12:47).
 
 rts2ng: `D50Path` (`base/teld/d50/d50path.cpp`) - the classic tries, then
 an A* search over a 5 deg grid of intermediate safe targets; the Sun avoided

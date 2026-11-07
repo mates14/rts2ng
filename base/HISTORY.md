@@ -4790,3 +4790,23 @@ separately: closest to the Sun 10.00 deg, slowest search 26 ms. Same
 results built with GCC 12 on lascaux50, no warnings. Not verified on the
 mount: the real checks are a daytime park at D50 with the Sun in the way,
 and a move under the closed roof, e.g. `altaz 2 270` from the park.
+
+On the mount, the same day (4157dfd) [JS]: the moves under the closed roof
+went as on the bench (12:37:25 `altaz 2 270` by HA -45 Dec -30, HA -60
+Dec -20; back to the park by 1-3 successive points; `altaz 2 90` refused).
+The Sun test did not: `altaz 5 65` (12:45:08, by HA 35 Dec -35, 21 s)
+fine, then `park` (12:47:46, by HA 60 Dec -0.1, next after 6.3 s) logged
+"parking of telescope finished" 7.8 s in, with the mount at HA 55 Dec -5,
+"THE DOME WILL NOT BE CLOSED" (not at the park position), and the park
+target crept on at 0.3 deg/s until JS stopped it. Cause: `D50::isMoving ()`
+(classic) ends a move as soon as both drives stand still - at an
+intermediate target before the next is set, and right after a target is
+set, as the drive status is only read in `info ()`. Classic's paths
+switched to the next target while moving, the search's often at a
+standstill; `endPark ()` then set the backlash speed and the pending
+successive-point timer drove on. Fix: `isMoving ()` keeps moving while
+successive points are due and for 1 s after any target is set;
+`endMove ()`/`endPark ()` drop pending successive-point timers; a stopped
+or interrupted path counts as finished. The Sun watchdog now also checks a
+"parked" mount (that one stood parked at HA 55, 26 deg from the Sun), and
+a path under the roof no longer logs "avoiding the Sun".

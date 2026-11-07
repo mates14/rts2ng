@@ -150,13 +150,14 @@ class D50:public Fork
 		void preparePath ();
 
 		/**
-		 * Park a mount standing still (not tracking) when the Sun is going to come
+		 * Park a mount standing still (not tracking, also "parked") when the Sun is going to come
 		 * within SUN_AVOID_DISTANCE in SUN_APPROACH_LEAD, or already has; only
 		 * report, when block_move is set. Called from idle (), once a minute.
 		 */
 		void checkSunApproach ();
 
 		D50Path path;
+		double lastTargetSet;		// when the drives last got a target - their status is only read in info ()
 		double sunCheckNext;
 		double sunReported;
 
@@ -526,6 +527,7 @@ void D50::postEvent (rts2core::Event *event)
 			}
 			raDrive->setTargetPos (tAc);
 			decDrive->setTargetPos (dc);
+			lastTargetSet = getNow ();
 			if (successivePointsActualPosition < numberOfSuccesivePoints)
 				addTimer (successivePointsIntervals[successivePointsActualPosition], new rts2core::Event (RTS2_D50_SUCCESSIVE_POINTS));
                         break;
@@ -666,6 +668,7 @@ int D50::init ()
 
 	// safe initial values for low-level "last safe" ac/dc - 0:0 is close to the "park" position
 	lastSafeRaPos = 0;
+	lastTargetSet = 0;
 	sunCheckNext = 0;
 	sunReported = 0;
 	lastSafeDecPos = 0;
@@ -826,6 +829,7 @@ int D50::startResync ()
 	// stopMove only for TEL_MOVING/TEL_CORRECTING, not e.g. for a move during parking)
 	deleteTimers (RTS2_D50_BOOSTSPEED);
 	deleteTimers (RTS2_D50_SUCCESSIVE_POINTS);
+	successivePointsActualPosition = numberOfSuccesivePoints;	// the targets of a previous path are cancelled
 
 	if (!disableDomeOpenCheck->getValueBool ())
 	{
@@ -918,6 +922,7 @@ int D50::startResync ()
 	}
 	raDrive->setTargetPos (tAc);
 	decDrive->setTargetPos (dc);
+	lastTargetSet = getNow ();
 	// we will realize the RTS2_D50_SUCCESSIVE_POINTS after the backlash will be crossed (in RTS2_D50_BOOSTSPEED timer)
 	return 0;
 }
@@ -958,6 +963,12 @@ int D50::isMoving ()
         }
         if (((trackingRequested () != 0) && raDrive->isInPositionMode ()) || ((trackingRequested () == 0) && raDrive->isMoving ()) || decDrive->isMoving ())
 		return USEC_SEC / 10;
+	// base note: classic ended the move as soon as both drives stood still, also at an intermediate target before the next
+	// one was set, and right after a target was set, while the drive status (read in info ()) still said "stopped". D50
+	// 2026-11-07 12:47: a park with one successive point "finished" 7.8 s in, the next target then crept on at the
+	// backlash speed. Classic's paths switched while moving, which hid it; the search can switch at a standstill.
+	if (successivePointsActualPosition < numberOfSuccesivePoints || getNow () - lastTargetSet < 1.0)
+		return USEC_SEC / 10;
         return -2;
 }
 
@@ -969,6 +980,7 @@ int D50::endMove ()
 	setWormPressureLimiter (false);
 	// snizeni rychlosti presunu obou motoru
 	deleteTimers (RTS2_D50_BOOSTSPEED);
+	deleteTimers (RTS2_D50_SUCCESSIVE_POINTS);
 	raDrive->setMaxSpeed (RA_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	decDrive->setMaxSpeed (DEC_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	raDrive->setPositionKp (raPosKpTrack->getValueFloat ());
@@ -1042,6 +1054,7 @@ int D50::stopMove ()
 	setWormPressureLimiter (false);
 	deleteTimers (RTS2_D50_BOOSTSPEED);
 	deleteTimers (RTS2_D50_SUCCESSIVE_POINTS);
+	successivePointsActualPosition = numberOfSuccesivePoints;	// a stopped move sets no more targets
 	raDrive->setMaxSpeed (RA_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	decDrive->setMaxSpeed (DEC_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
         return ret;
@@ -1134,6 +1147,7 @@ int D50::endPark ()
 	setWormPressureLimiter (false);
 	setWormStepsGenerator (false);
 	deleteTimers (RTS2_D50_BOOSTSPEED);
+	deleteTimers (RTS2_D50_SUCCESSIVE_POINTS);
 	raDrive->setMaxSpeed (RA_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	decDrive->setMaxSpeed (DEC_TRANSMISION / 360.0 * moveSpeedBacklash->getValueDouble ());
 	setTimeout (USEC_SEC);
@@ -1429,8 +1443,9 @@ void D50::checkSunApproach ()
 		return;
 	sunCheckNext = getNow () + 60;
 
-	// moving, parking or parked: findPath () took care of the Sun, the park position is far from it
-	if ((getState () & TEL_MASK_MOVING) != TEL_OBSERVING)
+	// moving or parking: findPath () took care of the Sun. A parked mount is checked too: a stopped park leaves it
+	// "parked" wherever it stopped (12:47); at the park position itself the Sun never comes within ~16 deg
+	if ((getState () & TEL_MASK_MOVING) == TEL_MOVING || (getState () & TEL_MASK_MOVING) == TEL_PARKING)
 		return;
 	// tracking keeps the distance from the Sun (1 deg a day, well inside the 10 deg)
 	if (trackingRequested () != 0)
