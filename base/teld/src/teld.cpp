@@ -2050,7 +2050,11 @@ int Telescope::endMove ()
 	// completion time, not a guess that's never trued up; the estimate
 	// quality differs enough between mount types that scripts relying on
 	// it saw inconsistent behavior across drivers.
+	// base note: and sent at once - checkMoves () ran infoAll () just before
+	// this, so clients kept the estimate until the next info, and a guider
+	// script took frames after the move for frames during it. [JS 2026-11-07]
 	targetReached->setValueDouble (getNow ());
+	sendValueAll (targetReached);
 
 	if (targetDistanceStat != nullptr)
 		targetDistanceStat->clearStat ();
@@ -2067,6 +2071,7 @@ void Telescope::failedMove ()
 	// see endMove()'s comment - a failed move still stopped moving, just
 	// not where it was aiming for; move_end should reflect that too
 	targetReached->setValueDouble (getNow ());
+	sendValueAll (targetReached);
 
 	failedMoveNum->inc ();
 	lastFailedMove->setNow ();
@@ -2077,6 +2082,7 @@ int Telescope::abortMoveTracking ()
 {
 	// see endMove()'s comment
 	targetReached->setValueDouble (getNow ());
+	sendValueAll (targetReached);
 
 	stopTracking ("tracking below horizon");
 	changeIdleMovingTracking ();

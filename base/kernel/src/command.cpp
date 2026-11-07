@@ -480,9 +480,9 @@ CommandCameraSettings::CommandCameraSettings (DevClientCamera * _camera):Command
 {
 }
 
-CommandExposure::CommandExposure (Block * _master, DevClientCamera * _camera, int _bopMask):Command (_master)
+CommandExposure::CommandExposure (Block * _master, DevClientCamera * _camera, int _bopMask, bool checks):Command (_master)
 {
-	setCommand (COMMAND_CCD_EXPOSURE);
+	setCommand (checks ? COMMAND_CCD_EXPOSURE : COMMAND_CCD_EXPOSURE_NO_CHECKS);
 	camera = _camera;
 	setBopMask (_bopMask);
 }

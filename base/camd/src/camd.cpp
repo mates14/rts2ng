@@ -1815,7 +1815,12 @@ int Camera::camStartExposureWithoutCheck ()
 	sepY->clear ();
 	sepFluxes->clear ();
 
-	maskState (BOP_TEL_MOVE, BOP_TEL_MOVE, "exposure is about to start", NAN, NAN, exposureConn);
+	// base note: an exposure started with expose_no_checks (lastCareBlock
+	// false - a guider) does not hold telescope moves either; classic only
+	// skipped the camera's own check. [JS 2026-11-07]
+	const rts2_status_t telBlock = lastCareBlock ? BOP_TEL_MOVE : 0;
+
+	maskState (BOP_TEL_MOVE, telBlock, "exposure is about to start", NAN, NAN, exposureConn);
 
 	ret = startExposure ();
 	if (!(ret == 0 || ret == 1))
@@ -1830,7 +1835,7 @@ int Camera::camStartExposureWithoutCheck ()
 
 	infoAll ();
 
-	maskState (CAM_MASK_EXPOSE | BOP_TEL_MOVE | BOP_WILL_EXPOSE | CAM_MASK_HAS_IMAGE, (ret == 0 ? (CAM_EXPOSING) : (CAM_EXPOSING | CAM_EXPOSING_NOIM)) | BOP_TEL_MOVE, "exposure started", now, exposureEnd->getValueDouble (), exposureConn);
+	maskState (CAM_MASK_EXPOSE | BOP_TEL_MOVE | BOP_WILL_EXPOSE | CAM_MASK_HAS_IMAGE, (ret == 0 ? (CAM_EXPOSING) : (CAM_EXPOSING | CAM_EXPOSING_NOIM)) | telBlock, "exposure started", now, exposureEnd->getValueDouble (), exposureConn);
 	if (ret == 0)
 		logStream (MESSAGE_INFO) << "starting " << TimeDiff (exposure->getValueFloat ()) << (ret == 1 ? "no image " : "") << " exposure for '" << (exposureConn ? exposureConn->getName () : "null") << "'" << sendLog;
 	else

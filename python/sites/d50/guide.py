@@ -216,9 +216,19 @@ class GuideScript(scriptcomm.Rts2Comm):
         return [-np.median(shifty), np.median(shiftx)], len(shiftx)
 
     def getstars(self):
-        """ Acquire image, subtract a dark frame, detect stars and return their list """
+        """ Acquire image, subtract a dark frame, detect stars and return their
+        list - or None when the mount moved during the frame.
+
+        The frames are noblock exposures (2026-11-07): no block holds them
+        and they do not hold the mount, so guiding goes on through C0's
+        corrections and offsets. Nothing stops one from being taken during
+        a move any more, and such a frame is dropped here. """
 #        self.log('I', 'guide: getstars')
-        image = self.exposure()
+        started = time.time()
+        image = self.exposure(noblock=True)
+        if self.mountMoving(since=started):
+            self.delete(image)
+            return None
         image_d = self.dark_sub(image)
         # Guide frames used to go toArchive(), which only renames the
         # file - the images row is inserted well before the script ever
@@ -524,8 +534,8 @@ class GuideScript(scriptcomm.Rts2Comm):
         # and also the shutter moves for certain time
         time.sleep(1)
 
-        # take a dark frame
-        image = self.exposure()
+        # take a dark frame (the shutter is closed - a move does not matter)
+        image = self.exposure(noblock=True)
         imageh = pyfits.open(image)
         self.dark = imageh[0].data
         imageh.close()
@@ -539,8 +549,12 @@ class GuideScript(scriptcomm.Rts2Comm):
         time.sleep(4)  # wait for the shutter to stabilize
         # JS: byly tu 2s, zvedam na 4
 
-        # take a reference image
-        self.refstars = self.getstars()
+        # take a reference image - on a mount that stands still: the frames
+        # are not held for moves any more
+        self.refstars = None
+        while self.refstars is None:
+            self.waitMountStill()
+            self.refstars = self.getstars()
         # no shift to report off the frame everything else is measured
         # against, but its star - and its FWHM - are as real as any other
         self.keep_frame(self.refstars, None, None, len(self.refstars), 'acquiring')
@@ -564,6 +578,9 @@ class GuideScript(scriptcomm.Rts2Comm):
                 sys.exit(0)
 
             stars = self.getstars()
+            if stars is None:
+                self.log('I', 'guide: the mount moved during the frame - restarting')
+                break
 
             # sextractor may fail! we need to recover without losing the daisy :)
             # 4 ... i do not know, what it would actually output when it fails, but a small number

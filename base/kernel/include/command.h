@@ -592,7 +592,12 @@ class CommandCameraSettings:public Command
 class CommandExposure:public Command
 {
 	public:
-		CommandExposure (Block * _master, DevClientCamera * _camera, int _bopMask);
+		/**
+		 * @param checks false sends expose_no_checks: the camera starts
+		 * the exposure whatever blocks it and does not block telescope
+		 * moves (a guider) [JS 2026-11-07]
+		 */
+		CommandExposure (Block * _master, DevClientCamera * _camera, int _bopMask, bool checks = true);
 
 		virtual int commandReturnOK (Connection *conn);
 		virtual int commandReturnFailed (int status, Connection * conn);

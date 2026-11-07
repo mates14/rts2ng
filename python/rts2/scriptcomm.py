@@ -267,16 +267,19 @@ class Rts2Comm:
 		sys.stdout.flush()
 		return int(self.readline())
 
-	def exposure(self, before_readout_callback = None, fileexpand = None, overwrite = False):
+	def exposure(self, before_readout_callback = None, fileexpand = None, overwrite = False, noblock = False):
 		"""Start new exposure. Allow user to specify fallback function to call after end of exposure and expand pattern for new file.
-		Unless fileexpand parameter is provided, user is responsible to specify image treatment."""
+		Unless fileexpand parameter is provided, user is responsible to specify image treatment.
+		noblock=True is a guider's exposure: no block (offset, correction, telescope move) holds it,
+		and it does not hold telescope moves. The script must itself drop frames taken during a move."""
+		cmd = "exposure_noblock" if noblock else "exposure"
 		if fileexpand:
 			if overwrite:
-				print("exposure_overwrite {0}".format(fileexpand))
+				print("{0}_overwrite {1}".format(cmd, fileexpand))
 			else:
-				print("exposure_wfn {0}".format(fileexpand))
+				print("{0}_wfn {1}".format(cmd, fileexpand))
 		else:
-			print("exposure")
+			print(cmd)
 		sys.stdout.flush()
 		a = self.readline()
 		if a == 'exposure_failed':
@@ -290,6 +293,25 @@ class Rts2Comm:
 		a = self.readline()
 		image, fn = a.split()
 		return fn
+
+	def mountMoving(self, since = None, device = 'T0'):
+		"""True if the mount moves now - or, with since (a time.time ()), if it moved at any
+		time after it. A guider taking noblock exposures drops the frames taken during a move:
+		mountMoving(since = time before the exposure) after the exposure."""
+		ended = self.getValueFloat('move_end', device)
+		# move_end is the estimated end while a move runs, the actual end after it
+		if ended is not None and ended == ended and ended > (time.time() if since is None else since):
+			return True
+		if since is None:
+			return False
+		started = self.getValueFloat('move_started', device)
+		return started is not None and started == started and started >= since
+
+	def waitMountStill(self, device = 'T0', poll = 0.2, timeout = 600):
+		"""Wait until the mount does not move (at most timeout seconds)."""
+		end = time.time() + timeout
+		while self.mountMoving(device = device) and time.time() < end:
+			time.sleep(poll)
 
 	def endShift(self, fileexpand = None, overwrite = False):
 		"""Ends shiftstore sequence.

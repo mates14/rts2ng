@@ -243,9 +243,16 @@ class GuideScript(scriptcomm.Rts2Comm):
                 self.publishIdle()
                 sys.exit(0)
 
-            # Take guide exposure
+            # Take guide exposure - noblock (2026-11-07): no block holds it
+            # and it does not hold the mount, so guiding goes on through
+            # corrections and offsets; a frame taken during a move is dropped
             self.setValue('exposure', self.exp_time)
-            image = self.exposure()
+            started = time.time()
+            image = self.exposure(noblock=True)
+            if self.mountMoving(since=started):
+                self.delete(image)
+                self.log('I', 'guide: the mount moved during the frame - restarting')
+                break
 
             # Detect guide star position using sextractor
             values = self.runProgrammeGetArray([self.detect4g, image])
@@ -316,7 +323,9 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.createValues()
         self.publish('acquiring')
 
-        # Wait for mount to settle after slew
+        # Wait for mount to settle after slew: the frames are not held for
+        # moves any more, so wait for the move to end first
+        self.waitMountStill()
         sleep(5)
 
         # Configure camera for initial acquisition
@@ -326,8 +335,14 @@ class GuideScript(scriptcomm.Rts2Comm):
         self.setValue('SHUTTER', 0)
         self.setValue('FILTER', 'I')
 
-        # Take acquisition image to find guide star
-        image = self.exposure()
+        # Take acquisition image to find guide star, on a mount that stands still
+        while True:
+            started = time.time()
+            image = self.exposure(noblock=True)
+            if not self.mountMoving(since=started):
+                break
+            self.delete(image)
+            self.waitMountStill()
         values = self.runProgrammeGetArray([self.detect4g, image])
 
         self.log('I', 'guide: guide star found at %.1f %.1f' %

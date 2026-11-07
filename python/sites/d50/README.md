@@ -82,3 +82,12 @@ below the request means `--tmax` limited it.
 
 The calculator is `rts2/snrexp.py` (in the rts2 package; the script always loads it
 from this checkout, as the installed package may carry an older one).
+
+## guide.py - C1 guiding (2026-11-07) [JS]
+
+Takes `exposure (noblock = True)` frames: C0's corrections and offsets do
+not stop guiding, and the frames do not hold T0's moves. A frame taken during
+a move is dropped and guiding restarts. Needs the rts2-python package from
+that date (`noblock`, `mountMoving`). Lascaux50 runs `/etc/rts2/guide.py`
+(-> `guidecmosdec.py`, an older copy); `[C1] script = "exe
+/etc/rts2/scripts/guide.py"` runs this one.

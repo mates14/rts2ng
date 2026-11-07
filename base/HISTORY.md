@@ -4628,3 +4628,42 @@ release and the Andor driver rebuilt, since the kernel is compiled into it.
 Possibly the same bug: on 11-06 18:14 T0 ran a second offset (18.436) into
 C0's running exposure; teld's own queued values reach `setFullBopState`
 the same way. Not verified.
+
+## Guider exposures that ignore blocks: exposure_noblock (2026-11-07) [JS]
+
+The C1 pauses that started the previous entry are the design: an
+astrometric correction (or a WOFFS) accepted during C0's exposure blocks
+exposures until the move, and guide.py's frames waited for it - up to a
+whole C0 exposure (300 s for 8071, GRB 53484). At D50 on 11-07, 2 of the 4
+mid-exposure blocks were corrections (`correcting to` 2-48 ms after C0's
+exposure end). The other way round, every guide frame held T0's moves
+(BOP_TEL_MOVE) until it ended. `blocked_by` in rts2.ini could exempt C1, but
+SBT's C3 is guider and science camera both, so the choice is per exposure.
+
+- `exposure_noblock` (with `_wfn`/`_overwrite`), new exe command:
+  ConnExecute sends `expose_no_checks` (classic's
+  COMMAND_CCD_EXPOSURE_NO_CHECKS, unused until now) without the
+  BOP_EXPOSURE mask, so neither the executor's connection nor camd holds it.
+  `CommandExposure` takes a `checks` flag for it.
+- camd: an exposure started with `expose_no_checks` does not raise
+  BOP_TEL_MOVE either (classic only skipped the camera's own check).
+- `rts2.scriptcomm`: `exposure (noblock = True)`; `mountMoving (since)` and
+  `waitMountStill ()` for the script to drop frames taken during a move.
+- teld: `move_end`, corrected to the real completion time in `endMove`
+  (and `failedMove`, `abortMoveTracking`), was not sent: `checkMoves` runs
+  `infoAll` just before `endMove`, so clients kept the start-time estimate
+  until the next info. Sent at once now.
+- python/sites: d50/guide.py and sbt/guideccd.py take noblock frames, wait
+  for the mount to stand still before the reference/acquisition frame, and
+  restart guiding when a frame overlapped a move.
+
+Bench (lascaux, real executor, rts2test, dummy T0/C0/C1/W0, C0 `for 4 {
+T0.WOFFS=(0,-12) filter=g E 3 T0.WOFFS=(0,0) filter=r E 3 }`, C1 a python exe
+taking 1 s frames): plain `exposure ()` - 0 of 60 C1 frames during a T0
+move, T0 starting its move 0.18-0.49 s after C0's exposure end (waiting for
+C1's frame); `noblock` - 19 of 60 during a move, T0 starting 0-1 ms after C0's
+end; C0 never during a move in either. `mountMoving (since)` against the
+moves in the log: 60 of 60 frames right after the teld fix (52 dropped, 27
+wrongly, before it). An exe argument goes inside the quotes: `exe "guide.py
+noblock"`. Not run on the hardware yet; the guide scripts were not run at all
+(they need the sites' cameras).

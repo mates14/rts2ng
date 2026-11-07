@@ -116,16 +116,26 @@ void ConnExecute::processCommand (char *cmd)
 		getMaster ()->getValue (".", "exe_timeout")->getValueDouble () > 0)
 		endTime = getNow () + getMaster ()->getValue (".", "exe_timeout")->getValueDouble ();
 
-	if (!strcasecmp (cmd, "exposure"))
+	// base note: exposure_noblock[_wfn|_overwrite] (new) is an exposure that
+	// no block holds and that does not hold telescope moves - for a guider,
+	// whose frames must go on through corrections and offsets, while the
+	// same camera's plain exposures still block (SBT's C3 also takes
+	// science frames). It goes to the camera as expose_no_checks, without
+	// the BOP_EXPOSURE mask the connection would otherwise wait on.
+	bool isexp = !strncasecmp (cmd, "exposure", 8);
+	bool noblock = isexp && !strncasecmp (cmd + 8, "_noblock", 8);
+	// what follows "exposure" or "exposure_noblock"
+	const char *expcmd = isexp ? cmd + (noblock ? 16 : 8) : "";
+	if (isexp && !strcasecmp (expcmd, ""))
 	{
 		if (!checkActive (true))
 			return;
 		if (masterElement == NULL || masterElement->getConnection () == NULL || masterElement->getClient () == NULL)
 			return;
-		masterElement->getConnection ()->queCommand (new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), BOP_EXPOSURE));
+		masterElement->getConnection ()->queCommand (new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), noblock ? 0 : BOP_EXPOSURE, !noblock));
 		exposure_started = 1;
 	}
-	else if (!strcasecmp (cmd, "exposure_wfn") || !strcasecmp (cmd, "exposure_overwrite"))
+	else if (isexp && (!strcasecmp (expcmd, "_wfn") || !strcasecmp (expcmd, "_overwrite")))
 	{
 		if (!checkActive (true))
 			return;
@@ -134,8 +144,8 @@ void ConnExecute::processCommand (char *cmd)
 		if (masterElement == NULL || masterElement->getConnection () == NULL || masterElement->getClient () == NULL)
 			return;
 		((rts2script::DevClientCameraExec *) masterElement->getClient ())->setExpandPath (imagename);
-		((rts2script::DevClientCameraExec *) masterElement->getClient ())->setOverwrite (!strcasecmp (cmd, "exposure_overwrite"));
-		masterElement->getConnection ()->queCommand (new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), BOP_EXPOSURE));
+		((rts2script::DevClientCameraExec *) masterElement->getClient ())->setOverwrite (!strcasecmp (expcmd, "_overwrite"));
+		masterElement->getConnection ()->queCommand (new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), noblock ? 0 : BOP_EXPOSURE, !noblock));
 		keep_next_image = true;
 		exposure_started = 1;
 	}

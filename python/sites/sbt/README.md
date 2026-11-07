@@ -90,3 +90,13 @@ The calculator is `rts2/snrexp.py` (in the rts2 package; the scripts always load
 from this checkout, as the installed package may carry an older one).  SBT's 1 s
 zeropoint in r is ~18.0: under a dark sky SNR 10 at r=16.5 takes ~45 s, SNR
 50 about an hour.
+
+## guideccd.py - C3 guiding (2026-11-07) [JS]
+
+Guide frames are `exposure (noblock = True)`: corrections and offsets do not
+stop guiding, and the frames do not hold T0's moves; C3's science exposures
+(`E`, plain `exposure ()`) still block as before. A frame taken during a move
+is dropped and guiding restarts with a new acquisition. Needs the
+rts2-python package from that date. Lascaux runs `/etc/rts2/guideccd.py` (->
+`/home/mates/guideccd.py`, a copy); `[C3] script = "exe
+/etc/rts2/scripts/guideccd.py"` runs this one.
