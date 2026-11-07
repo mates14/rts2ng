@@ -3886,3 +3886,48 @@ the rows already stored work; they get cleaned when saved again.
 Tested: the folding function alone (8071's script, CR/LF, a leading
 break, a tab, double blanks inside kept, a quoted value); not run
 against a database (none on this machine).
+
+## Pages without a login: no-store, and one login check first (2026-11-07) [JS]
+
+**Report (JS):** Brave on Android, opening a status page by its bookmark,
+showed the page for a moment with a login prompt, then announced it had
+been terminated. Often, not always.
+
+**Likely cause** (not reproduced on the phone): neither rts2-httpd nor
+Apache sent `Cache-Control` with the pages, so a restored tab or a history
+navigation takes the page from the browser's cache without asking the
+server. The Basic-auth login is held only in memory and is gone after the
+browser was stopped. The page's code then ran without it, and its requests
+at once (six camera images in the markup, the WebSocket, the API, webcams,
+the Sentinel LED) each got a 401 and could each open a login prompt.
+Checked on lascaux: `/info/` redirects to `/observ/`; `/observ/`,
+`/images/` (API, `/ws`) and the camera proxies all answer 401, realm
+"Your RTS2 login".
+
+**Fix:**
+- rts2-httpd sends `Cache-Control: no-store` with every `.html` (and `/`)
+  it serves from `--static-dir`. no-store because history navigations
+  ignore no-cache. Needs a release.
+- bart-monitor.html and d50-monitor.html: before anything loads, one
+  `HEAD` of the page itself checks the login (one prompt at most). On a
+  401 the page loads nothing and says "Not logged in - reload the page to
+  log in". The camera `<img>`s have no `src` in the markup any more; the
+  start sets them. A page brought back from the back/forward cache
+  (`pageshow`, `persisted`) reloads.
+- Apache, at each site (root, outside the repo), in the SSL vhost, so the
+  monitor pages under `/observ` are not cached either (mod_headers is
+  already on for the Sentinel lines):
+
+      <LocationMatch "^/observ/([^/]*\.html)?$">
+          Header set Cache-Control "no-store"
+      </LocationMatch>
+
+**Tested** in headless Chromium against a stand-in server (the page 200,
+everything else 401 with the Basic challenge, as a cached page meets
+it): the old bart-monitor.html had 7 requests waiting on the login at
+once, the new pages 1 (the `HEAD`). With a 401 without challenge (a
+cancelled prompt) both pages stop after that one request and show the
+note; with everything 200 they load as before, the camera images
+included. rts2-httpd (built without DB): `status.html` and `/` carry
+`no-store`, `.js`/`.css` not. Not tested: Brave on Android itself, and
+the Apache lines.

@@ -1637,6 +1637,13 @@ bool HttpD::handleStatic (struct MHD_Connection *connection, const char *url, MH
 
 	struct MHD_Response *response = MHD_create_response_from_buffer (body.length (), (void *) body.data (), MHD_RESPMEM_MUST_COPY);
 	MHD_add_response_header (response, "Content-Type", staticContentType (relPath));
+	// A page must not come from the browser's cache: a restored tab (or
+	// back) would run it without the Basic-auth login, which the browser
+	// keeps only in memory, and every request it makes would open a login
+	// prompt (Brave on Android died of that). no-store, as history
+	// navigations ignore no-cache. [JS 2026-11-07]
+	if (relPath.size () > 5 && !relPath.compare (relPath.size () - 5, 5, ".html"))
+		MHD_add_response_header (response, "Cache-Control", "no-store");
 	result = MHD_queue_response (connection, MHD_HTTP_OK, response);
 	MHD_destroy_response (response);
 	return true;

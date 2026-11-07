@@ -564,8 +564,8 @@
                     <h4>C1</h4>
                     <div class="cam-box-body">
                         <div class="latest-image">
-                            <img id="c1-image" src="C1_small.jpg" alt="C1" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
-                            <img id="c1-center" src="C1_center.jpg" alt="C1 center" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
+                            <img id="c1-image" alt="C1" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
+                            <img id="c1-center" alt="C1 center" onclick="openLightbox('C1_full.jpg', 'C1 - Full Image')">
                         </div>
                         <div id="c1-info" class="latest-image-info"></div>
                         <div id="c1-status"></div>
@@ -575,8 +575,8 @@
                     <h4>C2</h4>
                     <div class="cam-box-body">
                         <div class="latest-image">
-                            <img id="c2-image" src="C2_small.jpg" alt="C2" onclick="openLightbox('C2_full.jpg', 'C2 - Full Image')">
-                            <img id="c2-center" src="C2_center.jpg" alt="C2 center" onclick="openLightbox('C2_full.jpg', 'C2 - Full Image')">
+                            <img id="c2-image" alt="C2" onclick="openLightbox('C2_full.jpg', 'C2 - Full Image')">
+                            <img id="c2-center" alt="C2 center" onclick="openLightbox('C2_full.jpg', 'C2 - Full Image')">
                         </div>
                         <div id="c2-info" class="latest-image-info"></div>
                         <div id="c2-status"></div>
@@ -586,8 +586,8 @@
                     <h4>C3</h4>
                     <div class="cam-box-body">
                         <div class="latest-image">
-                            <img id="c3-image" src="C3_small.jpg" alt="C3" onclick="openLightbox('C3_full.jpg', 'C3 - Full Image')">
-                            <img id="c3-center" src="C3_center.jpg" alt="C3 center" onclick="openLightbox('C3_full.jpg', 'C3 - Full Image')">
+                            <img id="c3-image" alt="C3" onclick="openLightbox('C3_full.jpg', 'C3 - Full Image')">
+                            <img id="c3-center" alt="C3 center" onclick="openLightbox('C3_full.jpg', 'C3 - Full Image')">
                         </div>
                         <div id="c3-info" class="latest-image-info"></div>
                         <div id="c3-status"></div>
@@ -3180,7 +3180,6 @@
             requestAnimationFrame(animateBars);
             reloadWebcams();
             updateSentinelLed();
-            reloadCameraImages();
             updateImageInfo();
             reloadCloudGraph();
             guideLoop();
@@ -3387,18 +3386,54 @@
             setNetMode(observingNow() ? 'live' : 'idle');
         }
 
-        startLiveUpdates();
-        netTask(() => updateStatus().then(evaluateNetMode), NET_DELAYS.status);
-        // the state lines' seconds count between polls
-        setInterval(updateCameraStatus, 1000);
-        setInterval(evaluateNetMode, 5000);
-        netTask(reloadWebcams, NET_DELAYS.webcams);
-        netTask(updateSentinelLed, { live: 60000, idle: 300000, low: 900000 });
-        netTask(reloadCameraImages, NET_DELAYS.images);
-        netTask(updateImageInfo, NET_DELAYS.images);
-        netTask(reloadCloudGraph, NET_DELAYS.slow);
-        netTask(reloadGuideHistory, NET_DELAYS.slow);
-        window.addEventListener('load', init);
+        // The login is checked once before anything loads [JS 2026-11-07]. A
+        // tab restored from the browser's cache runs this page without the
+        // Basic-auth login (the browser keeps it only in memory), and the
+        // page's requests at once each opened a login prompt: Brave on Android
+        // showed the page for a moment and died. One request first gives one
+        // prompt; refused, the page loads nothing. Hence also no src on the
+        // camera images in the markup.
+        async function loginOk() {
+            try {
+                const res = await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' });
+                return res.status !== 401;
+            } catch (e) {
+                return true;    // no answer at all: the tasks cope with that
+            }
+        }
+        // back/forward cache: a page brought back from it reloads, for the same reason
+        window.addEventListener('pageshow', e => {
+            if (e.persisted)
+                location.reload();
+        });
+
+        async function start() {
+            if (!await loginOk()) {
+                const note = document.createElement('div');
+                note.style.cssText = 'position:fixed;left:8px;right:8px;top:8px;z-index:50;padding:8px;'
+                    + 'text-align:center;border-radius:3px;background:var(--panel-bg);border:1px solid var(--border)';
+                note.textContent = 'Not logged in - reload the page to log in.';
+                document.body.appendChild(note);
+                return;
+            }
+            reloadCameraImages();
+            startLiveUpdates();
+            netTask(() => updateStatus().then(evaluateNetMode), NET_DELAYS.status);
+            // the state lines' seconds count between polls
+            setInterval(updateCameraStatus, 1000);
+            setInterval(evaluateNetMode, 5000);
+            netTask(reloadWebcams, NET_DELAYS.webcams);
+            netTask(updateSentinelLed, { live: 60000, idle: 300000, low: 900000 });
+            netTask(reloadCameraImages, NET_DELAYS.images);
+            netTask(updateImageInfo, NET_DELAYS.images);
+            netTask(reloadCloudGraph, NET_DELAYS.slow);
+            netTask(reloadGuideHistory, NET_DELAYS.slow);
+            if (document.readyState === 'complete')
+                init();
+            else
+                window.addEventListener('load', init);
+        }
+        start();
     </script>
 </body>
 </html>
