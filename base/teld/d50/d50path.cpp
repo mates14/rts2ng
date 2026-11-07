@@ -113,6 +113,10 @@ int D50Path::findPath (int32_t acStart, int32_t dcStart, int32_t acFin, int32_t 
 
 	searchedNodes = 0;
 
+	// a target the mount may not stand at has no way to it - no need to search the whole grid for one
+	if (!checkRawPosition (acFin, dcFin))
+		return -1;
+
 	// The essential approach used for dealing the problematic movements is to change the final target positon of servos gradually,
 	// while all the temporary targets (as well as the way to them) are safe and don't collide with the hard-horizon (as we cannot
 	// guarantee that the following change of coordinates will really happen). We call this approach "Successive Safe Targets" strategy.
@@ -492,6 +496,22 @@ int32_t D50Path::computeMovement (int isDec, int32_t fromCount, int32_t toCount,
 	if (speedAtInspectionTime != nullptr)
 		*speedAtInspectionTime = 0.0;
 	return toCount;
+}
+
+const char *D50Path::whyNot (int32_t AC, int32_t DC)
+{
+	struct ln_equ_posn equPosition;
+	struct ln_hrz_posn hrzPosition;
+	equPosition.ra = - ( (double) (AC / haCpd) + haZero);
+	equPosition.dec = (double) (DC / decCpd) + decZero;
+	ln_get_hrz_from_equ_sidereal_time (&equPosition, &observer, -observer.lng/15.0, &hrzPosition);
+	if (!hardHorizon->is_good (&hrzPosition))
+		return "below the hard horizon";
+	if (checkCeiling && hardCeiling != nullptr && hardCeiling->is_good (&hrzPosition))
+		return "above the ceiling";
+	if (sunDistance (AC, DC) < SUN_AVOID_DISTANCE)
+		return "too close to the Sun";
+	return nullptr;
 }
 
 double D50Path::sunDistance (int32_t AC, int32_t DC)

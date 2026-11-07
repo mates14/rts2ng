@@ -4700,6 +4700,21 @@ cap with a warning; a second SIGTERM - exit at once; `E 3 E 3` - the second
 exposure not started. Not run on a Moravian camera yet: that needs a daytime
 test on SBT C1 or C2 (stop mid-readout, restart, expect 1-2 s).
 
+On the camera, SBT C1, 2026-11-07 12:09-12:11 (65c4064) [JS]: a 1 s dark,
+`rts2-start -r C1` 1.8 s into the 9.4 s readout - "stopping: waiting for
+the readout to end before exiting", exit when it ended, the image still
+saved, the new C1 answering at once: 9.9 s in all (02:10 that night: 120 s
+and a power cycle). A 20 s dark stopped 2.5 s in - "stopping: aborting the
+exposure before exiting", the new C1 up 0.12 s later, 2.2 s in all, and
+its next dark normal. C2 not tested.
+
+C2 the same night, before the fix: aborted mid-exposure at 03:55:07 and
+then stopped idle (old build), it did not come back - "cannot set
+requested camera mode 0 Camera is not connected" at 03:56:57, also on a
+retry, until JS power-cycled it (up 04:00:30). Earlier on C2 2026-10-22
+(power cycle) and on C3 2026-10-14 (a faulty 12 V socket). Whether the
+abort-then-stop path still hangs C2 is open: C1 did not hang on it.
+
 ## D50 path finding: around the Sun with several successive points (2026-11-07) [JS]
 
 On 2026-11-06 11:21:15, after drying the dew (telescope at alt 68, az 140,
@@ -4838,3 +4853,13 @@ random daytime moves on the grid (21 at 10 deg), none without a way,
 closest 15.05 deg; of 1049 starts within 15 deg of the Sun, 1042 leave
 it, the 7 others all at the horizon (alt -1 .. 1.5) with the Sun low;
 slowest search 30 ms.
+
+On the mount (c53012e) JS moved around the Sun and was satisfied: e.g.
+13:23:32 by HA 45 Dec 10, 13:24:05 the park by HA 35 Dec 10. Two targets
+inside the 15 deg (`altaz 20 45`, `altaz 20 50` at 13:23, the Sun at alt
+14.5 az 41) were rightly refused, but only after the whole grid, logged
+"no safe way to the target, 727 intermediate targets tried". Now a target
+the mount may not stand at is refused at once: "findPath: the target
+(HA/Dec ...) is too close to the Sun (x deg, the limit is 15)" - or below
+the hard horizon, or above the ceiling (`D50Path::whyNot ()`). The test of
+a mount the Sun drifts to (`checkSunApproach ()`) is postponed.

@@ -363,6 +363,9 @@ int main ()
 			double closest = replay (p, n, ac0, dc0, JD, true, acOf (p, 0), 0);
 			assert (closest >= SUN_AVOID_DISTANCE - 0.04);
 		}
+		// a target in the proximity is refused at once (D50 13:23 altaz 20 45: 727 grid targets tried before)
+		assert (std::string (p.whyNot (acOf (p, sha + 5), dcOf (p, sdec))) == "too close to the Sun");
+		assert (p.findPath (acOf (p, 0), 0, acOf (p, sha + 5), dcOf (p, sdec)) < 0 && p.searchedNodes == 0);
 		// a move that would go closer first is refused: from 5 deg west straight across the Sun
 		int32_t acW = acOf (p, sha + 5), dcW = dcOf (p, sdec);
 		assert (p.checkPassage (acW, dcW, acOf (p, sha - 25), dcW) <= 0);
@@ -443,10 +446,11 @@ int main ()
 		assert (n >= 0);
 		assert (replay (p, n, ac1, dc1, JD, false, acOf (p, 0), 0) >= 0);
 
-		// altaz 2 90 (west: the ceiling is at 0 there) - the target itself is above the ceiling, refused
+		// altaz 2 90 (west: the ceiling is at 0 there) - the target itself is above the ceiling, refused at once
 		haDecOf (2, 90, JD, ha, dec);
 		assert (!p.checkRawPosition (acOf (p, ha), dcOf (p, dec)));
-		assert (p.findPath (acOf (p, 0), 0, acOf (p, ha), dcOf (p, dec)) < 0);
+		assert (std::string (p.whyNot (acOf (p, ha), dcOf (p, dec))) == "above the ceiling");
+		assert (p.findPath (acOf (p, 0), 0, acOf (p, ha), dcOf (p, dec)) < 0 && p.searchedNodes == 0);
 		// altaz -0.5 90, inside the west band (-1 .. 0), is reachable
 		haDecOf (-0.5, 90, JD, ha, dec);
 		ac1 = acOf (p, ha);

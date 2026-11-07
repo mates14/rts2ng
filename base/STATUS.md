@@ -9,6 +9,16 @@ At the end of a session: update this file if a must-stay-true fact, a
 deferral or an open item changed, and append the session to `HISTORY.md`
 with the date and `[MJ]`/`[JS]`.
 
+## In progress
+
+- 2026-11-07 [JS] D50 Sun watchdog (`D50::checkSunApproach ()`, teld/d50):
+  not yet seen on the mount - a standing mount (tracking off, `block_move`
+  0, dome open) that the Sun nears should park ~10 min before the 15 deg;
+  with `block_move` 1 a critical report every 5 min. Also unverified there:
+  leaving the Sun's proximity. Mornings to check: flats close the dome and
+  take darks (SBT C3, D50 C0 by `python/sites/d50/flatC0.py`), no
+  `BrokenPipeError` from the guide scripts. gxccd stop: C2 untested.
+
 ## What base is
 
 The RTS2 backend: wire protocol/kernel, `centrald`, every device driver and

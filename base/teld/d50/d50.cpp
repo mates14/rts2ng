@@ -1491,6 +1491,19 @@ int D50::findPath ()
 
 	preparePath ();
 
+	const char *why = path.whyNot (acFin, dcFin);
+	if (why != nullptr)
+	{
+		std::ostringstream os;
+		os.setf (std::ios::fixed);
+		os.precision (1);
+		os << "findPath: the target (HA/Dec " << (acFin / haCpd + haZero) << "/" << (dcFin / decCpd + decZero) << ") is " << why;
+		if (path.sunDistance (acFin, dcFin) < SUN_AVOID_DISTANCE)
+			os << " (" << path.sunDistance (acFin, dcFin) << " deg, the limit is " << SUN_AVOID_DISTANCE << ")";
+		logStream (MESSAGE_ERROR) << os.str () << sendLog;
+		return -1;
+	}
+
 	int n = path.findPath (acStart, dcStart, acFin, dcFin);
 	if (n < 0)
 	{

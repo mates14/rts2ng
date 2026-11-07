@@ -197,6 +197,12 @@ class D50Path
 		double safeStep (int32_t AC, int32_t DC, double sunDist);
 
 		/**
+		* Why the mount may not stand at (AC, DC), for the log: nullptr when it may, else "below the hard horizon",
+		* "above the ceiling" or "too close to the Sun".
+		*/
+		const char *whyNot (int32_t AC, int32_t DC);
+
+		/**
 		* Distance [deg] of the position from the Sun, INFINITY when the Sun is not avoided (below the horizon, or the roof is not open).
 		*/
 		double sunDistance (int32_t AC, int32_t DC);
