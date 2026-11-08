@@ -123,6 +123,9 @@ class DevScript
 
 		virtual void deleteScript ();
 
+		// deleteScript () dropped the script's exposures that were not sent yet
+		virtual void unsentExposuresDropped () {}
+
 		rts2core::Command *scriptKillCommand;
 		bool scriptKillcallScriptEnds;
 

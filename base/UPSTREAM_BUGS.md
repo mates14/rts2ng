@@ -2085,3 +2085,27 @@ inactive". Bench: `rts2-scriptexec -s "E 1"` on a dummy camera logs the
 disabling after a perfect exposure.
 
 rts2ng: only replies < 0 count.
+
+## A deleted script's waiting exposures still go out (`lib/rts2script/devscript.cpp`, `deleteScript`) [JS 2026-11-08]
+
+An exposure a script queued on the executor's camera connection waits there
+while a block holds it (`BOP_EXPOSURE`: a slewing mount, an opening dome).
+When the script is deleted (a failed move restarts the observation:
+`EVENT_MOVE_FAILED` -> `EVENT_STOP_OBSERVATION`), the exposure stays in the
+queue and goes out when the block ends - with the next script's
+`script_ends` queued behind it, so the camera gets `script_ends` in the
+middle of an exposure nobody waits for. D50 2026-11-07: C0's flat failed,
+target 2 disabled on C0 for the whole dusk.
+
+rts2ng: `deleteScript` drops the unsent exposures
+(`Connection::queDropUnsent`) and clears `waitForExposure`.
+
+## script_ends resets a camera mid-exposure (`src/camd/camd.cpp`, `Camera::scriptEnds`) [JS 2026-11-08]
+
+`script_ends` resets the camera's values at once, whatever the chip does.
+Binning is deferred (`needReload`), the window and the drivers' own resets
+are not: the Andor re-sets its image (`box`, `setTiming`) while acquiring,
+`SetImage` returns 20072 and the readout fails.
+
+rts2ng: during an exposure or readout Camera only notes it and resets once
+the chip is idle, before applying the queued values.

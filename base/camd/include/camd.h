@@ -1481,6 +1481,11 @@ class Camera:public rts2core::ScriptDevice
 		// if true, send command OK after exposure is started
 		bool sendOkInExposure;
 
+		// script_ends came while the chip exposed or read out: the values are
+		// reset once it is idle (checkQueChanges ()), before the queued ones
+		// are applied [JS 2026-11-08]
+		bool scriptEndsPending;
+
 		long calculateDataSize;
 
 		void setFilterOffsets (char *opt);

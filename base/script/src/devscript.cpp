@@ -413,6 +413,19 @@ void DevScript::deleteScript ()
 			dont_execute_for = currentTarget->getTargetID ();
 			dont_execute_for_obsid = currentTarget->getObsId ();
 		}
+		// base note: classic left the script's exposures that wait for a
+		// block (an opening dome, a slewing mount) in the connection's
+		// queue. They went out when the block ended - after the next
+		// script's script_ends had been queued behind them, so the camera
+		// got script_ends mid-exposure (D50 C0 2026-11-07 15:22, the
+		// evening flats lost). The script is gone, nobody waits for their
+		// images: drop them. [JS 2026-11-08]
+		int dropped = script_connection->queDropUnsent ([] (rts2core::Command *cmd) { return dynamic_cast <rts2core::CommandExposure *> (cmd) != nullptr; });
+		if (dropped > 0)
+		{
+			logStream (MESSAGE_INFO) << script_connection->getName () << ": " << dropped << " exposure(s) of the ended script not started" << sendLog;
+			unsentExposuresDropped ();
+		}
 		if (script.get ())
 			script.get ()->notActive ();
 		script.null ();

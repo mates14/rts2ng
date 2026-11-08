@@ -4884,3 +4884,48 @@ every SBT C1 `rts2-scriptexec` run of the gxccd test that day. Fix: only
 replies < 0 count. Bench (dummy camera, scriptexec): "E 1", "E 1 E 1",
 "for 3 { E 1 }" no longer disabled; "E 1 nonexist=5" (last reply -2)
 still is. Needs the next build (kernel header: executor and scriptexec).
+
+## D50 evening flats lost: a deleted script's exposure, then script_ends mid-exposure (2026-11-08) [JS]
+
+JS: no D50 flats on the evening of 2026-11-07. At dusk (15:21:52 UT) QUEUE
+sent `now 2`, the dome began to open and T0 refused the slew to the flat
+field ("findPath: no safe way to the target" - under the closed roof the
+mount must stay below the ceiling; the same refusal on 11-05). The executor
+stopped the observation and started it again (`EVENT_MOVE_FAILED`), sending
+`script_ends` to every device. C0's commands waited 27 s for the opening
+dome; at 15:22:23.313 the first flat exposure started and 11 ms later C0
+got that `script_ends`. The Andor reset its window mid-acquisition
+(`SetImage() returns 20072`), the readout failed (20067), flatC0.py died
+on "exposure failed" and the executor disabled target 2 on C0 for all of
+dusk (399 x "C0 ignores next target (2,2)"). On 11-05 the `script_ends`
+reached C0 4 s before its first exposure; since 017eec2 the opening dome's
+blocks really hold C0, so the commands waited.
+
+Cause, two classic bugs (UPSTREAM_BUGS.md): `DevScript::deleteScript`
+left the script's exposures that waited for a block in the connection's
+queue; they went out when the block ended, the new script's
+`script_ends` queued behind them. And a camera resets its values on
+`script_ends` whatever its chip does.
+
+Fix: `deleteScript` drops the unsent exposures
+(`Connection::queDropUnsent`, "C0: 1 exposure(s) of the ended script not
+started") and clears `waitForExposure`, or a plain script's next run waited
+for the dropped exposure for ever. Camera answers `script_ends` during an
+exposure or readout at once and resets after the readout, before the
+queued values.
+
+Bench (lascaux, `~torman/wip-flat-test.sh`: centrald, the real
+rts2-dome-d50 on fordsim, teld-dummy refusing moves by `block_move`,
+camd-dummy C0, the real executor on rts2test, C0 `exposure=3 exe fl.py`
+- three exposures through rts2.scriptcomm): before - the deleted script's
+exposure started 1 ms after "exposure interrupted", `script_ends` 43 and
+87 ms into it; after - the exposure dropped, no `script_ends` during an
+exposure, all exposures and images once the mount was released, for the
+slew refused before and during the opening and for `E 2 E 2 E 2`; with no
+refusal unchanged. The installed executor with the new camd: `script_ends`
+mid-exposure deferred, "readout done, resetting the values". Not on D50
+yet: needs the release, the Andor rebuilt and a dusk.
+
+Seen on the way, not fixed: an `exe` script that cannot be started
+("Permission denied") makes the executor restart it in a tight loop, and it
+crashed in libpq after ~20 s (bench, 66bc7cc).

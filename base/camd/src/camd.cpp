@@ -569,6 +569,7 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 	createValue (lastImagePath, "last_image", "path to the last image", false, RTS2_VALUE_WRITABLE);
 
 	sendOkInExposure = false;
+	scriptEndsPending = false;
 
 	createValue (pixelsSecond, "pixels_second", "[pixels/second] average readout speed", false, RTS2_DT_KMG | RTS2_VALUE_DEBUG);
 	createValue (readoutTime, "readout_time", "[s] data readout time", false, RTS2_DT_TIMEINTERVAL);
@@ -682,6 +683,12 @@ void Camera::checkQueChanges (rts2_status_t fakeState)
 	// don't check values changes if there are qued exposures and exposure is still running
 	if (quedExpNumber->getValueInteger () > 0 && (fakeState & (CAM_EXPOSING | CAM_READING)))
 		return;
+	if (scriptEndsPending && !(fakeState & CAM_WORKING) && !(getStateChip (0) & CAM_WORKING))
+	{
+		scriptEndsPending = false;
+		logStream (MESSAGE_INFO) << "readout done, resetting the values of the ended script" << sendLog;
+		scriptEnds ();
+	}
 	// do not check if we have queued exposures
 	fakeState |= (getDeviceBopState () & BOP_TRIG_EXPOSE);
 	rts2core::ScriptDevice::checkQueChanges (fakeState);
@@ -723,6 +730,8 @@ int Camera::killAll (bool callScriptEnds)
 {
 	logStream (MESSAGE_DEBUG) << "****** killAll ()" << sendLog;
 	timeReadoutStart = NAN;
+	// killAll resets the values itself (callScriptEnds) once the exposure is stopped
+	scriptEndsPending = false;
 
 	waitingForNotBop->setValueBool (false);
 	waitingForEmptyQue->setValueBool (false);
@@ -2228,6 +2237,16 @@ int Camera::commandAuthorized (rts2core::Connection * conn)
 		conn->sendMsg ("stopread <chip> - stop reading given chip");
 		conn->sendMsg ("exit - exit from connection");
 		conn->sendMsg ("help - print, what you are reading just now");
+		return 0;
+	}
+	else if (conn->isCommand ("script_ends") && (getStateChip (0) & CAM_WORKING))
+	{
+		// base note: classic reset the values at once, mid-exposure. The
+		// Andor's reset re-sets the window (box (), setTiming ()), which the
+		// SDK refuses while acquiring (SetImage 20072), and the readout then
+		// fails (D50 C0 2026-11-07 15:22). Reset after the readout. [JS 2026-11-08]
+		scriptEndsPending = true;
+		logStream (MESSAGE_INFO) << "script ends during the exposure, the values are reset after its readout" << sendLog;
 		return 0;
 	}
 	else if (conn->isCommand (COMMAND_CCD_EXPOSURE))

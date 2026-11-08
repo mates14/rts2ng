@@ -18,6 +18,9 @@ with the date and `[MJ]`/`[JS]`.
   leaving the Sun's proximity. Mornings to check: flats close the dome and
   take darks (SBT C3, D50 C0 by `python/sites/d50/flatC0.py`), no
   `BrokenPipeError` from the guide scripts. gxccd stop: C2 untested.
+- 2026-11-08 [JS] D50 evening flats (script/devscript.cpp, camd): bench
+  only. First D50 dusk after the release and the Andor rebuild: C0 flats
+  despite the refused first slew, no "disabling target 2 on device C0".
 
 ## What base is
 
@@ -195,6 +198,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   `EVENT_FILTER_MOVE_END`. `offsetForFilter()` raises `focuserMoving`, and
   without those handlers the first filter change wedges the camera.
 - `Camera::createOtherType()` null-checks `focuserDevice`.
+- `script_ends` while the chip exposes or reads out only sets
+  `scriptEndsPending`; `Camera::checkQueChanges ()` runs `scriptEnds ()`
+  once the chip is idle, before the queued values. A reset mid-exposure
+  ruins the Andor's frame (HISTORY, "D50 evening flats lost"). [JS 2026-11-08]
 - `LTV1`/`LTV2` (and through them `CRPIX1`/`CRPIX2`) include the window
   offset, `(x)/bin`, consistent with `DATASEC`.
 - FLI: `nflush` defaults to 1, and `idle_flush_period` (300 s) dumps the
@@ -395,6 +402,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   the site's own and not packaged; the second holds rts2-python's
   site-independent scripts. Site-specific scripts are never packaged
   (`python/STATUS.md`). [MJ 2026-10-26]
+- `DevScript::deleteScript ()` drops the script's exposures still waiting
+  in the connection's queue for a block (`Connection::queDropUnsent ()`) and
+  clears the camera client's `waitForExposure`. Left there, they went out
+  when the block ended, behind the next script's `script_ends`. [JS 2026-11-08]
 
 **Other drivers**
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,

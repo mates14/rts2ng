@@ -28,6 +28,7 @@
 #include <string>
 #include <cstring>
 #include <ctime>
+#include <functional>
 #include <list>
 #include <netinet/in.h>
 
@@ -443,6 +444,15 @@ class Connection:public Object
 		 * delete runningCommand, if it was not send.
 		 */
 		void queClear (bool running = false);
+
+		/**
+		 * Delete the commands for which pred is true and which were not
+		 * sent yet: those in the que, and the running one while it waits
+		 * for a BOP state. [JS 2026-11-08]
+		 *
+		 * @return number of commands deleted
+		 */
+		int queDropUnsent (const std::function <bool (Command *)> &pred);
 
 		/**
 		 * Fail and delete the running command if it was already sent.

@@ -116,6 +116,9 @@ class DevClientCameraExec:public rts2image::DevClientCameraImage, public DevScri
 
 		virtual void clearFailedCount () { rts2image::DevClientCameraImage::clearFailedCount (); }
 
+		// the next script must not wait for an exposure that will not start
+		virtual void unsentExposuresDropped () { waitForExposure = false; }
+
 		virtual void idle ();
 
 		virtual void exposureStarted (bool expectImage);

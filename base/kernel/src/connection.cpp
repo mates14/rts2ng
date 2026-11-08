@@ -1430,6 +1430,32 @@ void Connection::queClear (bool running)
 	commandQue.clear ();
 }
 
+int Connection::queDropUnsent (const std::function <bool (Command *)> &pred)
+{
+	int n = 0;
+	for (std::list <Command *>::iterator iter = commandQue.begin (); iter != commandQue.end (); )
+	{
+		if (pred (*iter))
+		{
+			delete *iter;
+			iter = commandQue.erase (iter);
+			n++;
+		}
+		else
+		{
+			iter++;
+		}
+	}
+	if (runningCommand && runningCommandStatus == WAITING && pred (runningCommand))
+	{
+		delete runningCommand;
+		runningCommand = nullptr;
+		n++;
+		sendNextCommand ();
+	}
+	return n;
+}
+
 time_t Connection::authRetryDelay ()
 {
 	return std::min (AUTH_RETRY_FIRST_SEC << std::min (authRetries, 4), (time_t) AUTH_RETRY_MAX_SEC);
