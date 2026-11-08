@@ -15,16 +15,20 @@ with the date and `[MJ]`/`[JS]`.
   not yet seen on the mount - a standing mount (tracking off, `block_move`
   0, dome open) that the Sun nears should park ~10 min before the 15 deg;
   with `block_move` 1 a critical report every 5 min. Also unverified there:
-  leaving the Sun's proximity. Mornings to check: flats close the dome and
-  take darks (SBT C3, D50 C0 by `python/sites/d50/flatC0.py`), no
-  `BrokenPipeError` from the guide scripts. gxccd stop: C2 untested.
-- 2026-11-08 [JS] D50 evening flats (script/devscript.cpp, camd): bench
-  only. First D50 dusk after the release and the Andor rebuild: C0 flats
-  despite the refused first slew, no "disabling target 2 on device C0".
-- 2026-11-08 [JS] D50 PEC (teld/d50/wormencoder.cpp): stage 1, the worm
-  encoder read and logged, nothing corrected; not yet on D50. Next: T0
-  with `--worm-encoder`/`--worm-log`, a night of guiding, the error fitted
-  against the worm angle (HISTORY, "D50 periodic error").
+  leaving the Sun's proximity. gxccd stop: C2 untested. Morning flats:
+  D50 seen 2026-11-08 (dome closed after the flats, 187 C0 darks by
+  `python/sites/d50/flatC0.py`, no `BrokenPipeError`); SBT C3 darks still
+  to see - its target 2 ran the old `/etc/rts2/flatC3.py` until 2026-11-08
+  (python/STATUS.md).
+- 2026-11-08 [JS] D50 evening flats (script/devscript.cpp, camd): released
+  (4b55578, D50 restarted 12:12 UTC, Andor rebuilt). To see: the first clear
+  D50 dusk - C0 flats despite a refused first slew, no "disabling target 2
+  on device C0".
+- 2026-11-08 [JS] D50 PEC (teld/d50/wormencoder.cpp): stage 1 (the worm
+  encoder read and logged, nothing corrected) on D50 since 19:42 UTC
+  (822fe8b, T0 `--worm-encoder`, `--worm-log /var/log/rts2-worm`); tracked
+  under the roof: one worm turn 179.50 s. Next: a night of C1 guiding, the
+  error fitted against the worm angle (HISTORY, "D50 periodic error").
 
 ## What base is
 

@@ -4980,3 +4980,13 @@ same function of the worm angle every night (stage 2, a fit of the log
 against the guide log), then the correction - the step frequency times
 1 + the PEC term at the worm angle, once a second, only while tracking,
 off when the encoder fails - and nights with PEC on and off compared.
+
+On D50 since 2026-11-08 19:42 UTC. Tracked under the closed roof (HA -2
+deg, Dec -35, 294 s): the encoder counts down while tracking, -46734
+counts/s - one turn in 179.496 s (3 sidereal minutes 179.51 s);
+`worm_period` 179.3-179.4 s (its 30 s window sees the error), no refused
+reading. The worm itself does not turn evenly: 2.2" HA peak to peak
+(0.45" rms) off a steady rate, strongest near 37 s and 140 s in so short a
+run. So part of the error comes before the worm (servo, gearbox) and the
+encoder sees it as it happens - a correction of it needs no model learned
+from guiding.
