@@ -500,8 +500,9 @@
         // Applied inline, before the rest of the page renders, so
         // dark/compact mode doesn't flash the default theme first.
         (function () {
-            const m = document.cookie.match(/(?:^|; )darkMode=1(?:;|$)/);
-            if (m) document.body.classList.add('dark');
+            // Dark is the default; only a chosen light (darkMode=0) is not.
+            const m = document.cookie.match(/(?:^|; )darkMode=0(?:;|$)/);
+            if (!m) document.body.classList.add('dark');
             const c = document.cookie.match(/(?:^|; )compactMode=1(?:;|$)/);
             if (c) document.body.classList.add('compact');
         })();

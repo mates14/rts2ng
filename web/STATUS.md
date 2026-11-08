@@ -3988,3 +3988,9 @@ by the masters hides what they are.
   darks, fields right; 2026-11-04 (240 frames) 2.9 s the first time, 0.04
   s after. Serially, before the threads, 2026-11-06 took 24 s. D50 not
   tried.
+
+## Monitor pages: dark by default (2026-11-08) [JS]
+
+bart-monitor.html and d50-monitor.html start dark unless the cookie says
+light (`darkMode=0`, which the toggle writes). Before, light unless
+`darkMode=1`; a browser that chose either keeps it.
