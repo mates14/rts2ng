@@ -2691,16 +2691,19 @@
             // The frame: guideccd.py writes guide_last.jpg here and names the
             // FITS it came from in guide_last_image, which changes once per
             // frame - the reload trigger. Dimmed when not guiding: it is
-            // then the last frame of an earlier run.
+            // then the last frame of an earlier run. Without guide_last_image
+            // (C3 restarted, the script not run since) the JPEG still there is
+            // loaded once, dimmed; none there, no frame is shown.
             const img = document.getElementById('guide-frame-img');
             const path = typeof data.guide_last_image === 'string' ? data.guide_last_image : '';
-            if (path && path !== guideLastImage) {
+            if (path ? path !== guideLastImage : guideLastImage === null) {
                 guideLastImage = path;
                 const url = `guide_last.jpg?t=${Date.now()}`;
+                img.onload = () => { img.style.display = ''; };
+                img.onerror = () => { img.style.display = 'none'; };
                 img.src = url;
-                img.onclick = () => openLightbox(url, `${GUIDE_CAM} guiding - ${path}`, true);
+                img.onclick = () => openLightbox(url, `${GUIDE_CAM} guiding - ${path || 'an earlier run'}`, true);
             }
-            img.style.display = path ? '' : 'none';
             img.classList.toggle('dim', !fresh);
             img.title = fresh ? 'last guiding frame - click to enlarge'
                 : 'last frame of an earlier guiding run' + (t !== null ? ` (${hhmmss(t * 1000)})` : '');

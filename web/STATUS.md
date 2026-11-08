@@ -3994,3 +3994,13 @@ by the masters hides what they are.
 bart-monitor.html and d50-monitor.html start dark unless the cookie says
 light (`darkMode=0`, which the toggle writes). Before, light unless
 `darkMode=1`; a browser that chose either keeps it.
+
+## Monitor pages: the last guide frame without guide_last_image (2026-11-08) [JS]
+
+After the guide camera restarts (C3 at SBT, C1 at D50), it has no guide_*
+values until the guide script runs again, and the pages hid the frame. They
+now load the guide_last.jpg still beside the previews once, dimmed; with no
+file there, no frame. D50's page also drew neither the live plot nor the
+scatter in that state (it returned first); both now say "not guiding", as
+at SBT. Tested in headless Chromium against both sites' live API, with the
+guide values there and stripped out, and with the JPEG missing.

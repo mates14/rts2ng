@@ -1890,6 +1890,30 @@
                 b.classList.toggle('active', parseFloat(b.dataset.hours) === guideHours);
         }
 
+        // The cutout is rendered by the guide script itself, using the
+        // stretch pyrt-f2cj fitted for this field, and dropped beside the
+        // C0 preview for Apache to serve.  Deliberately not /preview/:
+        // that endpoint has no histogram case for signed short, so it
+        // scales the guide cutouts to a flat grey.  guide_last_image
+        // still drives the reload - it names the FITS this JPEG was made
+        // from, and changes exactly once per kept frame.  Without it
+        // (C1 restarted, the script not run since) the JPEG still there
+        // is loaded once, dimmed; none there, no frame is shown.
+        function showGuideFrame(data) {
+            const img = document.getElementById('guide-frame-img');
+            const path = typeof data.guide_last_image === 'string' ? data.guide_last_image : '';
+            if (path ? path !== guideLastImage : guideLastImage === null) {
+                guideLastImage = path;
+                const url = `guide_last.jpg?t=${Date.now()}`;
+                img.onload = () => { img.style.display = ''; };
+                img.onerror = () => { img.style.display = 'none'; };
+                img.src = url;
+                img.onclick = () => openLightbox(url,
+                    `${GUIDE_CAM} - ${path ? path.split('/').pop() : 'an earlier run'}`);
+            }
+            img.classList.toggle('dim', !guideActive);
+        }
+
         async function pollGuide() {
             const data = await fetchDeviceData(GUIDE_CAM);
             const status = document.getElementById('guide-status');
@@ -1909,6 +1933,9 @@
                 status.textContent = `${GUIDE_CAM} publishes no guiding telemetry`
                     + ' - guide.py creates guide_dx/guide_dy/... on its first frame';
                 guideActive = false;
+                showGuideFrame(data);
+                drawGuideLive();
+                drawGuideScatter();
                 return;
             }
 
@@ -1935,24 +1962,7 @@
             while (guideLive.length && guideLive[0].t < now - GUIDE_LIVE_SECONDS)
                 guideLive.shift();
 
-            // The cutout is rendered by the guide script itself, using the
-            // stretch pyrt-f2cj fitted for this field, and dropped beside the
-            // C0 preview for Apache to serve.  Deliberately not /preview/:
-            // that endpoint has no histogram case for signed short, so it
-            // scales the guide cutouts to a flat grey.  guide_last_image
-            // still drives the reload - it names the FITS this JPEG was made
-            // from, and changes exactly once per kept frame.
-            const path = typeof data.guide_last_image === 'string' ? data.guide_last_image : '';
-            if (path && path !== guideLastImage) {
-                guideLastImage = path;
-                const url = `guide_last.jpg?t=${Date.now()}`;
-                document.getElementById('guide-frame-img').src = url;
-                document.getElementById('guide-frame-img').onclick =
-                    () => openLightbox(url, `${GUIDE_CAM} - ${path.split('/').pop()}`);
-            }
-
-            const img = document.getElementById('guide-frame-img');
-            img.classList.toggle('dim', !guideActive);
+            showGuideFrame(data);
 
             status.className = state === 'star lost' && guideActive ? 'cloud-status warn' : 'cloud-status';
             if (guideActive && (!hasTime || state === 'guiding' || !state))
