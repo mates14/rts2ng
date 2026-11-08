@@ -4929,3 +4929,54 @@ yet: needs the release, the Andor rebuilt and a dusk.
 Seen on the way, not fixed: an `exe` script that cannot be started
 ("Permission denied") makes the executor restart it in a tight loop, and it
 crashed in libpq after ~20 s (bench, 66bc7cc).
+
+## D50 periodic error: measured, the worm encoder read and logged (2026-11-08) [JS]
+
+Stage 1 of a periodic error correction (PEC) for D50's HA worm: read the
+new worm encoder and log it with what the step generator does. Nothing
+corrects yet.
+
+The error, from the night of 2026-11-07 (`C1 guide: val` lines; the
+unguided HA error rebuilt as the residual minus all corrections applied
+before it - a pulse is 0.8 of the error, 1000 ms = 1.5"): in all ten
+guiding runs of 20-60 min the strongest term has a period of 178.4-181.8 s,
+mean 179.5 s - the worm, one turn in 3 sidereal minutes. The fundamental
+1.2-1.9", harmonics up to the 8th 0.2-0.5" each (3rd, 4th, 7th the
+largest), 4-5" peak to peak, the amplitudes steady run to run. The guider
+(3 s, gain 0.8) leaves 0.2" at 179 s; what it does not follow is 14-45 s,
+0.2-0.3" each. Fitting out the worm harmonics takes the guided residual
+from ~0.73" to ~0.62" rms. 14.4, 18.7 and 21.6 s are no worm harmonics -
+probably the gearbox (its tooth counts would give their phase from the
+motor position).
+
+The encoder: Broadcom AS38-H39E (BiSS C) on the worm, read by an STM32
+NUCLEO-F411RE (USB, `/dev/serial/by-id/usb-STMicroelectronics_STM32_STLink_066EFF494951785087144554-if02`,
+921600 baud), which sends ~1070 lines/s unasked:
+`M:0577 S:0F0164 E:1 W:1 C:19 S:19` - turns (16 bits), position in the
+turn (23 bits, 0.155"), error and warning flags (1 = OK), the encoder's
+CRC and the board's. The board checks nothing; `parseWormLine` takes a
+reading only with equal CRCs and both flags 1. At rest +-3 counts (+-0.5"
+of worm, 1/480 of that in HA). The step generator: 96 MHz / (pulse length
++ 1), ~54800 at sidereal, so 0.002 % steps against the ~0.4 % PEC needs.
+
+`WormEncoder` (teld/d50/wormencoder.cpp) owns the port and the log in its
+own thread (Mpu9250Reader's pattern): a missing board, a lost USB device
+or a slow disk never holds up the mount. `--worm-encoder <port>` publishes
+`worm_encoder` (valid reading within 0.5 s), `worm_angle`, `worm_turns`,
+`worm_period` (fit over 30 s; NaN at rest) and `worm_encoder_errors`.
+`--worm-log <dir>` writes `worm-YYYYMMDD.log` (UTC), one line each:
+`<unix time> W <turns> <pos>` once a second while the worm turns (once a
+minute at rest); and with the reading at that moment (or `- -`):
+`G 0|1` the step generator off/on, `F <Hz>` its frequency set (guide pulse
+start and end, `scriptEnds`), `P <ms> 1|0` an RA guide pulse done/refused,
+`start`. Read on the real board with a probe (lascaux50, GCC 12 with
+dpkg-buildflags, no warnings): 1065 good readings/s for 30 s, no CRC or
+flag failure. `test_wormencoder` replays real lines and drives the reader
+on a pty over a turn and the 16-bit turn wrap. The driver itself only on
+D50 (it needs the REMOTES boards and the servos).
+
+Next: release, T0 with both options, a night of guiding: is the error the
+same function of the worm angle every night (stage 2, a fit of the log
+against the guide log), then the correction - the step frequency times
+1 + the PEC term at the worm angle, once a second, only while tracking,
+off when the encoder fails - and nights with PEC on and off compared.

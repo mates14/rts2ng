@@ -33,11 +33,14 @@
 
 #include "tgdrive.h"
 #include "d50path.h"
+#include "wormencoder.h"
 #include "connremotes.h"
 #include "fork.h"
 
 #include "configuration.h"
 #include "libnova_cpp.h"
+
+#include <cstdarg>
 
 
 #define OPT_RA				OPT_LOCAL + 2201
@@ -45,6 +48,8 @@
 #define OPT_CEILING			OPT_LOCAL + 2203
 #define OPT_DOME_DEVICE			OPT_LOCAL + 2204
 #define OPT_DOME_OPENSWITCH_VARIABLE	OPT_LOCAL + 2205
+#define OPT_WORM_ENCODER		OPT_LOCAL + 2206
+#define OPT_WORM_LOG			OPT_LOCAL + 2207
 
 #define RTS2_D50_TIMER_GUIDE_RA		RTS2_LOCAL_EVENT + 1210
 #define RTS2_D50_TIMER_GUIDE_DEC	RTS2_LOCAL_EVENT + 1211
@@ -281,6 +286,22 @@ class D50:public Fork
 		int setWormStepsFreq (double freq);
 		int updateWormStepsFreq (bool updateAlsoTargetFreq = false);
 
+		// The HA worm's own encoder (wormencoder.h), the base of periodic error
+		// correction; for now only read, published and logged with every step
+		// generator change and guide pulse. Nothing here depends on it. [JS 2026-11-08]
+		const char *wormDevice;
+		const char *wormLogDir;
+		WormEncoder *wormEncoder;
+		double wormStarted;
+		bool wormSilentReported;	// "no readings since start" said once
+		rts2core::ValueBool *wormValid;
+		rts2core::ValueDouble *wormAngle;
+		rts2core::ValueInteger *wormTurns;
+		rts2core::ValueDouble *wormPeriod;
+		rts2core::ValueInteger *wormErrors;
+		void updateWorm ();
+		void wormLog (const char *fmt, ...) __attribute__ ((format (printf, 2, 3)));
+
 		int32_t lastSafeRaPos;
 		int32_t lastSafeDecPos;
 
@@ -394,6 +415,8 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 
 	addOption (OPT_DOME_DEVICE, "dome_device", 1, "name of dome device [DOME]");
 	addOption (OPT_DOME_OPENSWITCH_VARIABLE, "dome-openswitch-variable", 1, "name of variable in dome, which holds the dome-open info [roof_opened]");
+	addOption (OPT_WORM_ENCODER, "worm-encoder", 1, "serial port of the HA worm encoder board (none: not read)");
+	addOption (OPT_WORM_LOG, "worm-log", 1, "directory for the HA worm log, worm-YYYYMMDD.log (none: no log)");
 
 	addParkPosOption ();
 
@@ -437,12 +460,27 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	domeDevice = "DOME";
 	domeDeviceOpenswitchVariable = "roof_opened";
 
+	wormDevice = nullptr;
+	wormLogDir = nullptr;
+	wormEncoder = nullptr;
+	wormStarted = 0;
+	wormSilentReported = false;
+	createValue (wormValid, "worm_encoder", "HA worm encoder gives valid readings", false);
+	wormValid->setValueBool (false);
+	createValue (wormAngle, "worm_angle", "[deg] HA worm angle, in its turn", false, RTS2_DT_DEGREES);
+	wormAngle->setValueDouble (NAN);
+	createValue (wormTurns, "worm_turns", "HA worm turns counted by its encoder", false);
+	createValue (wormPeriod, "worm_period", "[s] HA worm turn period, measured over 30 s (NaN at rest)", false);
+	wormPeriod->setValueDouble (NAN);
+	createValue (wormErrors, "worm_encoder_errors", "HA worm encoder readings refused (CRC, flags, garbled)", false);
+
 	// apply all corrections by rts2 for mount
 	setCorrections (true, true, true, true);
 }
 
 D50::~D50 (void)
 {
+	delete wormEncoder;
 	delete raDrive;
 	delete decDrive;
 }
@@ -576,6 +614,12 @@ int D50::processOption (int opt)
                 case OPT_DOME_OPENSWITCH_VARIABLE:
                         domeDeviceOpenswitchVariable = optarg;
                         break;
+                case OPT_WORM_ENCODER:
+                        wormDevice = optarg;
+                        break;
+                case OPT_WORM_LOG:
+                        wormLogDir = optarg;
+                        break;
                 default:
                         return Fork::processOption (opt);
         }
@@ -602,6 +646,20 @@ int D50::init ()
 	ret = Fork::init ();
 	if (ret)
 		return ret;
+
+	// the worm encoder first, so that the log has the step generator's
+	// first setting below; a missing board only leaves its values invalid
+	if (wormDevice)
+	{
+		wormEncoder = new WormEncoder (wormDevice, wormLogDir ? wormLogDir : "");
+		wormEncoder->start ();
+		wormStarted = getNow ();
+		wormLog ("start");
+	}
+	else if (wormLogDir)
+	{
+		logStream (MESSAGE_WARNING) << "--worm-log without --worm-encoder, no worm log" << sendLog;
+	}
 
 	// initialize REMOTES units first...
 	remotesRA = new rts2core::ConnREMOTES (this, remotesEthRA, remotesMacRA);
@@ -725,6 +783,7 @@ int D50::info ()
 		setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
 
 	readAbsEncoders ();
+	updateWorm ();
 
         double t_telRa;
         double t_telDec;
@@ -1265,8 +1324,10 @@ void D50::performGuideRA (int pulseLength)
 		{
 			// comment to the sutability check above: the TRACKING check should be enough under normal circumstances, but as we use a low-level manipulation with the mount, it's better to add more conditions to solve potential bugs in a general teld code
 			addTimer (1.0/1000.0, new rts2core::Event (RTS2_D50_TIMER_GUIDE_RA));	// minimal timer interval
+			wormLog ("P %d 0", pulseLength);
 			return;
 		}
+		wormLog ("P %d 1", pulseLength);
 		if (pulseLength>0)	// increase RA => decrease speed
 			setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble () * (1.0 - guideSpeedRA->getValueDouble ()/100.0));
 		else			// decrease RA => increase speed
@@ -1676,6 +1737,8 @@ int D50::setWormStepsGenerator (bool stepsGenerator)
 	ret = remotesSetMCRegister (remotesRA, remotesMCRegisterRAState);
 	if (ret == 0)
 	{
+		if (remotesWormStepsGenerator->getValueBool () != stepsGenerator)
+			wormLog ("G %d", stepsGenerator ? 1 : 0);
 		remotesWormStepsGenerator->setValueBool (stepsGenerator);
 		sendValueAll (remotesWormStepsGenerator);
 		return 0;
@@ -1699,6 +1762,8 @@ int D50::setWormStepsFreq (double freq)
 	ret = remotesSetStepperPulseLength (remotesRA, pulseLength);
 	if (ret == 0)
 	{
+		if (remotesWormStepsPulseLength->getValueInteger () != pulseLength)
+			wormLog ("F %.5f", freqReal);
 		remotesWormStepsPulseLength->setValueInteger (pulseLength);
 		remotesWormStepsFreqReal->setValueDouble (freqReal);
 		remotesWormStepsFreqTarget->setValueDouble (freq);
@@ -1831,6 +1896,45 @@ int D50::updateWormStepsFreq (bool updateAlsoTargetFreq)
 	return ret;
 }
 
+
+void D50::updateWorm ()
+{
+	if (wormEncoder == nullptr)
+		return;
+	WormStatus st = wormEncoder->getStatus ();
+	if (st.valid != wormValid->getValueBool ())
+	{
+		if (st.valid)
+			logStream (MESSAGE_INFO) << "worm encoder " << wormEncoder->getDevice () << " reads" << sendLog;
+		else
+			logStream (MESSAGE_WARNING) << "worm encoder " << wormEncoder->getDevice () << " gives no valid readings: " << st.lastMessage << sendLog;
+	}
+	// a board missing from the start never changes the value: say so once
+	if (!st.valid && st.readings == 0 && !wormSilentReported && getNow () - wormStarted > 5)
+	{
+		logStream (MESSAGE_WARNING) << "worm encoder " << wormEncoder->getDevice () << " gives no readings: " << st.lastMessage << sendLog;
+		wormSilentReported = true;
+	}
+	wormValid->setValueBool (st.valid);
+	wormAngle->setValueDouble (st.valid ? st.angle : NAN);
+	wormTurns->setValueInteger (st.turns);
+	// counts/s -> s per turn; a worm at rest (and the encoder's +-3 count
+	// jitter) shows no period
+	wormPeriod->setValueDouble (st.valid && fabs (st.rate) > 1000 ? WORM_COUNTS / fabs (st.rate) : NAN);
+	wormErrors->setValueInteger (st.badLines + st.badCrc + st.badFlags);
+}
+
+void D50::wormLog (const char *fmt, ...)
+{
+	if (wormEncoder == nullptr)
+		return;
+	char buf[100];
+	va_list ap;
+	va_start (ap, fmt);
+	vsnprintf (buf, sizeof (buf), fmt, ap);
+	va_end (ap);
+	wormEncoder->logEvent (buf);
+}
 
 int main (int argc, char **argv)
 {

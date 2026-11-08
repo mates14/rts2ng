@@ -21,6 +21,10 @@ with the date and `[MJ]`/`[JS]`.
 - 2026-11-08 [JS] D50 evening flats (script/devscript.cpp, camd): bench
   only. First D50 dusk after the release and the Andor rebuild: C0 flats
   despite the refused first slew, no "disabling target 2 on device C0".
+- 2026-11-08 [JS] D50 PEC (teld/d50/wormencoder.cpp): stage 1, the worm
+  encoder read and logged, nothing corrected; not yet on D50. Next: T0
+  with `--worm-encoder`/`--worm-log`, a night of guiding, the error fitted
+  against the worm angle (HISTORY, "D50 periodic error").
 
 ## What base is
 
@@ -298,6 +302,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   10 min, or has, parks (checked once a minute), unless `block_move` is set
   (then a critical report). `teld/tests/test_d50path`
   replays the found paths independently. [JS 2026-11-07]
+- The HA worm encoder (`--worm-encoder`, `teld/d50/wormencoder.cpp`) is
+  read in its own thread and only published and logged: no move, no
+  tracking and no guide pulse waits for it or depends on it, and a missing
+  or failing board only leaves `worm_encoder` false. [JS 2026-11-08]
 - The dome raises `BOP_TEL_MOVE` (not only `BOP_EXPOSURE`) while opening.
 - A close that does not reach the end switch is retried 3 times
   (`Dome::closeFailed()`), then reported as critical.
