@@ -67,3 +67,20 @@ BrokenPipeError traceback, in a write and in a read; new - exit 0, stderr
 empty, both. Through rts2-scriptexec ending (SIGTERM) the script gets
 SIGTERM from ConnFork's `kill (-childPid)` and ends either way, so that is
 not the path seen at SBT. Needs the rts2-python package from this date.
+
+### SBT targets run the scripts from /etc/rts2/scripts (2026-11-08) [JS]
+
+The morning-flats fix above did not reach SBT: target 2 still ran
+`exe /etc/rts2/flatC1.py`..`flatC3.py`, which import the 2023 copy
+`/etc/rts2/flats.py` (`close_for 3600`), not the packaged module. C3 had no
+morning darks on 2026-11-08 either (cut off at 05:46:58). The DB now points
+every SBT script at `/etc/rts2/scripts/` (= `python/sites/sbt`): target 2,
+60 (make_survey), 54000 (ojitos), the ojitos_adaptive targets and
+`grb_script` (ojitos_adaptive, and guideccd on C3, which until now ran the
+copy from before the 2026-11-07 noblock change). Kept: target 56000,
+`exe /etc/rts2/do_grb_C1.py`, not in the repo. The scripts left in
+`/etc/rts2` are dead copies. Before the switch the old and repo copies
+differed only in imports, except ojitos_adaptive: the site had set the GRB
+filter to clear (2026-09-25), the repo had r - now clear in the repo too.
+A site script fixed in the repo only reaches a target whose DB script names
+the `/etc/rts2/scripts` path (or a bare name, found through `script_path`).

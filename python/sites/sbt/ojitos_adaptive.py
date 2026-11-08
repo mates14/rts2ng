@@ -389,11 +389,12 @@ class OjitosAdaptive(Rts2Comm):
         self.setValue('SHUTTER', 'LIGHT')
         self.setValue('exposure', self.exptime_windowed)
 
-        #self.setValue('filter', 'clear')
-        if camera == "C2":
-            self.setValue('filter', 'r')
-        else:
-            self.setValue('filter', 'r')
+        # clear, as set at SBT in /etc/rts2/ojitos_adaptive.py (2026-09-25) [JS 2026-11-08]
+        self.setValue('filter', 'clear')
+        #if camera == "C2":
+        #    self.setValue('filter', 'r')
+        #else:
+        #    self.setValue('filter', 'r')
 
         # Wait for telescope
         self.waitIdle2()
@@ -519,11 +520,12 @@ class OjitosAdaptive(Rts2Comm):
         self.setValue('SHUTTER', 'LIGHT')
         self.setValue('exposure', self.exptime)
         
-        #self.setValue('filter', 'clear')
-        if camera == "C2":
-            self.setValue('filter', 'r')
-        else:
-            self.setValue('filter', 'r')
+        # clear, as set at SBT in /etc/rts2/ojitos_adaptive.py (2026-09-25) [JS 2026-11-08]
+        self.setValue('filter', 'clear')
+        #if camera == "C2":
+        #    self.setValue('filter', 'r')
+        #else:
+        #    self.setValue('filter', 'r')
 
         # Wait for telescope
         self.waitIdle2()
