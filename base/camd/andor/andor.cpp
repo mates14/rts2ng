@@ -299,6 +299,12 @@ namespace rts2camd
      * accumulation), 1 otherwise.
      */
     int coaddedScans ();
+
+    /**
+     * Drains the frames the camera holds for a kinetic series into
+     * KINFILE and the sum; returns how many were read.
+     */
+    int readKineticFrames ();
   };
 
 }
@@ -412,6 +418,55 @@ Andor::stopExposure ()
   return Camera::stopExposure ();
 }
 
+/**
+ * Reads every frame the camera holds for the running kinetic series:
+ * appends it to KINFILE and adds it to the sum.  Returns frames read.
+ */
+int
+Andor::readKineticFrames ()
+{
+  int n = 0, last = 0;
+  int got = 0;
+  size_t size = chipUsedSize ();
+  bool frame32 = accNumber->getValueInteger () > 1;
+
+  if (kinSeriesBuffer == nullptr)
+    return 0;
+
+  while (GetNumberNewImages (&n, &last) == DRV_SUCCESS)  // This loop needs to be fast, no logging!
+    {
+      // base note: classic summed and wrote the buffer whatever
+      // GetOldestImage16 () returned, and wrote to a series file
+      // that fopen () may have failed to open
+      if (frame32)
+        {
+          kinFrame32.resize (size);
+          if (GetOldestImage (kinFrame32.data (), size) != DRV_SUCCESS)
+            break;
+          if (kinSeriesTarget)
+            fwrite (kinFrame32.data (), sizeof (at_32), size, kinSeriesTarget);
+          for (size_t j = 0; j < size; j++)
+            kinSeriesBuffer[j] += kinFrame32[j];
+        }
+      else
+        {
+          kinFrame16.resize (size);
+          if (GetOldestImage16 (kinFrame16.data (), size) != DRV_SUCCESS)
+            break;
+          if (kinSeriesTarget)
+            fwrite (kinFrame16.data (), sizeof (uint16_t), size, kinSeriesTarget);
+          for (size_t j = 0; j < size; j++)
+            kinSeriesBuffer[j] += kinFrame16[j];
+        }
+      kinSeriesNumber += 1;
+      got++;
+    }
+  if (got)
+    logStream (MESSAGE_INFO) << "readKineticFrames: " << kinSeriesNumber << "/" <<
+      kinNumber->getValueInteger () << sendLog;
+  return got;
+}
+
 long
 Andor::isExposing ()
 {
@@ -419,61 +474,40 @@ Andor::isExposing ()
   int ret;
 
   // KINETIC SERIES
+  // base note: classic stopped on Camera::isExposing ()'s timer (start +
+  // KINNUM * KINCYCLE) whenever a poll found no new frame; the last frame
+  // ends right at that instant, so it was still in the camera and the
+  // series lost it (99 of 100 frames).  The series ends when KINNUM frames
+  // are read or the camera stops acquiring, whatever the timer says.
   if (acqMode->getValueInteger () == ACQMODE_KINETIC)
     {
-      int n = 0, last = 0;
-
-      ret = GetNumberNewImages (&n, &last);
-
-      if (ret == DRV_NO_NEW_DATA)
+      readKineticFrames ();
+      if (kinSeriesNumber >= (uint64_t) kinNumber->getValueInteger ())
         {
-          if (n >= kinNumber->getValueInteger ())
-            {
-              logStream (MESSAGE_INFO) << "isExposing: exposure finished" <<
-                sendLog;
-              return -2;        // finished acquisition
-            }
-
-          return 100;
+          logStream (MESSAGE_INFO) << "isExposing: exposure finished, " <<
+            kinSeriesNumber << " frames" << sendLog;
+          return -2;
         }
-
-      size_t size = chipUsedSize ();
-      bool frame32 = accNumber->getValueInteger () > 1;
-
-      do                        // This loop needs to be fast, no logging!
+      if (GetStatus (&status) != DRV_SUCCESS)
+        return -1;
+      if (status != DRV_ACQUIRING)
         {
-          // base note: classic summed and wrote the buffer whatever
-          // GetOldestImage16 () returned, and wrote to a series file
-          // that fopen () may have failed to open
-          if (frame32)
-            {
-              kinFrame32.resize (size);
-              ret = GetOldestImage (kinFrame32.data (), size);
-              if (ret != DRV_SUCCESS)
-                break;
-              if (kinSeriesTarget)
-                fwrite (kinFrame32.data (), sizeof (at_32), size, kinSeriesTarget);
-              for (size_t j = 0; j < size; j++)
-                kinSeriesBuffer[j] += kinFrame32[j];
-            }
-          else
-            {
-              kinFrame16.resize (size);
-              ret = GetOldestImage16 (kinFrame16.data (), size);
-              if (ret != DRV_SUCCESS)
-                break;
-              if (kinSeriesTarget)
-                fwrite (kinFrame16.data (), sizeof (uint16_t), size, kinSeriesTarget);
-              for (size_t j = 0; j < size; j++)
-                kinSeriesBuffer[j] += kinFrame16[j];
-            }
-          kinSeriesNumber += 1;
-          ret = GetNumberNewImages (&n, &last);
+          // camera is idle: whatever came last was read just above
+          readKineticFrames ();
+          logStream (MESSAGE_WARNING) << "isExposing: camera stopped after " <<
+            kinSeriesNumber << " of " << kinNumber->getValueInteger () <<
+            " frames" << sendLog;
+          return -2;
         }
-      while (ret == DRV_SUCCESS);
-
-      logStream (MESSAGE_INFO) << "isExposing: n=" << n << "/" <<
-        kinNumber->getValueInteger () << " ret=" << ret << sendLog;
+      if (getNow () > getExposureEnd () + 15)
+        {
+          logStream (MESSAGE_ERROR) << "isExposing: kinetic series overdue, " <<
+            kinSeriesNumber << " of " << kinNumber->getValueInteger () <<
+            " frames" << sendLog;
+          return -2;
+        }
+      markReadoutStart ();
+      return 100;
     }
 
   // RUN TILL ABORT
@@ -601,6 +635,8 @@ Andor::doReadout ()
       // of the series, as ACCUMULATE's is: 32-bit when it covers more than
       // one scan (setAccumulationDataType ()), and EXPTIME is the scans'
       // total (setTiming ()). The series itself is in KINFILE.
+      // a frame that arrived after isExposing () last looked
+      readKineticFrames ();
       if (kinSeriesNumber != (uint64_t) kinNumber->getValueInteger ())
         logStream (MESSAGE_WARNING) << "doReadout: kinetic series has " <<
           kinSeriesNumber << " frames, KINNUM is " <<

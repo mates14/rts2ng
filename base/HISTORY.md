@@ -4990,3 +4990,20 @@ reading. The worm itself does not turn evenly: 2.2" HA peak to peak
 run. So part of the error comes before the worm (servo, gearbox) and the
 encoder sees it as it happens - a correction of it needs no model learned
 from guiding.
+
+## Andor: the last frame of a kinetic series was lost (2026-11-09) [MJ]
+
+MJ: a kinetic series' KINFILE held KINNUM-1 frames (D50 C0 logs: n=99/100,
+every series), so the sum missed a frame and a 96-frame series binned 8x
+had an incomplete twelfth bin. Cause: when a poll found no new frame,
+`isExposing ()` fell through to `Camera::isExposing ()`, whose timer
+(start + KINNUM x KINCYCLE) runs out right as the last frame ends, before
+the camera hands it over; the exposure ended without it. Classic did the
+same. Now `readKineticFrames ()` drains the camera, and the series ends
+when KINNUM frames are read, or when the camera is no longer acquiring
+(drained once more, a warning with the count), or 15 s after the
+expected end (error). `doReadout ()` drains once more before writing the
+sum. Built without warnings; not yet run on the camera (D50 C0, hand
+build on lascaux50, `/usr/local/bin/rts2-camd-andor`). To see there:
+"exposure finished, N frames" with N = KINNUM, and a KINFILE of KINNUM
+frames.

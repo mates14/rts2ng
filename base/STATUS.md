@@ -225,6 +225,11 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   bits; **`COADDS` present = the new frame**, absent with `ACQMODE` 3 = an
   old averaged one. Processing forks on that keyword, not on BUILD.
   [MJ 2026-11-03]
+- Andor: a kinetic series ends when KINNUM frames are read or the camera
+  stops acquiring, never on the camd exposure timer, which runs out just
+  as the last frame ends (classic lost it: KINNUM-1 frames in KINFILE and
+  the sum). `readKineticFrames ()` drains the camera; isExposing () and
+  doReadout () both call it. [MJ 2026-11-09]
 - Andor: `scriptEnds ()` does not reset `intExposure` (hidden state that
   `setTiming ()` later copies into `exposure`). [MJ 2026-10-18]
 - An exposure whose client disconnects ends at once
