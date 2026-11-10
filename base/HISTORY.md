@@ -5003,7 +5003,16 @@ same. Now `readKineticFrames ()` drains the camera, and the series ends
 when KINNUM frames are read, or when the camera is no longer acquiring
 (drained once more, a warning with the count), or 15 s after the
 expected end (error). `doReadout ()` drains once more before writing the
-sum. Built without warnings; not yet run on the camera (D50 C0, hand
-build on lascaux50, `/usr/local/bin/rts2-camd-andor`). To see there:
-"exposure finished, N frames" with N = KINNUM, and a KINFILE of KINNUM
-frames.
+sum. Built without warnings.
+
+On the camera, D50 C0, 2026-11-10 09:40 UTC (hand build of 2bd85f5 in
+`/usr/local/bin/rts2-camd-andor`, C0 restarted 2026-11-09 18:28) [MJ]:
+`rts2-scriptexec -d C0 -s "ACQMODE=3 KINNUM=5 E 1"`, twice, dome closed.
+"readKineticFrames: 1/5" .. "5/5" a frame every 1.11 s, then "isExposing:
+exposure finished, 5 frames", no warning; KINFILE 10485760 B = 5 frames of
+1024x1024 x 16 bit; the FITS (BITPIX 32, KINNUM 5, COADDS 5, EXPTIME 5.53)
+equals the sum of the 5 KINFILE frames pixel for pixel. Not yet seen: a
+long series (hundreds of frames) in a night's run. Aside: IMGP takes a
+scriptexec image without an observation and moves it to
+`/images/<night>/C0/000-1/bad/` ("renameImage" SQL error), so the file
+named by `-e` is gone a second later.
