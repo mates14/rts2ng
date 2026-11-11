@@ -51,6 +51,16 @@ class OjitosAdaptive(Rts2Comm):
     # Note: For 5° errorbox (10° diameter coverage), 3×3 mosaic uses 205 pixel margins:
     # ((3.14 × 4096 × 3) - 10 × 3600) / 3.14 / 4 = 205.76 pixels per edge
 
+    # Readout window offset from the chip centre, per camera, [x, y] in pixels:
+    # C2 points +118, -107 px away from C1 on its chip, so a centred C2 window
+    # would see another part of the sky. With this the two windows overlap to
+    # ~10 px (C2 turned ~1 deg against C1). Measured from 825 synchronous C1/C2
+    # pairs, 2026-10-12..11-05: night to night sd 3 px (x), 5.5 px (y); the
+    # two mount sides differ by ~7 px in x. Needs camd to record the window
+    # (LTV1/LTV2, rts2ng ab23131): the pipeline assumed centred windows before.
+    # [MJ 2026-11-11]
+    WINDOW_OFFSET = {'C1': (0, 0), 'C2': (118, -107)}
+
     # Strategy thresholds (ERROR BOX RADIUS in degrees)
     THRESHOLD_WINDOW = 0.25     # < 15 arcmin → windowing
     THRESHOLD_STANDARD = 1.5    # ≤ 1.5° radius → standard flip/flap (fits in effective field)
@@ -296,12 +306,13 @@ class OjitosAdaptive(Rts2Comm):
         """
         camera = self.getRunDevice()
 
-        # Calculate centered window
+        # Window centred on the chip, moved by the camera's offset (WINDOW_OFFSET)
         center = self.CHIP_SIZE // 2
-        x0 = center - window_size // 2
-        y0 = center - window_size // 2
+        dx, dy = self.WINDOW_OFFSET.get(camera, (0, 0))
+        x0 = center - window_size // 2 + dx
+        y0 = center - window_size // 2 + dy
 
-        self.log('I', f'adoji: Setting WINDOW {x0} {y0} {window_size} {window_size}')
+        self.log('I', f'adoji: Setting WINDOW {x0} {y0} {window_size} {window_size} (offset {dx:+d} {dy:+d})')
 
         try:
             # WINDOW is a VALUE, not a command - use setValue()

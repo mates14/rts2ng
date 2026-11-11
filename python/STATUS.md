@@ -84,3 +84,24 @@ differed only in imports, except ojitos_adaptive: the site had set the GRB
 filter to clear (2026-09-25), the repo had r - now clear in the repo too.
 A site script fixed in the repo only reaches a target whose DB script names
 the `/etc/rts2/scripts` path (or a bare name, found through `script_path`).
+
+### SBT GRB windows: C2 moved onto C1's field (2026-11-11) [MJ]
+
+`ojitos_adaptive.py` strategy 1 (1024 or 512 px windows, 5 s frames) set
+the same centred `WINDOW` on both cameras, but C2 points +118, -107 px away
+from C1 on its chip (825 synchronous C1/C2 pairs on zeus, 2026-10-12..11-05;
+night to night sd 3/5.5 px, mount sides 7 px apart in x; C2 turned ~1 deg,
+same parity and scale). The windows overlapped ~78%; the pipeline
+(asarina kinseries/framestep) wants one field from both. Now
+`WINDOW_OFFSET` moves C2's window by that much: C2 1024 -> `1654 1429`,
+C1 unchanged (`1536 1536`); checked with a stubbed `setValue`.
+
+Deploy only with the camd that records the window (base ab23131: DETSIZE
+from the chip, so LTV1/LTV2 are written): asarina assumed a centred window
+for frames without LTV and would cut C2's darks and flats from the wrong
+place. Both arrive with the next release on lascaux (`git pull` of
+`~mates/rts2ng`, which is also `/etc/rts2/scripts`, then `apt upgrade`,
+`rts2-start -r C1 C2`). Between the pull and the restart a GRB would get
+the moved window without LTV - keep that short. To check on the first
+windowed C2 frame: LTV1/LTV2 = minus the requested start (if RTS2's WINDOW
+x/y are FITS x/y), and the C1/C2 frames on the same sky.
