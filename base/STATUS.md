@@ -212,6 +212,10 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   ruins the Andor's frame (HISTORY, "D50 evening flats lost"). [JS 2026-11-08]
 - `LTV1`/`LTV2` (and through them `CRPIX1`/`CRPIX2`) include the window
   offset, `(x)/bin`, consistent with `DATASEC`.
+- Every camera whose driver reports its chip (`initCameraChip ()`: gxccd,
+  dummy, v4l) has `DETSIZE`, the chip size; `--detsize` overrides it. The
+  image writer writes `LTV1`/`LTV2`, `DETSIZE`, `DATASEC`, `CCDSUM` only
+  for a camera with `DETSIZE`. [MJ 2026-11-11]
 - FLI: `nflush` defaults to 1, and `idle_flush_period` (300 s) dumps the
   CCD while idle. Both are deliberate.
 - Optional per-camera config (`instrume`, `telescop`, `origin`, `template`,
@@ -525,6 +529,10 @@ it, and say which classes you added.
   Classic has the same code and no catch. Found 2026-10-28, not fixed.
   [JS 2026-10-28]
 - `LTM1_1`/`LTM2_2` ignore binning.
+- dummy camd: after a window, `BOX -1 -1 -1 -1 E 0.1` (back to the full
+  frame) fails, "Attemp to send too much data on channel 0 - 100000 bytes,
+  but there are only 40000" (a 200x100 window before), no image. Seen with
+  and without `--detsize`, 2026-11-11; not looked into. [MJ 2026-11-11]
 - No CMake `install()` rules.
 - No automated integration test (centrald + dummy + scriptexec, assert on
   the FITS file).

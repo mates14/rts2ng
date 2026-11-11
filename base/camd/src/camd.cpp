@@ -80,6 +80,25 @@ void Camera::initCameraChip (int in_width, int in_height, double in_pixelX, doub
 	setSize (in_width, in_height, 0, 0);
 	pixelX = in_pixelX;
 	pixelY = in_pixelY;
+	// base note: DETSIZE from the chip the driver reports (gxccd reads it from
+	// the camera), unless --detsize overrides it (dummy, or a driver whose idea
+	// of the chip is wrong). Classic created DETSIZE only from --detsize, and
+	// the image writer (kernel/src/devcliimg.cpp) writes LTV1/LTV2, DETSIZE,
+	// DATASEC and CCDSUM only when the camera has it: without the option, a
+	// windowed frame never recorded its window (SBT C1/C2, found 2026-11-11).
+	if (detsize == nullptr)
+	{
+		createValue (detsize, "DETSIZE", "[x w y h] total detector size", false, RTS2_VALUE_FLOAT | RTS2_VALUE_DEBUG);
+		detsizeFromChip = true;
+		// normally before any client connected; a later first call announces it
+		for (rts2core::connections_t::iterator iter = getConnections ()->begin (); iter != getConnections ()->end (); iter++)
+			detsize->sendMetaInfo (*iter);
+	}
+	if (detsizeFromChip)
+	{
+		detsize->setInts (0, 0, in_width, in_height);
+		sendValueAll (detsize);
+	}
 }
 
 int Camera::setBinning (int in_vert, int in_hori)
@@ -405,6 +424,7 @@ Camera::Camera (int in_argc, char **in_argv, rounding_t binning_rounding):rts2co
 	cooler = nullptr;
 
 	detsize = nullptr;
+	detsizeFromChip = false;
 	datasec = nullptr;
 	chan1offset = nullptr;
 	chan2offset = nullptr;

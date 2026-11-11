@@ -5016,3 +5016,31 @@ long series (hundreds of frames) in a night's run. Aside: IMGP takes a
 scriptexec image without an observation and moves it to
 `/images/<night>/C0/000-1/bad/` ("renameImage" SQL error), so the file
 named by `-e` is gone a second later.
+
+## Windowed frames without LTV: DETSIZE only from --detsize (2026-11-11) [MJ]
+
+MJ: SBT C1/C2 windowed frames still carried no LTV1/LTV2, although b76ad27
+puts the window offset into them. The image writer
+(`kernel/src/devcliimg.cpp`) writes LTV1/LTV2, DETSIZE, DATASEC and CCDSUM
+only for a camera with a `DETSIZE` value, and camd created that value only
+from `--detsize`; C1/C2 run with `--datasec` alone. Only CRPIX (from
+`--wcs`) followed the window. gxccd reads the chip size from the camera
+(`GIP_CHIP_W`/`GIP_CHIP_D`) into `SIZE` anyway; `--detsize` is meant to
+override it (dummy, a driver with a wrong idea of its chip). Now
+`Camera::initCameraChip ()` creates `DETSIZE` from the reported chip when
+`--detsize` did not (announced to clients already connected, as
+`setIdentityValue ()` does; gxccd calls it once, from `initValues ()`, a
+reinit does not).
+
+Tested with centrald + dummy + scriptexec, `BOX 500 400 200 100 E 0.1`,
+dummy `--width 1000 --height 1000 --datasec 20:20:960:960`: without
+`--detsize` DETSIZE `[0:1000,0:1000]`, DATASEC `[1:200,1:100]`,
+LTV1/LTV2 -500/-400; with `--detsize 0:0:1100:1100` (and a window at
+300,200) DETSIZE `[0:1100,0:1100]`, LTV -300/-200: the option still wins.
+ctest 14/14, rts2-camd-dummy and rts2-camd-gxccd built with
+`dpkg-buildflags` without warnings. Takes effect at a site after the
+package and a restart of the cameras (C1 C2 at SBT). asarina reads the
+negative LTV since asarina 0260a50 (its own `patch_window.py` writes a
+positive offset; it is skipped once LTV is in the frame). Not yet seen on
+a real gxccd frame. Aside: the dummy fails `BOX -1 -1 -1 -1` after a
+window (STATUS, open items).

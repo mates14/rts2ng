@@ -636,6 +636,8 @@ class Camera:public rts2core::ScriptDevice
 
 		// Detector size - for DETSIZE keyword
 		rts2core::ValueRectangle *detsize;
+		// DETSIZE came from initCameraChip (), not from --detsize
+		bool detsizeFromChip;
 
 		// Good data section - for DATASEC keyword
 		rts2core::ValueRectangle *datasec;
