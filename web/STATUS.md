@@ -4004,3 +4004,12 @@ file there, no frame. D50's page also drew neither the live plot nor the
 scatter in that state (it returned first); both now say "not guiding", as
 at SBT. Tested in headless Chromium against both sites' live API, with the
 guide values there and stripped out, and with the JPEG missing.
+
+## monitor.html: a time value flashes only when it changes (2026-11-12) [MJ]
+
+A time value's text (ValueTime::getDisplayValue) ends with its distance
+from now, "(-5m)", so it differed on every poll and the row flashed each
+second without the device having sent anything. The flash now compares
+the raw value (`raw`, what the device sent) instead of the text; the text
+is still redrawn each poll, so the "(-5m)" keeps counting. Checked with
+node --check only, not in a browser.

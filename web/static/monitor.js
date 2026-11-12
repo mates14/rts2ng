@@ -189,8 +189,10 @@ function renderValues (dev) {
 			tr.cells[1].textContent = v.n;
 			tr.dataset.name = v.n;
 			valueRows.set (v.n, tr);
-		} else if (tr.dataset.v !== v.v) {
-			// changed since the last poll: flash it
+		} else if (tr.dataset.raw !== v.raw) {
+			// changed since the last poll: flash it. The raw value, not
+			// the text: a time's text carries its distance from now
+			// ("(-5m)"), which changes on every poll by itself.
 			tr.classList.remove ('changed');
 			void tr.offsetWidth;
 			tr.classList.add ('changed');
