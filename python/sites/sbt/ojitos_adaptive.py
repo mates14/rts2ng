@@ -88,6 +88,7 @@ class OjitosAdaptive(Rts2Comm):
         self.errorbox = None        # Errorbox RADIUS in degrees
         self.grb_info = None        # Full GRB info from database
         self.trigger_age = None     # Age of trigger in seconds
+        self.grb_date = None        # Trigger time (ctime), for the age while a loop runs
         self.mosaic_positions = []
         # For mosaic callback
         self.next_offset_ra = None
@@ -134,6 +135,7 @@ class OjitosAdaptive(Rts2Comm):
             # Calculate trigger age
             if grb_date is not None:
                 import time
+                self.grb_date = grb_date
                 self.trigger_age = time.time() - grb_date
                 age_min = self.trigger_age / 60.0
                 self.log('I', f'adoji: GRB errorbox radius: {errorbox:.4f}°, trigger age: {age_min:.1f} min')
@@ -286,7 +288,11 @@ class OjitosAdaptive(Rts2Comm):
             now = time.time()
             target_distance = self.getValueFloat('target_distance', 'T0')
 
-            if target_distance < 1.0/60:  # within 1 arcmin
+            # -1 is "no target", not arrived. target_distance means arrival
+            # again since rts2ng 53badf5: gemini-udp measured it without its
+            # pointing model, and the wait always took the 120 s (SBT,
+            # 2026-10-24) [MJ 2026-11-12]
+            if target_distance is not None and 0 <= target_distance < 1.0/60:  # within 1 arcmin
                 self.log('I', f'adoji: td={target_distance:.3f}')
                 time.sleep(1.5)
                 break
@@ -296,6 +302,27 @@ class OjitosAdaptive(Rts2Comm):
                 break
 
             time.sleep(0.25)
+
+    def same_target(self, move_num, mee):
+        """True while a strategy's loop may go on.
+
+        A loop ends when T0 moves to a new target (MOVE_NUM changes; an
+        astrometric correction or an offset keeps it) or when the trigger
+        has aged into strategy 5, so that run() picks it. The loops used to
+        end at any move (move_started), so every correction during a GRB
+        restarted the script (SBT, 2026-10-24) [MJ 2026-11-12]
+        """
+        now_move = self.getValueInteger('MOVE_NUM', 'T0')
+        if now_move != move_num:
+            self.log('I', f'{mee} new target (MOVE_NUM {move_num} -> {now_move}), loop ends')
+            return False
+        if (self.strategy != 5 and self.ENABLE_LATE_FOLLOWUP and
+                self.grb_date is not None and self.errorbox is not None and
+                self.errorbox <= self.THRESHOLD_STANDARD and
+                time.time() - self.grb_date > self.LATE_FOLLOWUP_AGE):
+            self.log('I', f'{mee} trigger older than {self.LATE_FOLLOWUP_AGE / 60:.0f} min, loop ends for strategy 5')
+            return False
+        return True
 
     def setup_camera_window(self, window_size):
         """
@@ -430,10 +457,10 @@ class OjitosAdaptive(Rts2Comm):
             base -= self.exptime_windowed
 
         firstrun = True
-        last_move_start = 0.0
+        move_num = self.getValueInteger('MOVE_NUM', 'T0')
 
         # Synchronized imaging loop (flip/flap alternating)
-        while last_move_start < this_move_end + 1:
+        while True:
             if self.parity and firstrun:
                 firstrun = False
             else:
@@ -445,9 +472,7 @@ class OjitosAdaptive(Rts2Comm):
                     self.log('E', f"{mee} Exposure failed: {e}")
                     break
 
-            last_move_start = self.getValueFloat('move_started', 'T0')
-
-            if not last_move_start < this_move_end + 1:
+            if not self.same_target(move_num, mee):
                 break
 
             # Timing synchronization (using windowed tick)
@@ -489,7 +514,7 @@ class OjitosAdaptive(Rts2Comm):
         self.waitIdle2()
 
         this_move_end = self.getValueFloat('move_end', 'T0')
-        last_move_start = 0.0
+        move_num = self.getValueInteger('MOVE_NUM', 'T0')
 
         # Check if telescope timing values are valid
         if this_move_end is None:
@@ -497,7 +522,7 @@ class OjitosAdaptive(Rts2Comm):
             return
 
         # Synchronous imaging loop (both cameras expose simultaneously)
-        while last_move_start < this_move_end + 1:
+        while True:
             self.log('I', f'{mee}: Exposing {self.exptime_late}s (full frame, late follow-up)')
 
             try:
@@ -507,9 +532,7 @@ class OjitosAdaptive(Rts2Comm):
                 self.log('E', f'{mee}: Exposure failed: {e}')
                 break
 
-            last_move_start = self.getValueFloat('move_started', 'T0')
-
-            if not last_move_start < this_move_end + 1:
+            if not self.same_target(move_num, mee):
                 break
 
             # Wait between exposures (120s exp + ~12s readout = ~132s cycle)
@@ -560,10 +583,10 @@ class OjitosAdaptive(Rts2Comm):
             base -= self.exptime
 
         firstrun = True
-        last_move_start = 0.0
+        move_num = self.getValueInteger('MOVE_NUM', 'T0')
 
         # Synchronized imaging loop
-        while last_move_start < this_move_end + 1:
+        while True:
             if self.parity and firstrun:
                 firstrun = False
             else:
@@ -575,9 +598,7 @@ class OjitosAdaptive(Rts2Comm):
                     self.log('E', f"{mee} Exposure failed: {e}")
                     break
 
-            last_move_start = self.getValueFloat('move_started', 'T0')
-
-            if not last_move_start < this_move_end + 1:
+            if not self.same_target(move_num, mee):
                 break
 
             # Timing synchronization

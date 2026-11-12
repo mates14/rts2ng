@@ -105,3 +105,26 @@ place. Both arrive with the next release on lascaux (`git pull` of
 the moved window without LTV - keep that short. To check on the first
 windowed C2 frame: LTV1/LTV2 = minus the requested start (if RTS2's WINDOW
 x/y are FITS x/y), and the C1/C2 frames on the same sky.
+
+### ojitos_adaptive: loops follow the target, not every move (2026-11-12) [MJ]
+
+From the SBT incident report on GRB 261024.682 (obs 60853), the parts that
+were the script's (the drivers' parts: base/HISTORY.md, "Gemini UDP:
+target_distance against what the mount was sent"):
+
+- The flip/flap loops (strategies 1 and 2) and strategy 5 ended when
+  `T0.move_started` changed, which every move does, the astrometric
+  corrections included: each correction (every ~70 s) restarted the
+  script and paid `waitIdle2` again. They now end when `MOVE_NUM`
+  changes (a new target; corrections and offsets keep it, seen on T0) or
+  when the trigger ages past `LATE_FOLLOWUP_AGE` with a box that
+  strategy 5 takes, so `run ()` still switches to it
+  (`same_target ()`). The flip/flap timing stays based on the first
+  `move_end`, the same in both cameras.
+- `waitIdle2` took `target_distance` -1 (no target) as arrived; now only
+  0 <= td < 1'.
+
+Checked with stubbed RTS2 getters (correction, new target, aged to 21 min,
+-1 times out, 0.0004 deg passes in 1.5 s), not yet in a real GRB. Live at
+SBT once `~mates/rts2ng` there is pulled (`/etc/rts2/scripts` links to it).
+Not changed: the mosaic strategies, which never watched the move.
