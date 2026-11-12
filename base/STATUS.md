@@ -388,6 +388,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   classic), so from a failed move it is the miss, not a pointing error.
   `MOVE_NUM` only says the image is fresh. (HISTORY, "Corrections only from
   completed moves") [JS 2026-10-26]
+- `target_distance` is `TEL` against the position the mount was really
+  sent (`mountTargetRa/Dec`: the goto's target, then the model-corrected
+  one after the near-arrival retarget), not against `tel_target`. The
+  driver adds the T-Point model outside `tel_target`, so the plain
+  measure stayed at the model's size (15.6' at SBT) and no script ever saw
+  the mount arrive. `MO_RTS2` shows the model offset. Both gemini-udp
+  drivers; `Telescope::getTargetDistance ()` is virtual for it (HISTORY,
+  "target_distance against what the mount was sent"). [MJ 2026-11-12]
 
 **Perek 2m** (`teld/perek2m`, `dome/perek2m`; `teld/perek2m/OPERATION.md`)
 - The 2m is shared with observers using Fuky's clients. Neither daemon

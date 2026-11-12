@@ -748,8 +748,12 @@ class Telescope:public rts2core::Device
 		 * update telescope coordinates.
 		 *
 		 * @return Sky distance in degrees to target, 0 - 180. -1 on error.
+		 *
+		 * base note: virtual (classic is not), so a driver that applies
+		 * its pointing model itself, outside tel_target, can measure TEL
+		 * against the position it really sent the mount (gemini-udp).
 		 */
-		double getTargetDistance ();
+		virtual double getTargetDistance ();
 
 		double getStoredTargetDistance () { return targetDistance->getValueDouble (); }
 

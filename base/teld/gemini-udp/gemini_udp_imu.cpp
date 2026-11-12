@@ -526,6 +526,15 @@ class GeminiUDP:public Telescope
 		void computeModelCorrection (double raDeg, double decDeg, double lstDeg, char actualPierSide, double &corrRaDeg, double &corrDecDeg);
 		void checkMoveCorrection (const GeminiStatus &st);
 
+		// where the mount was last sent: the goto's target, then the
+		// model-corrected one once checkMoveCorrection () has retargeted;
+		// NAN while no goto stands (before one, after a refused one, a
+		// sync). target_distance is measured against it, see
+		// getTargetDistance ().
+		double mountTargetRa, mountTargetDec;
+		void setMountTarget (double ra, double dec, double modelRa = 0, double modelDec = 0);
+		virtual double getTargetDistance ();
+
 		// ---- IMU position check (see checkImu()) ----
 		const char *imuDevice;
 		const char *imuCalibrationPath;
@@ -671,6 +680,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 
 	pendingMoveNaiveRa = pendingMoveNaiveDec = NAN;
 	moveCorrectionApplied = true;	// nothing pending until a move actually starts
+	mountTargetRa = mountTargetDec = NAN;
 
 	autoRecoveryEnabled = false;
 	disconnectedSince = NAN;
@@ -3304,6 +3314,8 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 
 int GeminiUDP::startResync ()
 {
+	// until this move's goto is accepted, the last one's target says nothing
+	setMountTarget (NAN, NAN);
 	moveRetries = 0;	// a fresh framework target starts with a full retry budget
 	if (positionLost ())
 	{
@@ -3378,8 +3390,10 @@ bool GeminiUDP::doGoto (double raDeg, double decDeg, const char *label, GeminiCa
 	if (!ok)
 	{
 		logStream (MESSAGE_ERROR) << "GeminiUDP: " << label << " refused: " << err << sendLog;
+		setMountTarget (NAN, NAN);
 		return false;
 	}
+	setMountTarget (raDeg, decDeg);
 	logStream (MESSAGE_INFO) << "GeminiUDP: " << label << " accepted, RA=" << raDeg << " Dec=" << decDeg
 		<< ", pier side " << prediction.describe ()
 		<< (prediction.outcome != GeminiSidePrediction::UNKNOWN && prediction.ambiguous (flipAmbiguityMarginValue->getValueDouble ()) ? " - too close to call" : "")
@@ -3489,6 +3503,45 @@ void GeminiUDP::checkMoveCorrection (const GeminiStatus &st)
 	std::string err;
 	if (!caring->gotoRaDec (corrRa, corrDec, err, GeminiCaringLoop::GOTO_WAIT_SEC, GeminiCaringLoop::GOTO_KEEP_SIDE))
 		logStream (MESSAGE_WARNING) << "GeminiUDP: model-corrected retarget skipped, pointing stays uncorrected: " << err << sendLog;
+	else
+		setMountTarget (corrRa, corrDec, pendingMoveNaiveRa - corrRa, pendingMoveNaiveDec - corrDec);
+}
+
+void GeminiUDP::setMountTarget (double ra, double dec, double modelRa, double modelDec)
+{
+	mountTargetRa = ra;
+	mountTargetDec = dec;
+	// MO_RTS2 shows the model offset the mount was sent with, as on
+	// classic's modelling mounts (tel_target = target - MO_RTS2)
+	struct ln_equ_posn pos, change;
+	pos.ra = ra;
+	pos.dec = dec;
+	change.ra = modelRa;
+	change.dec = modelDec;
+	applyModelPrecomputed (&pos, &change, false);
+}
+
+// base note: target_distance is TEL against the position the mount was
+// really sent, not against tel_target. This driver adds the T-Point model
+// itself, outside tel_target (checkMoveCorrection ()), and TEL is the
+// mount's own position, so the two differed by the whole model: about 16'
+// at SBT, and target_distance never fell under the 1' that scripts wait
+// for. Every GRB start there ran into its script's 120 s timeout (SBT,
+// 2026-10-24, obs 60853). Classic's modelling mounts put the model into
+// tel_target; this one cannot, it takes tel_target back for its gotos.
+double GeminiUDP::getTargetDistance ()
+{
+	struct ln_equ_posn tar, tel;
+	getTelTargetRaDec (&tar);
+	if (std::isnan (tar.ra) || std::isnan (tar.dec) || std::isnan (mountTargetRa) || std::isnan (mountTargetDec))
+		return Telescope::getTargetDistance ();
+	tar.ra = mountTargetRa;
+	tar.dec = mountTargetDec;
+	getTelRaDec (&tel);
+	normalizeRaDec (tel.ra, tel.dec);
+	if (std::isnan (tel.ra) || std::isnan (tel.dec))
+		return -1;
+	return ln_get_angular_separation (&tel, &tar);
 }
 
 int GeminiUDP::setTo (double set_ra, double set_dec)
@@ -3508,6 +3561,7 @@ int GeminiUDP::setTo (double set_ra, double set_dec)
 	// gemini2ser.cpp's setTo() calling zeroCorrRaDec() up front
 	zeroCorrRaDec ();
 	setTelRaDec (set_ra, set_dec);
+	setMountTarget (NAN, NAN);
 
 	logStream (MESSAGE_INFO) << "GeminiUDP: synced to RA=" << set_ra << " Dec=" << set_dec << sendLog;
 	return 0;

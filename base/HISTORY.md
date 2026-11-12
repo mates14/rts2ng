@@ -5044,3 +5044,44 @@ negative LTV since asarina 0260a50 (its own `patch_window.py` writes a
 positive offset; it is skipped once LTV is in the frame). Not yet seen on
 a real gxccd frame. Aside: the dummy fails `BOX -1 -1 -1 -1` after a
 window (STATUS, open items).
+
+## Gemini UDP: target_distance against what the mount was sent (2026-11-12) [MJ]
+
+From the SBT incident report on GRB 261024.682 (obs 60853): every
+`waitIdle2` in `ojitos_adaptive.py` ran into its 120 s timeout, at the
+first slew and again after each astrometric correction, about 8 of the 20
+minutes on target. MJ: fix the drivers first, scripts last.
+
+Cause: `Telescope::getTargetDistance ()` compares `tel_target` with `TEL`.
+The gemini-udp drivers add the T-Point model themselves
+(`checkMoveCorrection ()`, the near-arrival retarget) and send the mount
+the corrected position, while `tel_target` stays the sky target (the
+driver takes it back for its gotos, so the model cannot go into it as on
+classic's modelling mounts). `TEL` is the mount's own position, so the
+distance never fell below the model: 15.6' for the 16:28 target on
+24 Oct (RA +1351", Dec +320"). The 1' test in the script could not pass.
+Its occasional successes were `td=-1` (no target), which its `< 1/60`
+test takes as arrived.
+
+Now the drivers keep `mountTargetRa/Dec`: set when a goto is accepted
+(`doGoto ()`), replaced by the corrected position when the retarget is
+accepted, NAN at the start of `startResync ()`, after a refused goto and
+after a sync. `GeminiUDP::getTargetDistance ()` measures `TEL` against it
+(falls back to the base one without it, and returns -1 without a target,
+as before). `MO_RTS2` gets the model offset (`applyModelPrecomputed ()`).
+`Telescope::getTargetDistance ()` became virtual (base note).
+
+Tested on T0 (dome closed, clouds) with a plain build from
+`~/rts2ng-test`, run as root by MJ in place of the packaged T0: `move 316
+50` arrived in 25 s with `target_distance` 0.00042 deg, `MO_RTS2` -0.0068
+-0.0066; `change 0 0.05` (a correction-sized move, model 2440" in RA, E
+side flipped) 0.00033 deg 3.5 s after the command, `MOVE_NUM` unchanged;
+`park` -1. The plain `gemini-udp` driver has the same change, only built.
+
+Also from the report: the C2 filter failure of 24 Oct (`filter movement
+error on iter 0..2`) was the old 3 x 1 s retry; C2 was still running a
+build from before 149bba6. The current gxccd retries up to 15 s and got
+through the same case on 8 Nov 16:28 (12 attempts, 7.95 s). The exposure
+loop ending at each correction is the script's: it watches
+`move_started`, which every move sets, corrections included (classic);
+`MOVE_NUM` changes only for a new target.
