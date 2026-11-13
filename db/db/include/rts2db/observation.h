@@ -128,6 +128,9 @@ class Observation
 
 		int getObsId () { return obs_id; }
 
+		/** OBS_BIT_* mask (rts2target.h) */
+		int getObsState () { return obs_state; }
+
 		/**
 		 * Return time when telescope started slewing to observation location.
 		 */

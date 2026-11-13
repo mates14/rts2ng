@@ -284,6 +284,73 @@ std::list <unsigned int> rts2db::queueQids (int queue_id)
 	return ret;
 }
 
+std::list <QueueEntry> rts2db::queueEntriesBetween (double from, double to)
+{
+	if (checkDbConnection ())
+		throw SqlError ();
+
+	EXEC SQL BEGIN DECLARE SECTION;
+	double db_from = from;
+	double db_to = to;
+	unsigned int db_qid;
+	int db_queue_id;
+	unsigned int db_tar_id;
+	double db_time_start;
+	double db_time_end;
+	int db_queue_order;
+	EXEC SQL END DECLARE SECTION;
+
+	std::list <QueueEntry> ret;
+
+	EXEC SQL DECLARE cur_queues_between CURSOR FOR
+	SELECT
+		qid,
+		queue_id,
+		tar_id,
+		EXTRACT (EPOCH FROM time_start),
+		EXTRACT (EPOCH FROM time_end),
+		queue_order
+	FROM
+		queues_targets
+	WHERE
+		time_start IS NOT NULL
+		AND time_end IS NOT NULL
+		AND time_start < to_timestamp (:db_to)
+		AND time_end > to_timestamp (:db_from)
+	ORDER BY
+		time_start ASC, qid ASC;
+	EXEC SQL OPEN cur_queues_between;
+
+	while (1)
+	{
+		EXEC SQL FETCH next FROM
+			cur_queues_between
+		INTO
+			:db_qid,
+			:db_queue_id,
+			:db_tar_id,
+			:db_time_start,
+			:db_time_end,
+			:db_queue_order;
+		if (sqlca.sqlcode)
+			break;
+		QueueEntry qe (db_qid, db_queue_id);
+		qe.tar_id = db_tar_id;
+		qe.t_start = db_time_start;
+		qe.t_end = db_time_end;
+		qe.queue_order = db_queue_order;
+		ret.push_back (qe);
+	}
+	if (sqlca.sqlcode != ECPG_NOT_FOUND)
+	{
+		EXEC SQL CLOSE cur_queues_between;
+		throw SqlError ();
+	}
+	EXEC SQL CLOSE cur_queues_between;
+	EXEC SQL ROLLBACK;
+	return ret;
+}
+
 Queue::Queue (int _queue_id)
 {
 	queue_id = _queue_id;

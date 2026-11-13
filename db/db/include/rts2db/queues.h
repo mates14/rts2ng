@@ -112,6 +112,14 @@ class QueueEntry
 std::list <unsigned int> queueQids (int queue_id);
 
 /**
+ * Entries of every queue whose [time_start, time_end) overlaps [from, to),
+ * ordered by time_start: what was planned for a night, whoever planned it.
+ * Entries without both times (a plain FIFO entry) are left out, they have
+ * no place on a time axis.
+ */
+std::list <QueueEntry> queueEntriesBetween (double from, double to);
+
+/**
  * Class representing a queue.
  */
 class Queue

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RTS2 Schedule</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<header>
+		<h1>RTS2 Schedule</h1>
+		<nav class="header-links">
+			<a href="index.html" class="back-link">image archive</a>
+			<a href="targets.html" class="back-link">target list</a>
+			<a href="target.html" class="back-link">target editor</a>
+			<a href="schedule.html" class="back-link current" aria-current="page">schedule</a>
+			<a href="records.html" class="back-link">telemetry</a>
+			<a href="devices.html" class="back-link">devices</a>
+			<a href="status.html" class="back-link">status</a>
+			<a href="monitor.html" class="back-link">monitor</a>
+			<a href="nightreport.html" class="back-link">nightreport</a>
+		</nav>
+	</header>
+
+	<section class="panel">
+		<div class="sch-controls">
+			<button type="button" id="sch-prev" title="previous night">&larr;</button>
+			<label>Night of <input type="date" id="sch-date"></label>
+			<button type="button" id="sch-next" title="next night">&rarr;</button>
+			<button type="button" id="sch-tonight">current night</button>
+			<span class="sch-site" role="group" aria-label="telescope for the plots">
+				plots for
+				<label><input type="radio" name="sch-site" value="d50"> D50</label>
+				<label><input type="radio" name="sch-site" value="sbt"> SBT</label>
+			</span>
+			<span id="sch-status" class="status-line"></span>
+		</div>
+
+		<div class="sch-canvas-wrap">
+			<canvas id="sch-timeline"></canvas>
+		</div>
+		<div class="sky-legend sch-legend">
+			<span class="k-obs">observed</span>
+			<span class="k-int">interrupted / acquisition failed</span>
+			<span class="k-plan">planned (scheduler)</span>
+			<span class="k-manual">planned (manual queue)</span>
+			<span class="k-off">off / standby / disabled</span>
+			<span class="k-unknown">not recorded</span>
+		</div>
+	</section>
+
+	<div class="sch-plots">
+		<section class="panel sch-elev-panel">
+			<h2 id="sch-elev-title">Elevation</h2>
+			<div class="sch-canvas-wrap">
+				<canvas id="sch-elevation"></canvas>
+			</div>
+		</section>
+		<section class="panel sch-polar-panel">
+			<h2 id="sch-polar-title">Sky</h2>
+			<div class="sch-canvas-wrap">
+				<canvas id="sch-polar"></canvas>
+			</div>
+		</section>
+	</div>
+
+	<section class="panel">
+		<h2>Targets</h2>
+		<div class="sch-list-wrap">
+			<table id="sch-list" class="sch-list">
+				<thead>
+					<tr>
+						<th>from</th><th>to</th><th>min</th><th>tel.</th><th>what</th>
+						<th>target</th><th>type</th><th>alt</th><th>Moon</th><th>images</th>
+					</tr>
+				</thead>
+				<tbody></tbody>
+			</table>
+		</div>
+	</section>
+
+	<div id="sch-tooltip" class="sch-tooltip" hidden></div>
+
+	<script src="schedule.js"></script>
+</body>
+</html>

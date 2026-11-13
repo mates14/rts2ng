@@ -2239,6 +2239,55 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 		});
 		return MHD_YES;
 	}
+	else if (!strcmp (url, "/api/db/schedule"))
+	{
+		// date= as for target-altitude: the night starting that day,
+		// tonight (or the night still in progress) without it
+		double refTime = getNow ();
+		const char *dateStr = getParam (connection, "date", "");
+		if (dateStr[0] != '\0')
+		{
+			struct tm tmDate;
+			memset (&tmDate, 0, sizeof (tmDate));
+			if (strptime (dateStr, "%Y-%m-%d", &tmDate) == nullptr)
+				return sendTextError (connection, MHD_HTTP_BAD_REQUEST, "date must be YYYY-MM-DD");
+			tmDate.tm_hour = 12;
+			tmDate.tm_isdst = -1;
+			refTime = mktime (&tmDate);
+		}
+		int points = atoi (getParam (connection, "points", "200"));
+
+		MHD_suspend_connection (connection);
+		workerPool->submit ([this, connection, refTime, points] ()
+		{
+			DbResult r;
+			r.connection = connection;
+			std::ostringstream os;
+			try
+			{
+				dbSchedule (refTime, points, os);
+				r.body = os.str ();
+				r.httpStatus = MHD_HTTP_OK;
+			}
+			catch (rts2core::Error &er)
+			{
+				std::ostringstream errText;
+				errText << er;
+				std::ostringstream errOs;
+				errOs << "{\"error\":";
+				jsonString (errText.str ().c_str (), errOs);
+				errOs << "}";
+				r.body = errOs.str ();
+				r.httpStatus = MHD_HTTP_BAD_REQUEST;
+			}
+			{
+				std::lock_guard <std::mutex> lock (dbResultsMutex);
+				dbResults.push (std::move (r));
+			}
+			wakeup ();
+		});
+		return MHD_YES;
+	}
 	else if (!strcmp (url, "/api/db/target-visibility-year"))
 	{
 		const char *idStr = getParam (connection, "id", "");

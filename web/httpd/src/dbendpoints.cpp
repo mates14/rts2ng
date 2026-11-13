@@ -13,6 +13,7 @@
 #include "rts2db/targetlist.h"
 #include "rts2db/targetscripts.h"
 #include "rts2db/records.h"
+#include "rts2db/queues.h"
 #include "objectcheck.h"
 #include "riseset.h"
 #include "status.h"
@@ -1297,10 +1298,19 @@ bool findNightBoundaries (struct ln_lnlat_posn *observer, time_t noon,
 
 }
 
-void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double refTime, int points, std::ostringstream &os)
+namespace
 {
-	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
 
+/** The night dbTargetAltitude() and dbSchedule() describe for refTime. */
+struct NightWindow
+{
+	double nightHorizon;
+	double dayHorizon;
+	time_t sunset, nightStart, nightEnd, sunrise;
+};
+
+void resolveNight (double refTime, NightWindow &nw)
+{
 	rts2core::Configuration *config = rts2core::Configuration::instance ();
 	struct ln_lnlat_posn *observer = config->getObserver ();
 
@@ -1310,8 +1320,8 @@ void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, d
 	// runtime, since it is writable there; this reads the configured
 	// one, which is what a plan for a future night should be based on
 	// anyway.)
-	double nightHorizon = config->getDoubleDefault ("observatory", "night_horizon", -10);
-	double dayHorizon = config->getDoubleDefault ("observatory", "day_horizon", 0);
+	nw.nightHorizon = config->getDoubleDefault ("observatory", "night_horizon", -10);
+	nw.dayHorizon = config->getDoubleDefault ("observatory", "day_horizon", 0);
 	int eveningTime = config->getIntegerDefault ("observatory", "evening_time", 7200);
 	int morningTime = config->getIntegerDefault ("observatory", "morning_time", 1800);
 
@@ -1335,9 +1345,24 @@ void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, d
 	// shared findNightBoundaries() above) forward from noon: DUSK starts
 	// at sunset, NIGHT at the night_horizon crossing, DAWN at the end of
 	// night, MORNING at sunrise.
-	time_t sunset, nightStart, nightEnd, sunrise;
-	if (!findNightBoundaries (observer, noon, nightHorizon, dayHorizon, eveningTime, morningTime, sunset, nightStart, nightEnd, sunrise))
+	if (!findNightBoundaries (observer, noon, nw.nightHorizon, nw.dayHorizon, eveningTime, morningTime, nw.sunset, nw.nightStart, nw.nightEnd, nw.sunrise))
 		throw rts2core::Error ("cannot find a sunset/sunrise pair for this date at this observatory - a polar day or night, or a horizon configuration that never crosses");
+}
+
+}
+
+void rts2web::dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double refTime, int points, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2core::Configuration *config = rts2core::Configuration::instance ();
+	struct ln_lnlat_posn *observer = config->getObserver ();
+
+	NightWindow nw;
+	resolveNight (refTime, nw);
+	double nightHorizon = nw.nightHorizon;
+	double dayHorizon = nw.dayHorizon;
+	time_t sunset = nw.sunset, nightStart = nw.nightStart, nightEnd = nw.nightEnd, sunrise = nw.sunrise;
 
 	if (points < 10)
 		points = 10;
@@ -1623,6 +1648,213 @@ void rts2web::dbTargetVisibilityYear (int targetId, double fixedRa, double fixed
 		throw;
 	}
 	delete tar;
+}
+
+namespace
+{
+
+/** A degree to 0.1, which is all a plot shows: full precision would make
+ * the tracks of a busy night several hundred kB. */
+void jsonDeg (double d, std::ostringstream &os)
+{
+	if (std::isnan (d))
+	{
+		os << "null";
+		return;
+	}
+	char buf[32];
+	snprintf (buf, sizeof (buf), "%.1f", d);
+	os << buf;
+}
+
+}
+
+void rts2web::dbSchedule (double refTime, int points, std::ostringstream &os)
+{
+	std::lock_guard <std::mutex> dbLock (dbAccessMutex);
+
+	rts2core::Configuration *config = rts2core::Configuration::instance ();
+	struct ln_lnlat_posn *observer = config->getObserver ();
+	ObjectCheck *checker = config->getObjectChecker ();
+
+	NightWindow nw;
+	resolveNight (refTime, nw);
+
+	if (points < 10)
+		points = 10;
+	if (points > 600)
+		points = 600;
+
+	std::list <rts2db::QueueEntry> queue = rts2db::queueEntriesBetween (nw.sunset, nw.sunrise);
+
+	time_t from = nw.sunset;
+	time_t to = nw.sunrise;
+	rts2db::ObservationSet obsSet;
+	obsSet.loadTime (&from, &to);
+
+	// every target either list names, once
+	std::map <int, rts2db::Target *> targets;
+	for (std::list <rts2db::QueueEntry>::iterator iter = queue.begin (); iter != queue.end (); iter++)
+		targets[iter->tar_id] = nullptr;
+	for (rts2db::ObservationSet::iterator iter = obsSet.begin (); iter != obsSet.end (); iter++)
+		targets[iter->getTargetId ()] = nullptr;
+
+	std::vector <double> times (points);
+	std::vector <double> JDs (points);
+	for (int i = 0; i < points; i++)
+	{
+		times[i] = nw.sunset + (double) (nw.sunrise - nw.sunset) * i / (points - 1);
+		JDs[i] = Timestamp (times[i]).getJD ();
+	}
+
+	try
+	{
+		for (std::map <int, rts2db::Target *>::iterator iter = targets.begin (); iter != targets.end (); iter++)
+		{
+			// A target deleted since it was planned or observed is still
+			// listed, only without a track.
+			try
+			{
+				iter->second = createTarget (iter->first, observer, config->getObservatoryAltitude ());
+			}
+			catch (rts2core::Error &er)
+			{
+				iter->second = nullptr;
+			}
+		}
+
+		os << "{\"sunset\":";
+		jsonTime (nw.sunset, os);
+		os << ",\"sunrise\":";
+		jsonTime (nw.sunrise, os);
+		os << ",\"nightStart\":";
+		if (nw.nightStart)
+			jsonTime (nw.nightStart, os);
+		else
+			os << "null";
+		os << ",\"nightEnd\":";
+		if (nw.nightEnd)
+			jsonTime (nw.nightEnd, os);
+		else
+			os << "null";
+		os << ",\"nightHorizon\":";
+		jsonNumber (nw.nightHorizon, os);
+		os << ",\"moonDisk\":";
+		jsonNumber (ln_get_lunar_disk (Timestamp ((nw.sunset + nw.sunrise) / 2.0).getJD ()), os);
+		os << ",\"now\":";
+		jsonTime (getNow (), os);
+
+		os << ",\"times\":[";
+		for (int i = 0; i < points; i++)
+		{
+			if (i)
+				os << ",";
+			os << (long) times[i];
+		}
+		os << "],\"sun\":[";
+		for (int i = 0; i < points; i++)
+		{
+			struct ln_equ_posn equ;
+			struct ln_hrz_posn hrz;
+			ln_get_solar_equ_coords (JDs[i], &equ);
+			ln_get_hrz_from_equ (&equ, observer, JDs[i], &hrz);
+			if (i)
+				os << ",";
+			jsonDeg (hrz.alt, os);
+		}
+		os << "],\"moon\":[";
+		for (int i = 0; i < points; i++)
+		{
+			struct ln_equ_posn equ;
+			struct ln_hrz_posn hrz;
+			ln_get_lunar_equ_coords (JDs[i], &equ);
+			ln_get_hrz_from_equ (&equ, observer, JDs[i], &hrz);
+			if (i)
+				os << ",";
+			os << "[";
+			jsonDeg (hrz.alt, os);
+			os << ",";
+			jsonDeg (hrz.az, os);
+			os << "]";
+		}
+
+		os << "],\"targets\":{";
+		bool first = true;
+		for (std::map <int, rts2db::Target *>::iterator iter = targets.begin (); iter != targets.end (); iter++)
+		{
+			if (!first)
+				os << ",";
+			first = false;
+			rts2db::Target *tar = iter->second;
+			os << "\"" << iter->first << "\":{\"name\":";
+			jsonString (tar ? tar->getTargetName () : "", os);
+			os << ",\"type\":";
+			char type[2] = { tar ? tar->getTargetType () : '\0', '\0' };
+			jsonString (type, os);
+			os << ",\"track\":";
+			if (!tar)
+			{
+				os << "null}";
+				continue;
+			}
+			os << "[";
+			for (int i = 0; i < points; i++)
+			{
+				// per sample, so a moving target traces its real path
+				struct ln_hrz_posn hrz;
+				tar->getAltAz (&hrz, JDs[i], observer);
+				if (i)
+					os << ",";
+				os << "[";
+				jsonDeg (hrz.alt, os);
+				os << ",";
+				jsonDeg (hrz.az, os);
+				os << ",";
+				jsonDeg (checker->getHorizonHeight (&hrz, 0), os);
+				os << "]";
+			}
+			os << "]}";
+		}
+
+		os << "},\"queue\":[";
+		first = true;
+		for (std::list <rts2db::QueueEntry>::iterator iter = queue.begin (); iter != queue.end (); iter++)
+		{
+			if (!first)
+				os << ",";
+			first = false;
+			os << "{\"qid\":" << iter->qid << ",\"queue\":" << iter->queue_id << ",\"target\":" << iter->tar_id << ",\"start\":";
+			jsonTime (iter->t_start, os);
+			os << ",\"end\":";
+			jsonTime (iter->t_end, os);
+			os << ",\"order\":" << iter->queue_order << "}";
+		}
+
+		os << "],\"observations\":[";
+		first = true;
+		for (rts2db::ObservationSet::iterator iter = obsSet.begin (); iter != obsSet.end (); iter++)
+		{
+			if (!first)
+				os << ",";
+			first = false;
+			os << "{\"id\":" << iter->getObsId () << ",\"target\":" << iter->getTargetId () << ",\"slew\":";
+			jsonTime (iter->getObsSlew (), os);
+			os << ",\"start\":";
+			jsonTime (iter->getObsStart (), os);
+			os << ",\"end\":";
+			jsonTime (iter->getObsEnd (), os);
+			os << ",\"state\":" << iter->getObsState () << ",\"images\":" << iter->getNumberOfImages () << ",\"goodImages\":" << iter->getNumberOfGoodImages () << "}";
+		}
+		os << "]}";
+	}
+	catch (...)
+	{
+		for (std::map <int, rts2db::Target *>::iterator iter = targets.begin (); iter != targets.end (); iter++)
+			delete iter->second;
+		throw;
+	}
+	for (std::map <int, rts2db::Target *>::iterator iter = targets.begin (); iter != targets.end (); iter++)
+		delete iter->second;
 }
 
 #endif // WEB_HAVE_DB

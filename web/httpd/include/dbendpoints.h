@@ -386,6 +386,24 @@ void dbTargetAltitude (int targetId, double fixedRa, double fixedDec, double ref
  */
 void dbTargetVisibilityYear (int targetId, double fixedRa, double fixedDec, int year, std::ostringstream &os);
 
+/**
+ * GET /api/db/schedule[?date=YYYY-MM-DD][&points=N] - one night of this
+ * telescope's schedule, for schedule.html: what was planned
+ * (queues_targets of every queue, by time) and what was observed
+ * (observations), between sunset and sunrise, plus every such target's
+ * alt/az track over the night on a shared time grid, so the page draws
+ * elevation and sky plots without computing an ephemeris of its own.
+ *
+ * Reply: {sunset, sunrise, nightStart, nightEnd, nightHorizon, moonDisk,
+ * now, times: [t...], sun: [alt...], moon: [[alt, az]...],
+ * targets: {"<id>": {name, type, track: [[alt, az, horizon]...]}},
+ * queue: [{qid, queue, target, start, end, order}],
+ * observations: [{id, target, slew, start, end, state, images,
+ * goodImages}]}. Azimuths are libnova's (from south). The night is the
+ * one dbTargetAltitude() resolves for the same refTime.
+ */
+void dbSchedule (double refTime, int points, std::ostringstream &os);
+
 }
 
 #endif // WEB_HAVE_DB

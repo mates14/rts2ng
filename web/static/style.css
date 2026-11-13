@@ -1904,3 +1904,115 @@ body.nr-fit .nr-list {
 	color: var(--text-muted);
 	padding-top: 2px;
 }
+
+/* --- schedule.html ------------------------------------------------------ */
+
+.sch-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 14px;
+	font-size: 13px;
+	margin-bottom: 10px;
+}
+
+.sch-controls input[type="date"], .sch-controls button {
+	font-size: 12px;
+	padding: 3px 6px;
+}
+
+.sch-canvas-wrap canvas {
+	display: block;
+	width: 100%;
+}
+
+.sch-legend .k-obs::before,
+.sch-legend .k-int::before,
+.sch-legend .k-plan::before,
+.sch-legend .k-manual::before,
+.sch-legend .k-off::before,
+.sch-legend .k-unknown::before {
+	border-top: none;
+	height: 10px;
+	vertical-align: -1px;
+}
+.sch-legend .k-obs::before { background: hsl(210, 65%, 45%); }
+.sch-legend .k-int::before { background: hsl(210, 65%, 45%); border-bottom: 3px solid var(--bad); }
+.sch-legend .k-plan::before { background: hsla(210, 65%, 45%, 0.35); border: 1px solid hsl(210, 65%, 45%); }
+.sch-legend .k-manual::before { background: hsla(210, 65%, 45%, 0.35); border: 1px dashed hsl(210, 65%, 45%); }
+.sch-legend .k-off::before { background: rgba(185, 28, 28, 0.6); }
+.sch-legend .k-unknown::before {
+	background: repeating-linear-gradient(-45deg, rgba(107, 114, 128, 0.45) 0 1px, transparent 1px 4px);
+}
+
+.sch-plots {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+	gap: 0 16px;
+}
+
+@media (max-width: 900px) {
+	.sch-plots {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.sch-list-wrap {
+	overflow-x: auto;
+}
+
+.sch-list {
+	border-collapse: collapse;
+	font-size: 12px;
+	width: 100%;
+}
+
+.sch-list th, .sch-list td {
+	padding: 3px 8px;
+	text-align: left;
+	border-bottom: 1px solid var(--border);
+	white-space: nowrap;
+}
+
+.sch-list th {
+	color: var(--text-muted);
+	font-weight: normal;
+}
+
+.sch-list td.num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.sch-list tbody tr {
+	cursor: pointer;
+}
+
+.sch-list tr.sch-row-plan td {
+	color: var(--text-muted);
+}
+
+.sch-list tr.sch-row-lit td {
+	background: rgba(37, 99, 235, 0.10);
+	color: var(--text);
+}
+
+.sch-swatch {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
+	margin-right: 5px;
+}
+
+.sch-tooltip {
+	position: fixed;
+	z-index: 50;
+	background: var(--panel-bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 5px 8px;
+	font-size: 12px;
+	pointer-events: none;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}

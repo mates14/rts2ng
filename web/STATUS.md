@@ -4013,3 +4013,37 @@ second without the device having sent anything. The flash now compares
 the raw value (`raw`, what the device sent) instead of the text; the text
 is still redrawn each poll, so the "(-5m)" keeps counting. Checked with
 node --check only, not in a browser.
+
+## schedule.html: one night, observed and planned, both telescopes (2026-11-13) [MJ]
+
+New tab between target editor and telemetry; a first, read-only version.
+`GET /api/db/schedule[?date=YYYY-MM-DD][&points=N]` (dbSchedule) returns
+one night of this telescope's database: `queues_targets` entries of every
+queue overlapping sunset..sunrise (new `rts2db::queueEntriesBetween`),
+the observations in that window, and an alt/az/horizon track for each
+target they name on one shared time grid, plus Sun and Moon. The night is
+the one target-altitude resolves (both now call `resolveNight`). Degrees
+go out to 0.1, which keeps a full night at about 60 kB for 200 points.
+
+The page fetches both telescopes (the peer through the proxy path, as
+target.js does) and shows a timeline per telescope (observed lane,
+planned lane, twilight shading, now line), then an elevation plot and a
+sky plot (N up, E left) for one telescope: each target's whole night
+faint, its slots thick, slews dashed. Last comes a list with altitude at
+start and end, Moon distance and image counts. Hover/click links all four
+views. Tonight reloads every minute.
+
+What it cannot show yet:
+- Past plans. The scheduler deletes its queue 2 entries once they end, so
+  only the future is in `queues_targets`. Plan: record the scheduled target
+  as telemetry via recordd (the queuer's view of "what is planned now").
+- When nothing could run. The page draws a lane for each of
+  `centrald.state`, `EXEC.enabled`, `SEL.enabled` that recordd records
+  (STATE_SOURCES in schedule.js); none is recorded at either site yet, and
+  recordd cannot record centrald at all (see db/STATUS.md). Those lanes
+  are untested.
+
+Tested against the local database holding a copy of lascaux's SBT rows for
+2026-11-13 (24 targets, 23 plan entries, 4 observations), rendered in
+headless Chrome. Hover/click was not exercised; D50 was "unavailable"
+locally (no peer proxy).

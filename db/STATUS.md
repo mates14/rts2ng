@@ -1087,3 +1087,15 @@ every file that includes `target.h`. Each class now has
 `using Rts2Target::getPosition;`, so nothing changes in behaviour. The web
 and db builds (GCC 15) are free of warnings again and the db tests pass.
 Not built with GCC 12.
+
+## queueEntriesBetween, Observation::getObsState (2026-11-13) [MJ]
+
+For web's /api/db/schedule: `rts2db::queueEntriesBetween (from, to)`
+(queues.ec) returns the timed entries of every queue overlapping a window,
+by time_start; `Observation::getObsState ()` exposes the OBS_BIT_* mask.
+
+Open: recordd cannot record centrald. `RecordD::sample` finds devices with
+`getOpenConnection (name)`, which searches device connections only; the
+centrald connection is in `getCentraldConns ()`. So `centrald 60 @state`
+in /etc/rts2/record never matches, and the system state (on/standby/off)
+is recorded nowhere. Needed for the schedule page's "system" lane.
