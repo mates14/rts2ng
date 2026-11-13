@@ -50,6 +50,20 @@ namespace
 	// mount settles within a few arcmin; the bad park was 17.8 deg out.
 	constexpr double PARK_TOLERANCE_DEG = 1.0;
 	constexpr double CRAWL_RECENT_SEC = 5.0;
+	// A park whose axes stopped short. base note: on SBT 2026-10-29 21:43 and
+	// 2026-11-13 16:37 a park sent 0.3 s after the :Q# that cut a full-speed
+	// Dec slew short ran the RA axis only, the mount said '!' (stall), and
+	// both axes then stood still while :h?# kept answering "parking" - the
+	// driver waited for it until the next stop, 6 and 8 min, and on
+	// 2026-11-13 the tube was left at alt -24 deg, not tracking, for 50 min.
+	// The same park sent from rest (17:26) went through. So: wait for the
+	// axes to stop before the park command, and send a park that stands
+	// still away from its position once more from rest.
+	constexpr double PARK_REST_WAIT_SEC = 10.0;	// the stop took ~2 s on 2026-11-13
+	constexpr double PARK_STILL_DEG_SEC = 0.02;	// ~5x sidereal: a worm left tracking is still, any slew is not
+	constexpr double PARK_STALL_SEC = 15.0;	// both axes still this long away from the park position
+	constexpr double PARK_STALL_AT_CWD_SEC = 60.0;	// at the park position, but :h?# never says done
+	constexpr int PARK_MAX_ATTEMPTS = 2;
 	constexpr double CRAWL_OBSERVED_DEG_SEC = 0.088;	// SBT, when native 170 could not be read
 	constexpr double SIDEREAL_DEG_SEC = 15.04106858 / 3600.0;
 	// forces a stop-and-check past this even if nobody called requestAbort().
@@ -458,7 +472,8 @@ GeminiCaringLoop::GeminiCaringLoop (const char *_hostname, int _port):
 	startupMode ((int) STARTUP_NONE), forcedSelection ((int) STARTUP_NONE), pollIntervalSec (1.0), wrongWayMarginDeg (15.0),
 	flipAmbiguityMarginDeg (0.5), gotoPrestop ((int) PRESTOP_STOP),
 	moveMinSeparation (NAN), crawlSince (NAN), wrongWayCount (0), moveStartPierSide ('?'), moveStartDecSide ('?'), movePierChangedFlag (false),
-	slowPollCounter (0), nextDatagramNumber (0)
+	slowPollCounter (0), parkRetryRequested (false), parkAttempts (0), parkStillSince (NAN), parkSampleT (NAN),
+	parkSampleRa (0), parkSampleDec (0), parkSawStall (false), nextDatagramNumber (0)
 {
 }
 
@@ -827,6 +842,8 @@ void GeminiCaringLoop::carryPersistentFields (const GeminiStatus &from, GeminiSt
 	to.moveAborted = from.moveAborted;
 	to.moveExecutionFault = from.moveExecutionFault;
 	to.parkFailReason = from.parkFailReason;
+	to.parkNote = from.parkNote;
+	to.parkNoteSerial = from.parkNoteSerial;
 	to.predictionWarning = from.predictionWarning;
 	to.moveAtCenteringRate = from.moveAtCenteringRate;
 	to.lastMoveSeparation = from.lastMoveSeparation;
@@ -1061,6 +1078,9 @@ void GeminiCaringLoop::pollAxisPosition ()
 	status.raAxisTicks = ra;
 	status.decAxisTicks = dec;
 	status.axisTimestamp = nowSeconds ();
+
+	if (status.parking)
+		checkParkProgress (ra, dec);
 
 	char side = status.decSide ();
 	if (status.moveInProgress && side != '?' && moveStartDecSide != '?' && side != moveStartDecSide)
@@ -1759,6 +1779,8 @@ void GeminiCaringLoop::handleGoto ()
 
 void GeminiCaringLoop::handleAbort ()
 {
+	// a stop ends a park, a stalled one too: it must not be sent again
+	parkRetryRequested = false;
 	std::string response;
 	sendAndReceive (":Q#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 
@@ -1775,7 +1797,7 @@ void GeminiCaringLoop::handleAbort ()
 	status.moveInProgress = false;
 }
 
-void GeminiCaringLoop::handlePark ()
+void GeminiCaringLoop::handlePark (bool retry)
 {
 	// parking/parkFailed/parkStatus are already set by requestPark() -
 	// see its comment for why that has to happen there, not here.
@@ -1784,13 +1806,142 @@ void GeminiCaringLoop::handlePark ()
 	// made this firmware reject the park - :h?# came straight back '0' and the
 	// mount never moved (SBT teld-udp7); and a park slews the RA axis fine
 	// with the worm running anyway (udp2/udp3 parked, 77 deg of RA in 32 s).
+	// base note: the park command goes out only once the axes have stopped
+	// (gemini2ser.cpp sends it straight after the stop) - see PARK_STALL_SEC.
 	std::string ignored, response;
 	sendAndReceive (":Q#", ignored, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 	std::this_thread::sleep_for (std::chrono::milliseconds (300));
+	double waited = 0;
+	bool rest = waitAxesAtRest (PARK_REST_WAIT_SEC, waited);
+	if (!rest)
+	{
+		// the dome may be waiting on this park: send it anyway, and let
+		// checkParkProgress () catch it if it stalls
+		std::string ignoredAgain;
+		sendAndReceive (":Q#", ignoredAgain, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
+	}
 	sendAndReceive (parkAtStartupPosition.load () ? ":hC#" : ":hP#", response, COMMAND_TIMEOUT_SEC, RESYNC_ATTEMPTS);
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	status.moveInProgress = false;	// matches gemini2ser.cpp's startPark() calling stopMove() first
+	if (!retry)
+	{
+		parkAttempts = 0;
+		parkSawStall = false;
+	}
+	parkAttempts++;
+	parkStillSince = NAN;
+	parkSampleT = NAN;
+	// the crawl check must judge this park alone: samples from a stalled one
+	// average into its centering band (0.05 deg/s) and fail the retry at once
+	axisHistory.clear ();
+	if (retry)
+		status.parkStatus = '?';
+	char note[200];
+	if (rest)
+		snprintf (note, sizeof (note), "%s sent %.1f s after the stop, axes at rest%s", parkAtStartupPosition.load () ? ":hC#" : ":hP#",
+			waited + 0.3, retry ? " (park sent again)" : "");
+	else
+		snprintf (note, sizeof (note), "%s sent although the axes were not seen at rest within %.0f s of the stop%s",
+			parkAtStartupPosition.load () ? ":hC#" : ":hP#", PARK_REST_WAIT_SEC, retry ? " (park sent again)" : "");
+	status.parkNote = note;
+	status.parkNoteSerial++;
+}
+
+bool GeminiCaringLoop::waitAxesAtRest (double timeoutSec, double &waitedSec)
+{
+	GeminiAxisGeometry geo;
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		geo = status.geometry;
+	}
+	waitedSec = 0;
+	if (!geo.valid || geo.raHalf <= 0 || geo.decHalf <= 0)
+		return false;
+
+	double start = nowSeconds ();
+	double lastT = NAN;
+	int32_t lastRa = 0, lastDec = 0;
+	while (true)
+	{
+		std::string value;
+		int32_t ra, dec;
+		if (readNativeInternal (239, value) && parseTickPair (value, ra, dec))
+		{
+			double t = nowSeconds ();
+			if (!std::isnan (lastT) && t > lastT)
+			{
+				double raRate = fabs ((double) ra - lastRa) / geo.ticksPerDeg () / (t - lastT);
+				double decRate = fabs ((double) dec - lastDec) / geo.decTicksPerDeg () / (t - lastT);
+				if (raRate < PARK_STILL_DEG_SEC && decRate < PARK_STILL_DEG_SEC)
+				{
+					waitedSec = t - start;
+					return true;
+				}
+			}
+			lastT = t;
+			lastRa = ra;
+			lastDec = dec;
+		}
+		waitedSec = nowSeconds () - start;
+		if (waitedSec >= timeoutSec || stopFlag.load ())
+			return false;
+		std::this_thread::sleep_for (std::chrono::milliseconds (500));
+	}
+}
+
+void GeminiCaringLoop::checkParkProgress (int32_t ra, int32_t dec)
+{
+	if (status.moveRate == '!')
+		parkSawStall = true;
+	if (!status.geometry.valid || status.geometry.raHalf <= 0 || status.geometry.decHalf <= 0)
+		return;
+
+	double now = status.axisTimestamp;
+	double lastT = parkSampleT;
+	int32_t lastRa = parkSampleRa, lastDec = parkSampleDec;
+	parkSampleT = now;
+	parkSampleRa = ra;
+	parkSampleDec = dec;
+	if (std::isnan (lastT) || now <= lastT)
+		return;
+
+	double raRate = fabs ((double) ra - lastRa) / status.geometry.ticksPerDeg () / (now - lastT);
+	double decRate = fabs ((double) dec - lastDec) / status.geometry.decTicksPerDeg () / (now - lastT);
+	if (raRate >= PARK_STILL_DEG_SEC || decRate >= PARK_STILL_DEG_SEC)
+	{
+		parkStillSince = NAN;
+		return;
+	}
+	if (std::isnan (parkStillSince))
+		parkStillSince = lastT;
+
+	// the park position is CWD, as pollParkStatus () assumes
+	double dRa = fabs ((double) ra - status.geometry.raHalf) / status.geometry.ticksPerDeg ();
+	double dDec = fabs ((double) dec - status.geometry.decHalf) / status.geometry.decTicksPerDeg ();
+	bool atPark = dRa <= PARK_TOLERANCE_DEG && dDec <= PARK_TOLERANCE_DEG;
+	double still = now - parkStillSince;
+	if (still < (atPark ? PARK_STALL_AT_CWD_SEC : PARK_STALL_SEC))
+		return;
+
+	char what[260];
+	snprintf (what, sizeof (what), "park stalled: both axes still for %.0f s, %.2f deg (RA) and %.2f deg (Dec) from the park position, :h?# '%c'%s",
+		still, dRa, dDec, status.parkStatus, parkSawStall ? ", the mount reported a stall ('!')" : "");
+	parkStillSince = NAN;
+	parkSampleT = NAN;
+	if (parkAttempts < PARK_MAX_ATTEMPTS)
+	{
+		status.parkNote = std::string (what) + " - stopping it and parking again from rest";
+		status.parkNoteSerial++;
+		parkRetryRequested = true;
+	}
+	else
+	{
+		status.parking = false;
+		status.parkFailed = true;
+		status.parkFailReason = std::string (what) + ", after " + std::to_string (parkAttempts) + " park commands";
+		abortRequested = true;
+	}
 }
 
 // :h?# ("query park status") response chars, per gemini2ser.cpp's
@@ -1929,7 +2080,14 @@ void GeminiCaringLoop::threadMain ()
 
 		if (parkRequested.exchange (false))
 		{
-			handlePark ();
+			parkRetryRequested = false;
+			handlePark (false);
+			continue;
+		}
+
+		if (parkRetryRequested.exchange (false))
+		{
+			handlePark (true);
 			continue;
 		}
 

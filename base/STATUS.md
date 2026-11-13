@@ -396,6 +396,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   the mount arrive. `MO_RTS2` shows the model offset. Both gemini-udp
   drivers; `Telescope::getTargetDistance ()` is virtual for it (HISTORY,
   "target_distance against what the mount was sent"). [MJ 2026-11-12]
+- A park goes out only once the axes are at rest after its `:Q#`
+  (`waitAxesAtRest ()`, at most 10 s), and a park whose axes stand still
+  15 s away from CWD is stopped and sent once more, then failed
+  (`checkParkProgress ()`). A park sent 0.3 s after stopping a full-speed
+  Dec slew stalled twice at SBT (2026-10-29, 2026-11-13): RA only, `!`,
+  `:h?#` "parking" for ever, the tube left at alt -24 deg not tracking for
+  50 min (HISTORY, "a park that stalls short of CWD"). Not yet seen on the
+  mount. [MJ 2026-11-13]
 
 **Perek 2m** (`teld/perek2m`, `dome/perek2m`; `teld/perek2m/OPERATION.md`)
 - The 2m is shared with observers using Fuky's clients. Neither daemon

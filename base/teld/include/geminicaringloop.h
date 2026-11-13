@@ -270,6 +270,11 @@ struct GeminiStatus
 	bool parking = false;
 	bool parkFailed = false;
 	std::string parkFailReason;	// why, when parkFailed - empty for the plain ":h?# said 0" case
+	// what the park sequence did that the log should show (the wait for the
+	// axes before the park command, a stalled park sent again) - GeminiUDP
+	// logs it each time parkNoteSerial changes
+	std::string parkNote;
+	unsigned parkNoteSerial = 0;
 	// set when a goto was sent despite the side prediction refusing it - the
 	// prediction warns, the mount decides (see handleGoto)
 	std::string predictionWarning;
@@ -629,7 +634,18 @@ class GeminiCaringLoop
 
 		void handleGoto ();
 		void handleAbort ();
-		void handlePark ();
+		/** retry: the park stalled and is sent again (see checkParkProgress ()) */
+		void handlePark (bool retry);
+
+		/**
+		 * Reads the axis counters every 0.5 s until neither axis moves faster
+		 * than a few times sidereal, at most timeoutSec. False on timeout,
+		 * and when the counters or the geometry cannot be read.
+		 */
+		bool waitAxesAtRest (double timeoutSec, double &waitedSec);
+
+		/** called with mutex_ held, from pollAxisPosition () while parking */
+		void checkParkProgress (int32_t ra, int32_t dec);
 		void handleReboot ();
 		void handleQueuedCommand ();
 		void handleQueuedRawCommand ();
@@ -724,6 +740,15 @@ class GeminiCaringLoop
 		char moveStartDecSide;
 		bool movePierChangedFlag;
 		int slowPollCounter;
+
+		// the park in flight, for checkParkProgress () - caring-thread-only
+		// except parkRetryRequested
+		std::atomic<bool> parkRetryRequested;
+		int parkAttempts;		// park commands sent for the current park
+		double parkStillSince;		// both axes slower than PARK_STILL_DEG_SEC since then, NAN while one moves
+		double parkSampleT;		// last counter sample, NAN before the first
+		int32_t parkSampleRa, parkSampleDec;
+		bool parkSawStall;		// the mount reported '!' during this park
 
 		struct NativeSetCommand
 		{

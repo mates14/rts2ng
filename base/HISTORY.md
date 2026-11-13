@@ -5085,3 +5085,63 @@ through the same case on 8 Nov 16:28 (12 attempts, 7.95 s). The exposure
 loop ending at each correction is the script's: it watches
 `move_started`, which every move sets, corrections included (classic);
 `MOVE_NUM` changes only for a new target.
+
+## Gemini UDP: a park that stalls short of CWD (2026-11-13) [MJ]
+
+SBT, 16:37 UTC: clouds made the dome ask for a park 8 s into a goto, with
+the Dec axis at full slew speed. The framework stopped the move and the
+caring loop sent `:Q#`, then `:hP#` 0.3 s later, while Dec was still
+braking. Only the RA axis moved: 160 deg, through CWD and 90 deg past it
+(counters RA 88.9 deg, Dec 254.0 deg, CWD 180/180). Dec stayed at 15.7 deg.
+At 16:38:01 the mount reported `!` (stall), and then stood still. The tube
+pointed north at alt -24 deg and the mount was not tracking. `:h?#` kept
+answering "parking", so the driver held TEL_PARKING. While parking it polls
+neither the tracking limit nor the axis progress, so it only logged "below
+the hard horizon". At 16:45:50 the next goto's stop cleared the park
+(`:h?#` '0', "park failed"). At 16:52 the mount refused A Cyg with "6 Outside
+Limits". C1/C2 exposed 2-min frames of the standing mount until about
+17:26, when tracking was switched back on by hand. The tracking-limit check
+then fired (-13 s), the flip was refused, and its fallback park, sent from
+rest, went through in 30 s.
+
+The same thing happened on 2026-10-29 at 21:43: a stop and a park during
+a full-speed Dec slew, `!`, RA to CWD, Dec frozen at 47.2 deg, and
+"parking" until a stop 6 min later. In 30 days of logs `!` appears only in
+these two. A park sent mid-slew while Dec was only creeping (2026-10-19
+05:28, about 0.3 deg/s) went through, and so do parks sent from rest. So
+the trigger is most likely `:hP#` arriving while an axis is still braking
+from a full-speed slew. That is an inference from three cases, not proven.
+Why the RA axis went past CWD on 11-13 but stopped at it on 10-29 is not
+known.
+
+Fixed in `GeminiCaringLoop` (both gemini-udp drivers):
+- `handlePark ()` sends the park only once the axes are at rest: native 239
+  every 0.5 s until both axes are slower than 0.02 deg/s (about 5x
+  sidereal, so a worm left tracking counts as at rest), at most 10 s. On
+  timeout it stops again and sends the park anyway, because the dome may be
+  waiting on it. base note (gemini2ser.cpp sends it straight after the stop).
+- `checkParkProgress ()`, from `pollAxisPosition ()` while parking: if both
+  axes stand still for 15 s away from CWD (60 s at CWD without `:h?#` '1'),
+  the park has stalled. The first time it is stopped and sent again from
+  rest; the second time it fails with the reason (`isParking ()` -> -1, the
+  framework's "park command finished with error"). A stop cancels a
+  pending retry. The retry clears the crawl detector's samples: with them
+  the stalled stretch averaged 0.05 deg/s, inside the centering band, and
+  failed the retry at once (seen in the simulator).
+- `GeminiStatus::parkNote`/`parkNoteSerial`: the drivers log the wait and
+  each stall from `isParking ()`.
+
+Verified against a scratch UDP simulator (framing, 0x06, ENQ, natives,
+`:Q#`, `:hP#`, `:h?#`) whose park stalls the way SBT's did when Dec is
+braking above 0.5 deg/s. That rule is my model of the mount, not something
+measured. The old caring loop, given a stop and a park during a slew,
+stayed "parking" with `:h?#` '2' past 60 s. The new one waited 2.8 s and
+parked. The real `rts2-teld-gemini-udp` under a private centrald gave the
+same for `move` then `park` 3 s into the slew. With the first park forced to
+stall, it logged "park stalled: both axes still for 15 s, 90.00 deg (RA) and
+60.75 deg (Dec) from the park position, :h?# '2', the mount reported a stall
+('!') - stopping it and parking again from rest", and the retry finished.
+With every park stalling it failed after 2 park commands. ctest 14/14;
+geminicaringloop.cpp compiles clean with the dpkg-buildflags. Not seen on
+the mount yet: whether waiting for rest really avoids the stall, and
+whether a retry from rest gets the stalled Dec axis going.

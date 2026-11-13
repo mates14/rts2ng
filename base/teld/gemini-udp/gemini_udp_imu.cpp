@@ -396,6 +396,7 @@ class GeminiUDP:public Telescope
 		rts2core::ValueBool *safetyEnabledValue;
 		rts2core::ValueBool *safetyLockedValue;		// writable: clearing it is the operator's "I've looked, carry on"
 		double belowHorizonWarnedAt;	// rate-limits the below-hard-horizon log
+		unsigned parkNoteLogged = 0;	// GeminiStatus::parkNoteSerial last logged by isParking ()
 		rts2core::ValueDouble *wrongWayMarginValue;
 		rts2core::ValueString *safetyStateValue;
 		rts2core::ValueString *lastIncidentValue;
@@ -3682,6 +3683,12 @@ int GeminiUDP::isParking ()
 	if (caring == nullptr)
 		return -1;
 	GeminiStatus st = caring->getStatus ();
+	if (st.parkNoteSerial != parkNoteLogged)
+	{
+		parkNoteLogged = st.parkNoteSerial;
+		logStream (st.parkNote.find ("stalled") != std::string::npos ? MESSAGE_WARNING : MESSAGE_INFO)
+			<< "GeminiUDP: park: " << st.parkNote << sendLog;
+	}
 	if (st.parking)
 		return USEC_SEC;
 	if (st.parkFailed)

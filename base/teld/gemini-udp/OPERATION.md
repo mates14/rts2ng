@@ -165,6 +165,14 @@ gentler failure than a mount locked at 3 a.m. — but if an executor seems stuck
 `move_recovery` will say why, and `move_retries` is the dial (a CWD park took 16–32 s in the real logs, so most
 of that budget is the per-slew timeout, not the park).
 
+**A park that stalls** [MJ 2026-11-13]: a park sent right after stopping a full-speed slew has twice left the
+SBT mount with only the RA axis moved, a `!` (stall) from the mount and `:h?#` saying "parking" while
+nothing moved. The driver now sends a park only once the axes are at rest after its stop (at most 10 s,
+logged as "park: :hP# sent N s after the stop, axes at rest"). If both axes still stand for 15 s away from CWD
+during a park, it logs "park stalled: …", stops, and parks once more from rest. A second stall fails the park
+("park failed - park stalled: …, after 2 park commands"). The mount is then wherever it stopped; look at its
+altitude before anything else.
+
 ---
 
 ## 4. Meridian flips: the driver now knows in advance
