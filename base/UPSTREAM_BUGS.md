@@ -2130,3 +2130,18 @@ rts2ng: `ConnExecute::queExposure` holds a blocking exposure until the slew
 ends (queued at `EVENT_MOVE_OK`/`EVENT_CORRECTING_OK`, dropped with the
 script); the executor resets the target to not moved before starting it
 again after a failed slew.
+
+## A script's mount values reach the mount after the move (`src/plan/executor.cpp`, `lib/rts2script/execcli.cpp`) [JS 2026-11-13]
+
+A camera script's value for another device (`T0.speed_turbo_switch=true`)
+goes out only once the camera's own command queue is empty
+(`DevClientCameraExec::doNextCommand`), i.e. after the camera answered
+`script_ends` - and, for a `now` target (a GRB), its `killall`. The
+executor queues the move in the same step that starts the scripts, so the
+mount always gets `move` first. teld-d50 plans the slew (path, speed) when
+`move` arrives: D50's GRB script, opening with the turbo switch, never got
+a turbo slew.
+
+rts2ng: the executor sends the mount the `=` values that open the new
+target's camera scripts before it queues the move
+(`Executor::queMountValuesBeforeSlew`).

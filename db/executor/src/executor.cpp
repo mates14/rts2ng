@@ -53,6 +53,7 @@
 #include "rts2db/targetgrb.h"
 #include "rts2script/executorque.h"
 #include "execcli.h"
+#include "script.h"
 #include "rts2script/execclidb.h"
 #include "rts2devcliphot.h"
 
@@ -107,6 +108,13 @@ class Executor:public rts2db::DeviceDb
 
 		void doSwitch ();
 		int switchTarget ();
+
+		/**
+		 * Send the mount the values that open the current target's camera
+		 * scripts (T0.speed_turbo_switch=true), ahead of the move - see the
+		 * base note in the method.
+		 */
+		void queMountValuesBeforeSlew (bool now);
 
 		int setNext (int nextId);
 		int queueTarget (int nextId, double t_start = NAN, double t_end = NAN);
@@ -727,6 +735,7 @@ int Executor::setNow (rts2db::Target * newTarget)
 	clearNextTargets ();
 
 	clearAll ();
+	queMountValuesBeforeSlew (true);
 	postEvent (new rts2core::Event (EVENT_SET_TARGET_KILL, (void *) currentTarget));
 	postEvent (new rts2core::Event (EVENT_SLEW_TO_TARGET_NOW, (void *) current_plan_id));
 
@@ -954,8 +963,52 @@ void Executor::doSwitch ()
 	{
 		// send script_ends to all devices..
 		queAll (new rts2core::CommandScriptEnds (this));
+		queMountValuesBeforeSlew (false);
 		postEvent (new rts2core::Event (EVENT_SET_TARGET, (void *) currentTarget));
 		postEvent (new rts2core::Event (EVENT_SLEW_TO_TARGET, (void *) current_plan_id));
+	}
+}
+
+void Executor::queMountValuesBeforeSlew (bool now)
+{
+	// base note: classic left the scripts' mount values to the camera
+	// scripts, which send them only once the camera answered script_ends (and
+	// killall, for a now target) - always after the executor had queued the
+	// move. D50's GRB script opens with T0.speed_turbo_switch=true, which
+	// teld-d50 reads when it plans the slew, so the GRB slew never ran at
+	// turbo speed. The values set (=, no +=/-=, which the camera script would
+	// apply a second time) before anything else in a camera script now go to
+	// the mount here, queued ahead of the move with the move's block mask;
+	// the camera script still sends them, unchanged. [JS 2026-11-13]
+	if (currentTarget == NULL)
+		return;
+	for (rts2core::connections_t::iterator mi = getConnections ()->begin (); mi != getConnections ()->end (); mi++)
+	{
+		rts2core::Connection *mount = *mi;
+		if (mount->getOtherType () != DEVICE_TYPE_MOUNT || mount->getOtherDevClient () == NULL)
+			continue;
+		for (rts2core::connections_t::iterator ci = getConnections ()->begin (); ci != getConnections ()->end (); ci++)
+		{
+			if ((*ci)->getOtherType () != DEVICE_TYPE_CCD)
+				continue;
+			rts2script::Script sc (0, this);
+			if (sc.setTarget ((*ci)->getName (), currentTarget))
+				continue;
+			for (rts2script::Script::iterator ei = sc.begin (); ei != sc.end (); ei++)
+			{
+				rts2script::ElementChangeValue *cv = dynamic_cast <rts2script::ElementChangeValue *> (*ei);
+				if (cv == NULL)
+					break;
+				if (cv->getOperator () != '=' || cv->getValueName ()[0] == '!' || strcmp (cv->getValueDevice (), mount->getName ()))
+					continue;
+				rts2core::Command *cmd = NULL;
+				char dev[DEVICE_NAME_SIZE];
+				if (cv->defnextCommand (mount->getOtherDevClient (), &cmd, dev) || cmd == NULL)
+					continue;
+				logStream (MESSAGE_DEBUG) << "before the slew: " << mount->getName () << "." << cv->getValueName () << "=" << cv->getOperands () << " (" << (*ci)->getName () << " script)" << sendLog;
+				mount->queCommand (cmd, now ? 0 : BOP_TEL_MOVE);
+			}
+		}
 	}
 }
 

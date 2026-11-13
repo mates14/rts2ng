@@ -1099,3 +1099,33 @@ Open: recordd cannot record centrald. `RecordD::sample` finds devices with
 centrald connection is in `getCentraldConns ()`. So `centrald 60 @state`
 in /etc/rts2/record never matches, and the system state (on/standby/off)
 is recorded nowhere. Needed for the schedule page's "system" lane.
+
+## Executor: a script's mount values before the slew (2026-11-13) [JS]
+
+D50's GRB script (grb_script C0) opens with `T0.speed_turbo_switch=true`;
+the GRB slews never ran at turbo speed. The camera script sends the value
+only after the camera answered `script_ends` (and `killall`, for a `now`
+target), while the executor queues the move at once, so T0 always got
+`move` first, and teld-d50 plans the slew's speed and path in `move`. A late
+switch only raised the speed after the backlash phase (1 s), if it came by
+then, and never the timing of the intermediate points.
+
+`Executor::queMountValuesBeforeSlew` (called in `doSwitch` after the
+`script_ends` to all devices, and in `setNow`): for each camera, it parses
+the new target's script and sends the mount the values that open it (`=`
+only: `+=`/`-=` would be applied twice when the camera script sends them;
+no `!` while-state values), queued on the mount's connection ahead of the
+move with the move's block mask (none for `now`). The camera script sends
+them again, unchanged. teld-d50's `script_ends` resets the switch at the
+target's end as before. `ElementChangeValue` got accessors for it
+(base/script/include/element.h).
+
+Bench (lascaux, dummy T0 logging MOVE_FAST at the move, C0 script
+`T0.MOVE_FAST=true E 2 E 2`): `now 1100` interrupting target 1 - before,
+the move went with MOVE_FAST 0; now the value goes at 0.228 s and the move
+(at 0.274 s) with MOVE_FAST 1. A normal start: MOVE_FAST 1 both. The move
+waits for the value's reply on the same connection, about 45 ms on the
+bench. ctest base 14/14, db 14/14; executor.cpp clean with the
+dpkg-buildflags and the lascaux (GCC 12) build. To see at D50: the next GRB
+with the grb_script, T0's slew at speed_turbo (JS will raise it to 10 deg/s
+in RA).

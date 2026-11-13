@@ -473,6 +473,11 @@ class ElementChangeValue:public Element
 
 		std::string getOperands ();
 
+		// for the executor's values before the slew [JS 2026-11-13]
+		const char *getValueDevice () { return deviceName; }
+		const std::string &getValueName () { return valName; }
+		char getOperator () { return op; }
+
 	protected:
 		virtual void getDevice (char new_device[DEVICE_NAME_SIZE]);
 	private:
