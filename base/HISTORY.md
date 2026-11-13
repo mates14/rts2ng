@@ -5189,3 +5189,47 @@ exposure). Plain `E 2 E 2 E 2`, first slew refused: slew ended 167.115 s,
 first exposure 167.117 - the executor's reset holds plain scripts too.
 ctest base 14/14, db 14/14; dpkg-buildflags and the lascaux (GCC 12) build
 without warnings in the changed files.
+
+## D50 PEC stage 2: the error against the worm angle (2026-11-13) [JS]
+
+Data: GRB 53495 (RA 346.65, Dec +5.27) guided by C1 16:49-23:22 UTC, HA
+-1.5 h to +4.5 h; 7571 `C1 guide: val` frames in 14 runs of 15 frames or
+more, against `/var/log/rts2-worm/worm-20261113.log`. Each frame at the
+middle of its C1 exposure (journal "starting 2s exposure", `now` + 1 s),
+the worm position interpolated from the log's 1 s positions.
+
+Calibration: the encoder sees the guide pulses exactly - at 0.9 and 1.1
+of the step frequency the worm turns at -42229 and -51345 counts/s
+(expected -42078, -51428); the guider's frame-to-frame change is 1.33" per
+second of pulse (1.5" expected, the regression biased low by the noise).
+One worm count is 2700"/2^23 of HA. The error the mount would have
+without guiding is the guider's error minus the integral of the commanded
+step frequency (`F`/`G` lines), so it needs no pulse model; per guiding
+run a piecewise linear drift (knots every 15 min) is fitted out with it.
+A free scale on the encoder term does not work (k 0.1-0.4): with the
+guider closing the loop the corrections mirror the error that is not
+locked to the worm.
+
+Harmonics of the worm angle (amplitude"/phase deg, phase of the encoder
+position in the turn), the unguided error:
+
+| HA | h1 | h2 | h3 | h4 | h5 | h6 | h7 | h8 |
+|---|---|---|---|---|---|---|---|---|
+| -1.5..-0.5 h | 1.67/243 | 0.28/96 | 0.61/323 | 0.60/93 | 0.26/89 | 0.28/12 | 0.55/234 | 0.32/341 |
+| +1..+4.5 h | 2.10/139 | 0.26/9 | 0.44/311 | 0.39/91 | 0.28/41 | 0.22/21 | 0.24/246 | 0.21/347 |
+
+h3-h8 keep their phase (h5 aside), larger in the east (h4, h7); h1 and
+h2 turn over between HA -0.5 and +1 h (h1 1.10/174 at the meridian, 1.35/151 at +0.5 h): the load on the wheel
+reverses with the side of the meridian and the worm runs on its other
+flank. Worm-locked, 6.1" p-p east, 5.2" west. Fitted out, the unguided
+error goes from 1.74" to 0.70" rms in the west (the guided residual is
+0.79"), from 1.83" to 1.22" in the east - more than the worm there. The
+encoder against the step generator (servo, gearbox): 0.47"/172 at h1 and
+0.13"/75 at h2 all night, nothing above (rms 0.47", 0.32" without them) -
+once per worm turn, so the last gear or the encoder's own mounting. For
+the correction it does not matter which: the total is corrected.
+
+Left after the worm harmonics: 14.4 s (0.12", the gearbox, as on 11-07),
+89 s, 459 s. Next: a guided run through the meridian at another Dec (does
+the switch follow the load?) and the shape on another night; then the
+correction, h1/h2 per side of the meridian.

@@ -30,8 +30,10 @@ with the date and `[MJ]`/`[JS]`.
 - 2026-11-08 [JS] D50 PEC (teld/d50/wormencoder.cpp): stage 1 (the worm
   encoder read and logged, nothing corrected) on D50 since 19:42 UTC
   (822fe8b, T0 `--worm-encoder`, `--worm-log /var/log/rts2-worm`); tracked
-  under the roof: one worm turn 179.50 s. Next: a night of C1 guiding, the
-  error fitted against the worm angle (HISTORY, "D50 periodic error").
+  under the roof: one worm turn 179.50 s. 2026-11-13 [JS]: first fit, 6.5 h
+  of GRB guiding (HISTORY, "D50 PEC stage 2"): h3-h8 steady, the
+  fundamental switches with the side of the meridian. Next: a guided run
+  through the meridian at another Dec, then the correction.
 
 ## What base is
 
