@@ -4047,3 +4047,21 @@ Tested against the local database holding a copy of lascaux's SBT rows for
 2026-11-13 (24 targets, 23 plan entries, 4 observations), rendered in
 headless Chrome. Hover/click was not exercised; D50 was "unavailable"
 locally (no peer proxy).
+
+## schedule.html: the past night until 12 UT, curved horizon, faint slews (2026-11-13) [MJ]
+
+After a first look at the live page with JS:
+- Without date=, /api/db/schedule now shows the past night until 12 UT
+  and only then the coming one. The scheduler starts planning a night only
+  at 12 UT (sch/database.py, last_noon), so before that the coming night
+  is empty. target-altitude still switches at local noon. The page follows
+  "current night" (reloads every minute at night, every 5 min by day) until
+  a date is picked by hand. Checked against Prague time in winter and
+  summer with a script that copies the rule, not with a shifted clock.
+- The sky plot's horizon is the monitor pages' horizonOutline (segments
+  walked in 1 deg of azimuth, as ObjectCheck interpolates), not chords.
+- Slews are faint; those into and out of the highlighted target are
+  drawn plainly. Rendered in headless Chrome with SBT's horizon file.
+
+Open: a demo plan for priority tuning (a scheduler run that writes
+nowhere live). That needs a dry-run mode in the scheduler first.

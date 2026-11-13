@@ -117,6 +117,10 @@ let plotSite = SITES[storageGet (PLOT_SITE_KEY)] ? storageGet (PLOT_SITE_KEY) : 
 let hover = null;
 let selected = null;
 let refreshTimer = null;
+// true while the page shows "the current night" rather than a date picked
+// by hand: the daemon decides which night that is (the past one until
+// 12 UT, see /api/db/schedule), and the page keeps following it
+let following = true;
 
 // hit areas of the last drawing, for the mouse: [{x0, x1, y0, y1, entry}]
 let timelineHits = [];
@@ -296,7 +300,7 @@ async function loadSite (site, date) {
 }
 
 async function load () {
-	const date = dateEl.value;
+	const date = following ? '' : dateEl.value;
 	setStatus (true, 'loading…');
 	const results = await Promise.all (SITE_ORDER.map (s =>
 		loadSite (s, date).catch (er => ({ error: er.message }))));
@@ -314,7 +318,7 @@ async function load () {
 	document.querySelector (`input[name="sch-site"][value="${plotSite}"]`).checked = true;
 
 	const n = data[ok[0]].night;
-	if (!date)
+	if (following)
 		dateEl.value = dateString (n.sunset);
 	const parts = [`sunset ${hhmm (n.sunset)}`];
 	if (n.nightStart)
@@ -327,10 +331,11 @@ async function load () {
 
 	drawAll ();
 
-	// tonight keeps itself current; a past or future night does not change
+	// the current night keeps itself current (and moves on to the next
+	// at 12 UT); a night picked by hand is left alone
 	clearTimeout (refreshTimer);
-	if (n.now >= n.sunset - 3 * 3600 && n.now <= n.sunrise)
-		refreshTimer = setTimeout (load, 60000);
+	if (following)
+		refreshTimer = setTimeout (load, n.now >= n.sunset - 3600 && n.now <= n.sunrise ? 60000 : 300000);
 }
 
 // --- Drawing: shared time axis ------------------------------------------
@@ -657,6 +662,28 @@ function drawElevation () {
 
 // --- Sky (polar) plot -----------------------------------------------------
 
+// The horizon as RTS2 enforces it, copied from the monitor pages
+// (sites/bart-monitor.html): ObjectCheck::getHorizonHeight interpolates
+// altitude linearly in azimuth between the nodes, which are sorted by
+// azimuth on load, wrapping from the last node back to the first. In
+// this projection such a segment is a curve, not a chord between the
+// nodes, so each one is walked in steps of at most 1 deg of azimuth.
+function horizonOutline (nodes) {
+	const out = [];
+	for (let i = 0; i < nodes.length; i++) {
+		const [az1, alt1] = nodes[i];
+		const [az2, alt2] = nodes[(i + 1) % nodes.length];
+		let span = az2 - az1;
+		if (i === nodes.length - 1)
+			span += 360;
+		out.push ([az1, alt1]);
+		const steps = Math.ceil (span);
+		for (let k = 1; k < steps; k++)
+			out.push ([az1 + span * k / steps, alt1 + (alt2 - alt1) * k / steps]);
+	}
+	return out;
+}
+
 function drawPolar () {
 	const size = Math.min (polarCanvas.clientWidth, 460);
 	const { ctx, w, h } = setupCanvas (polarCanvas, size);
@@ -690,9 +717,8 @@ function drawPolar () {
 	}
 
 	// ground: outside the horizon polygon
-	const hz = d.horizon && d.horizon.horizon && d.horizon.horizon.length ? d.horizon.horizon.slice () : null;
+	const hz = d.horizon && d.horizon.horizon && d.horizon.horizon.length > 2 ? horizonOutline (d.horizon.horizon) : null;
 	if (hz) {
-		hz.sort ((a, b) => compassAz (a[0]) - compassAz (b[0]));
 		ctx.beginPath ();
 		ctx.arc (cx, cy, R, 0, 2 * Math.PI);
 		hz.forEach ((p, i) => {
@@ -702,6 +728,13 @@ function drawPolar () {
 		ctx.closePath ();
 		ctx.fillStyle = css ('--sky-horizon-fill', 'rgba(107,114,128,0.25)');
 		ctx.fill ('evenodd');
+		// the outline alone, not the plot's edge with it
+		ctx.beginPath ();
+		hz.forEach ((p, i) => {
+			const [x, y] = project (p[1], p[0]);
+			if (i === 0) ctx.moveTo (x, y); else ctx.lineTo (x, y);
+		});
+		ctx.closePath ();
 		ctx.strokeStyle = css ('--sky-horizon', '#6b7280');
 		ctx.lineWidth = 1.5;
 		ctx.stroke ();
@@ -728,11 +761,14 @@ function drawPolar () {
 
 	// slews: from where one entry ends to where the next starts, in the
 	// order the telescope goes (observed up to now, then the plan)
+	// Faint, they only hint at the path; the ones into and out of the
+	// highlighted target are drawn plainly.
 	const seq = d.entries.filter (e => e.kind === 'obs' || e.end > night.now).sort ((a, b) => a.start - b.start);
-	ctx.strokeStyle = css ('--rec-fg', '#6b7280');
-	ctx.lineWidth = 0.8;
 	ctx.setLineDash ([2, 3]);
 	for (let i = 0; i + 1 < seq.length; i++) {
+		const lit = h0 && h0.site === plotSite && (seq[i].target === h0.target || seq[i + 1].target === h0.target);
+		ctx.strokeStyle = lit ? css ('--text', '#1c1e21') : 'rgba(107, 114, 128, 0.25)';
+		ctx.lineWidth = lit ? 1.2 : 0.6;
 		const a = trackAt (night, seq[i].target, seq[i].end);
 		const b = trackAt (night, seq[i + 1].target, seq[i + 1].start);
 		if (!a || !b)
@@ -962,6 +998,7 @@ function shiftDate (days) {
 	const base = dateEl.value ? new Date (dateEl.value + 'T12:00:00') : new Date ();
 	base.setDate (base.getDate () + days);
 	dateEl.value = dateString (base.getTime () / 1000);
+	following = false;
 	selected = null;
 	load ();
 }
@@ -969,11 +1006,12 @@ function shiftDate (days) {
 document.getElementById ('sch-prev').addEventListener ('click', () => shiftDate (-1));
 document.getElementById ('sch-next').addEventListener ('click', () => shiftDate (1));
 document.getElementById ('sch-tonight').addEventListener ('click', () => {
-	dateEl.value = '';
+	following = true;
 	selected = null;
 	load ();
 });
 dateEl.addEventListener ('change', () => {
+	following = !dateEl.value;
 	selected = null;
 	load ();
 });

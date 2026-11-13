@@ -2241,9 +2241,21 @@ MHD_Result HttpD::handleDb (struct MHD_Connection *connection, const char *url)
 	}
 	else if (!strcmp (url, "/api/db/schedule"))
 	{
-		// date= as for target-altitude: the night starting that day,
-		// tonight (or the night still in progress) without it
+		// date= as for target-altitude: the night starting that day.
+		// Without it the current night, but switching to the next one at
+		// 12 UT, not at local noon as target-altitude does: the scheduler
+		// (sch/database.py, last_noon) starts planning a night only then,
+		// so until 12 UT the last night is what there is to see.
 		double refTime = getNow ();
+		{
+			time_t nowT = (time_t) refTime;
+			struct tm tmUt;
+			gmtime_r (&nowT, &tmUt);
+			// 12 hours back is before local noon of the day the past
+			// night began, which resolveNight () maps to that night
+			if (tmUt.tm_hour < 12)
+				refTime -= 12 * 3600;
+		}
 		const char *dateStr = getParam (connection, "date", "");
 		if (dateStr[0] != '\0')
 		{
