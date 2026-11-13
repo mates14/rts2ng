@@ -509,7 +509,15 @@ void Executor::postEvent (rts2core::Event * event)
 			}
 			updateScriptCount ();
 			if (scriptCount->getValueInteger () == 0)
+			{
+				// base note: classic started the target again with its move state
+				// still "failed", which counts as moved: the new scripts' exposures
+				// went out before the new slew (D50 C0 2026-11-13 15:52, flats at
+				// park). Not moved until the new slew ends. [JS 2026-11-13]
+				if (currentTarget)
+					currentTarget->moveNotStarted ();
 				switchTarget ();
+			}
 			break;
 		case EVENT_ENTER_WAIT:
 			waitState = 1;

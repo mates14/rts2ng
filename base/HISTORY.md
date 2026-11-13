@@ -5145,3 +5145,47 @@ With every park stalling it failed after 2 park commands. ctest 14/14;
 geminicaringloop.cpp compiles clean with the dpkg-buildflags. Not seen on
 the mount yet: whether waiting for rest really avoids the stall, and
 whether a retry from rest gets the stalled Dec axis going.
+
+## D50 dusk flats at park: exposures before the retried slew (2026-11-13) [JS]
+
+D50 switched ON at 15:51:49 UTC, the roof closed. QUEUE started the flat
+target; T0 refused the slew (HA -48 Dec 51 "above the ceiling", the roof
+still opening), the executor started the target again ("C0: 1 exposure(s)
+of the ended script not started" - the 11-08 fix), and the new slew waited
+for the opening dome. The dome opened at 15:52:16.8; flatC0.py's exposures
+and the slew were free together, the exposures went first: 1 s z at
+15:52:21, 1 s R at 15:52:25, 16 s R 15:52:28-44 - all at park, the last
+counted a good R flat. Each held the slew back (a camera exposing blocks
+moves); the worm log shows it 15:52:45-15:53:03. `blocked_by = "T0 F0 W0
+DOME"` did its part - C0 waited for the dome, and for T0 while it slewed -
+but it only says whose blocks count: a slew that has not started holds
+nothing.
+
+Cause (UPSTREAM_BUGS.md "Exposures go out before the target's slew"): an
+`exe` script's exposure never checks that the target was moved, only the
+mount's block holds it - set once the slew starts; and after a failed slew
+the target keeps its "failed" move state, which counts as moved, so even
+plain scripts' check passes. Normally the slew wins only because an `exe`
+script needs a while to start.
+
+Fix: `ConnExecute::queExposure` holds a blocking exposure while the target
+is not moved and queues it at `EVENT_MOVE_OK`/`EVENT_CORRECTING_OK`
+("<camera> exposure waits for the target's slew", DEBUG); a failed slew
+ends the script, which drops it (`notActive`). `exposure_noblock` (guiders)
+is untouched. The executor resets the target to not moved
+(`moveNotStarted`) before it starts it again after a failed slew. Dark
+targets are created "move failed" (`DarkTarget::DarkTarget`), so they never
+wait.
+
+Bench (lascaux, `~torman/wip-flat-test.sh`, `fordsim` roof 6 s, teld-dummy
+0.5 deg/s, the first slews refused by `block_move` until 1 s into the
+opening, target 1100 C0 `exe fl.py`, three 2 s exposures): master - the
+retried slew and the first exposure both at 8.07 s, the exposure taken
+while slewing; fixed - the slew 8.07-168.09 s, the exposures from 168.26 s,
+all three; the next loop's re-slew ended 174.69, exposure 175.04.
+No refused slew: slew 0.37-160.42 s, exposures from 160.55. Dark target 1
+with `exe fl.py`: exposes at once, no wait (the dome alone held its second
+exposure). Plain `E 2 E 2 E 2`, first slew refused: slew ended 167.115 s,
+first exposure 167.117 - the executor's reset holds plain scripts too.
+ctest base 14/14, db 14/14; dpkg-buildflags and the lascaux (GCC 12) build
+without warnings in the changed files.

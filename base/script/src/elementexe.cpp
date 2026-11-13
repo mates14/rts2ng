@@ -33,10 +33,12 @@ ConnExecute::ConnExecute (Execute *_masterElement, rts2core::Block *_master, con
 	exposure_started = 0;
 	keep_next_image = false;
 	waitTargetMove = false;
+	deferredExposure = NULL;
 }
 
 ConnExecute::~ConnExecute ()
 {
+	delete deferredExposure;
 	if (masterElement != NULL)
 	{
 		if (masterElement->getClient () != NULL)
@@ -57,6 +59,14 @@ void ConnExecute::postEvent (rts2core::Event *event)
 	switch (event->getType ())
 	{
 		case EVENT_MOVE_OK:
+		case EVENT_CORRECTING_OK:
+			if (deferredExposure && masterElement && masterElement->getConnection () && (masterElement->getTarget () == NULL || masterElement->getTarget ()->wasMoved ()))
+			{
+				masterElement->getConnection ()->queCommand (deferredExposure);
+				deferredExposure = NULL;
+			}
+			if (event->getType () != EVENT_MOVE_OK)
+				break;
 			if (waitTargetMove)
 				writeToProcess ("0");
 			if (masterElement && masterElement->getConnection ())
@@ -77,6 +87,9 @@ void ConnExecute::postEvent (rts2core::Event *event)
 
 void ConnExecute::notActive ()
 {
+	// the slew it waited for failed or the script was ended: it never goes out
+	delete deferredExposure;
+	deferredExposure = NULL;
 	// waiting for image - this will not be returned
 	switch (exposure_started)
 	{
@@ -90,6 +103,29 @@ void ConnExecute::notActive ()
 			break;
 	}
 	ConnExe::notActive ();
+}
+
+void ConnExecute::queExposure (bool noblock)
+{
+	rts2core::Command *cmd = new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), noblock ? 0 : BOP_EXPOSURE, !noblock);
+	exposure_started = 1;
+	// base note: classic queued the exposure at once. Before the target's
+	// slew has started nothing holds it - the mount sets no block yet - so
+	// an exposure that came before the slew went out at the old position and,
+	// exposing, held the slew back in turn: D50 C0 2026-11-13 15:52, three
+	// dusk flats at park after a slew refused under the closed roof was
+	// retried behind the opening dome. A blocking exposure now waits for the
+	// slew to end (or a correction); exposure_noblock (a guider) does not.
+	// [JS 2026-11-13]
+	Rts2Target *target = masterElement->getTarget ();
+	if (!noblock && target && !target->wasMoved ())
+	{
+		logStream (MESSAGE_DEBUG) << masterElement->getConnection ()->getName () << " exposure waits for the target's slew" << sendLog;
+		delete deferredExposure;
+		deferredExposure = cmd;
+		return;
+	}
+	masterElement->getConnection ()->queCommand (cmd);
 }
 
 void ConnExecute::processCommand (char *cmd)
@@ -132,8 +168,7 @@ void ConnExecute::processCommand (char *cmd)
 			return;
 		if (masterElement == NULL || masterElement->getConnection () == NULL || masterElement->getClient () == NULL)
 			return;
-		masterElement->getConnection ()->queCommand (new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), noblock ? 0 : BOP_EXPOSURE, !noblock));
-		exposure_started = 1;
+		queExposure (noblock);
 	}
 	else if (isexp && (!strcasecmp (expcmd, "_wfn") || !strcasecmp (expcmd, "_overwrite")))
 	{
@@ -145,9 +180,8 @@ void ConnExecute::processCommand (char *cmd)
 			return;
 		((rts2script::DevClientCameraExec *) masterElement->getClient ())->setExpandPath (imagename);
 		((rts2script::DevClientCameraExec *) masterElement->getClient ())->setOverwrite (!strcasecmp (expcmd, "_overwrite"));
-		masterElement->getConnection ()->queCommand (new rts2core::CommandExposure (getMaster (), (rts2core::DevClientCamera *) masterElement->getClient (), noblock ? 0 : BOP_EXPOSURE, !noblock));
+		queExposure (noblock);
 		keep_next_image = true;
-		exposure_started = 1;
 	}
 	else if (!strcasecmp (cmd, "progress"))
 	{

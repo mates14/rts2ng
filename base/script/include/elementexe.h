@@ -75,6 +75,16 @@ class ConnExecute:public ConnExe
 		// if set, EVENT_MOVE_OK / FAILED will be handled and response will be printed on stdout
 		bool waitTargetMove;
 
+		// a blocking exposure asked for before the target's slew ended; queued at
+		// EVENT_MOVE_OK, dropped with the script [JS 2026-11-13]
+		rts2core::Command *deferredExposure;
+
+		/**
+		 * Queue the script's exposure, or hold it (deferredExposure) while the
+		 * target is not moved yet - see the base note in elementexe.cpp.
+		 */
+		void queExposure (bool noblock);
+
 		void deleteImage (rts2image::Image *image)
 		{
 			if (!image->hasKeepImage ())

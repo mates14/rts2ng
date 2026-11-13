@@ -23,7 +23,10 @@ with the date and `[MJ]`/`[JS]`.
 - 2026-11-08 [JS] D50 evening flats (script/devscript.cpp, camd): released
   (4b55578, D50 restarted 12:12 UTC, Andor rebuilt). To see: the first clear
   D50 dusk - C0 flats despite a refused first slew, no "disabling target 2
-  on device C0".
+  on device C0". 2026-11-13: flats ran, but the first three at park (the
+  retried slew waited for the dome, the exposures did not) - fixed on the
+  bench (script/elementexe.cpp, executor), not released: after it the
+  first flat must come after the slew (worm log `W` lines show the slew).
 - 2026-11-08 [JS] D50 PEC (teld/d50/wormencoder.cpp): stage 1 (the worm
   encoder read and logged, nothing corrected) on D50 since 19:42 UTC
   (822fe8b, T0 `--worm-encoder`, `--worm-log /var/log/rts2-worm`); tracked
@@ -443,6 +446,12 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   in the connection's queue for a block (`Connection::queDropUnsent ()`) and
   clears the camera client's `waitForExposure`. Left there, they went out
   when the block ended, behind the next script's `script_ends`. [JS 2026-11-08]
+- A script's exposure goes out only once the target's slew has ended
+  (`Rts2Target::wasMoved ()`): the camera client checks it for plain
+  scripts, `ConnExecute::queExposure ()` holds an `exe` script's exposure
+  until `EVENT_MOVE_OK` (not `exposure_noblock`), and after a failed slew
+  the executor resets the target to not moved before it starts again. No
+  block holds an exposure before the slew has started. [JS 2026-11-13]
 
 **Other drivers**
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,

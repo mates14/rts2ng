@@ -2109,3 +2109,24 @@ are not: the Andor re-sets its image (`box`, `setTiming`) while acquiring,
 
 rts2ng: during an exposure or readout Camera only notes it and resets once
 the chip is idle, before applying the queued values.
+
+## Exposures go out before the target's slew (`lib/rts2script/elementexe.cpp`, `src/plan/executor.cpp`) [JS 2026-11-13]
+
+The executor starts the scripts and queues the slew together (`doSwitch`:
+`EVENT_SET_TARGET`, then `EVENT_SLEW_TO_TARGET`). An exposure waits for the
+mount only through its block (`BOP_EXPOSURE`), which the mount sets once it
+moves - so the slew has to start first. Normally it does (an `exe` script
+needs a while to start), but a slew that itself waits for a block (an
+opening dome) has not: when the block ends, exposures and slew are free
+together, and an exposure that goes first holds the slew back in turn (a
+camera exposing blocks moves). `exe` scripts never check that the target
+was moved; plain scripts do (`DevClientCameraExec::doNextCommand`,
+`wasMoved ()`), but after a failed slew the executor starts the same target
+again with its move state still "failed", which counts as moved. D50
+2026-11-13 15:52: the slew to the flat field refused under the closed roof,
+retried behind the opening dome, three dusk flats taken at park.
+
+rts2ng: `ConnExecute::queExposure` holds a blocking exposure until the slew
+ends (queued at `EVENT_MOVE_OK`/`EVENT_CORRECTING_OK`, dropped with the
+script); the executor resets the target to not moved before starting it
+again after a failed slew.
