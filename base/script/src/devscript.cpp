@@ -195,7 +195,16 @@ void DevScript::postEvent (rts2core::Event * event)
 		#ifdef DEBUG_EXTRA
 			logStream (MESSAGE_DEBUG) << "EVENT_SCRIPT_ENDED DevScript currentTarget " << currentTarget << " nextTarget " << nextTarget << sendLog;
 		#endif					 /* DEBUG_EXTRA */
-			if (event->getArg ())
+			// base note: classic took the target to continue from every
+			// device's EVENT_SCRIPT_ENDED, also on a device still running its
+			// script, which kept it as nextTarget and started it again when
+			// its own script ended - after the executor had queued another
+			// target. D50 2026-11-14: C1/C2 "sleep 10" ended, target 2
+			// continued; C0's flat script ended on "next 1" and ran target 2
+			// again until the night. A busy device ignores it: when its
+			// script ends, the executor decides with the queue of then.
+			// [JS 2026-11-14]
+			if (event->getArg () && currentTarget == NULL)
 				// we get new target..handle that same way as EVENT_OBSERVE command,
 				// telescope will not move
 				setNextTarget ((Rts2Target *) event->getArg ());

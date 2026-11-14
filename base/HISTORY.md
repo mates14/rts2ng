@@ -5366,3 +5366,30 @@ in a pty with stderr captured): the old rts2-mon wrote "connection RFOC
 after the screen is up. Not seen on a site yet. If the focus still jumps
 when a device goes away, the next suspect is `NMonitor::deleteConnection`
 (the device list shifts under the selected row).
+
+## Executor: a busy device no longer reruns a continued target (2026-11-14) [JS]
+
+D50 dusk 2026-11-14: QUEUE started the flats (target 2) at 15:48 with the
+Sun at -5.2 deg; the flat script finished its flats, its darks and the
+master flats by 16:06; at 16:07 (-8.0 deg) QUEUE sent `next 1`, the script
+ended - and C0 ran target 2's flat script again (flats "dim", another 46
+darks) until the night at 16:20. Target 1 never ran. Cause: a classic bug
+in `DevScript` (UPSTREAM_BUGS, "A busy device runs a continued target
+again"): C1/C2's `sleep 10` loops ending made the executor continue target
+2 for every device, and the busy C0 kept it as its next target. Fixed in
+`DevScript::postEvent` (EVENT_SCRIPT_ENDED): a device running a script
+ignores the attached target.
+
+Bench (lascaux, a clone of master with the fix, test database rts2test:
+centrald, dummy T0/C0/C1/C2, executor; target 2 C0 a script that waits for
+EXEC.next != 2 as rts2.flats `finish ()` does, C1/C2 `sleep 10`; target 1
+C0 `D 1 D 1 D 1`, C1/C2 `sleep 10`; `now 2`, `next 1` at 15 s). Before: C0
+ended at 16.2 s and started target 2 again at 16.6 s, the switch to target
+1 came at 31 s. With the fix: C0 ended at 17.2 s and stayed idle, the
+switch came when C1/C2's sleep ended (20.5 s). A continuing target without
+`next` still loops (target 1 alone: C0 restarted while C1/C2 slept, 32
+darks in ~40 s). ctest db and base 15/15 each; hardened build clean.
+
+Also seen that dusk, not touched: the first flat came after the slew
+(obs start 15:49:22, first flat 15:49:25 - cc81471 works on the mount);
+QUEUE sent `next 8031` every 5 s while target 1159 was ending (16:30).

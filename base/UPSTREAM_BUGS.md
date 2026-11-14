@@ -2145,3 +2145,18 @@ a turbo slew.
 rts2ng: the executor sends the mount the `=` values that open the new
 target's camera scripts before it queues the move
 (`Executor::queMountValuesBeforeSlew`).
+
+## A busy device runs a continued target again after "next" (`lib/rts2script/devscript.cpp`) [JS 2026-11-14]
+
+When one device's script ends and the target continues (a "continues"
+target: flats, darks), the executor attaches the target to
+`EVENT_SCRIPT_ENDED`, and the event reaches every device. A device still
+running its script stores it as `nextTarget` and starts it when its own
+script ends - even after the executor queued another target. D50
+2026-11-14: target 2 (C0 flat script, C1/C2 `sleep 10`); C1/C2 ended, the
+flats continued; QUEUE sent `next 1`, C0's flat script ended on it and ran
+target 2 again until the night, the darks (target 1) never came.
+
+rts2ng: a device that runs a script ignores the target attached to
+`EVENT_SCRIPT_ENDED`; when its script ends, the executor decides with the
+queue as it is then.

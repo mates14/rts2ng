@@ -24,9 +24,11 @@ with the date and `[MJ]`/`[JS]`.
   (4b55578, D50 restarted 12:12 UTC, Andor rebuilt). To see: the first clear
   D50 dusk - C0 flats despite a refused first slew, no "disabling target 2
   on device C0". 2026-11-13: flats ran, but the first three at park (the
-  retried slew waited for the dome, the exposures did not) - fixed on the
-  bench (script/elementexe.cpp, executor), not released: after it the
-  first flat must come after the slew (worm log `W` lines show the slew).
+  retried slew waited for the dome, the exposures did not) - fixed
+  (cc81471); 2026-11-14 seen on D50: the first flat after the slew. That
+  dusk the darks (target 1) never ran: C0 reran the flat script after
+  `next 1` (devscript.cpp, HISTORY "a busy device no longer reruns"),
+  fixed on the bench, not released. To see: a dusk with flats, then darks.
 - 2026-11-08 [JS] D50 PEC (teld/d50/wormencoder.cpp): stage 1 (the worm
   encoder read and logged, nothing corrected) on D50 since 19:42 UTC
   (822fe8b, T0 `--worm-encoder`, `--worm-log /var/log/rts2-worm`); tracked
