@@ -32,8 +32,10 @@ with the date and `[MJ]`/`[JS]`.
   (822fe8b, T0 `--worm-encoder`, `--worm-log /var/log/rts2-worm`); tracked
   under the roof: one worm turn 179.50 s. 2026-11-13 [JS]: first fit, 6.5 h
   of GRB guiding (HISTORY, "D50 PEC stage 2"): h3-h8 steady, the
-  fundamental switches with the side of the meridian. Next: a guided run
-  through the meridian at another Dec, then the correction.
+  fundamental switches with the side of the meridian. 2026-11-14 [JS]: the
+  whole night, 8 targets at Dec -2..+71 (HISTORY, "D50 PEC: the whole
+  night"): one west and one east shape for all Decs. Next: the correction
+  (stage 3), worm shape per side plus the 37.4 s family from the encoder.
 
 ## What base is
 

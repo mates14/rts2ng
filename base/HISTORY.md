@@ -5233,3 +5233,46 @@ Left after the worm harmonics: 14.4 s (0.12", the gearbox, as on 11-07),
 89 s, 459 s. Next: a guided run through the meridian at another Dec (does
 the switch follow the load?) and the shape on another night; then the
 correction, h1/h2 per side of the meridian.
+
+## D50 PEC: the whole night, other Decs (2026-11-14) [JS]
+
+Data: the night of 2026-11-13, guided by C1 16:49-02:39 UTC, 11075 frames:
+the GRB of stage 2 until 23:10, then 7 targets of 200+ frames at Dec -2 to
++71, HA -1.6 to +6 h. Method as in stage 2, but RA/Dec per frame from the
+`observations` table: guide.py logs `TEL DEC` from before the slew, and
+some targets have no `target` line.
+
+The west worm shape (GRB, HA > +1 h) fits every west target as well as
+its own fit does: rms after drift -> with the GRB west shape -> own 8
+harmonics, Dec +20 1.86/0.88/0.87, +34 1.82/0.92/0.90, -2 1.72/0.77/0.76,
++40 1.78/0.77/0.76, +25 1.53/0.60/0.57, +52 1.65/1.11/1.04. The one east
+target (Dec +71, HA -1.6) takes the GRB east shape (1.84 -> 1.25, own
+1.19). So one shape per side, independent of Dec; h1 grows slowly with
+HA (1.6" near the meridian, 2.2" at +4 h).
+
+The switch: at Dec +5 the shapes mix about half and half for an hour
+(HA -0.2 to +0.55 h), fully west from +0.6 h. At Dec +25..+73 the mount
+is fully west already at HA -0.12..+0.4 h (4 targets). So the switch
+point moves with Dec, or with where the slew came from; the correction
+needs a rule for it (HA threshold per Dec, or the guider choosing).
+
+Periods in time, per target (sky | encoder against the steps):
+- 37.41 s 0.34-0.45" | 0.37-0.38", 18.71 s 0.15-0.28" | 0.21": on every
+  target, the same on the sky as in the encoder. Before the worm encoder,
+  so a correction from the encoder (not the worm angle) removes them.
+- 43.2 s and its harmonics 21.6, 14.4, 10.8 s, 0.1-0.6" each: on the sky
+  only, never in the encoder (< 0.01"), not in Dec (stage 2). This
+  corrects stage 2's "14.4 s, the gearbox": it is not. The period is
+  steady (43.18 s, 4.157 cycles per worm turn) and already in the raw
+  guider offset (0.42" at 21.59 s, the guider chasing it), so no residue
+  of the rebuild. The phase holds through the 6 h GRB run, also across a
+  guiding restart without a slew (18:31), but differs from target to
+  target (slews of 24-92 worm turns) far beyond its error (3-14 deg), at
+  the exact period too, and does not follow the worm's total rotation
+  either. Something after the worm encoder that resets with a slew -
+  the worm's thrust bearing (ball passes, axial play the encoder cannot
+  see) fits, unverified. Not correctable from the worm; only the guider
+  sees it.
+
+Scripts: night.py, sw.py, per.py, pg.py, coh.py, brg.py in the session
+scratchpad (not kept); rewrite from this entry.
