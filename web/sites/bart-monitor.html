@@ -2270,9 +2270,9 @@
                 ctx.setLineDash([]);
             }
 
-            // grid: altitude circles, 0 deg stronger; azimuth every 30 deg
+            // grid: altitude circles every 15 deg, 0 stronger; azimuth every 30 deg
             ctx.lineWidth = 1 * scale;
-            for (const alt of [60, 30, 0]) {
+            for (const alt of [75, 60, 45, 30, 15, 0]) {
                 const r = g.R * (90 - alt) / (90 - SERVICE_MAP_MIN_ALT);
                 ctx.strokeStyle = alt === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.18)';
                 ctx.beginPath();
@@ -2305,7 +2305,7 @@
             }
             ctx.fillStyle = 'rgba(255,255,255,0.45)';
             ctx.font = `${9 * scale}px Arial, sans-serif`;
-            for (const alt of [60, 30, 0]) {
+            for (const alt of [75, 60, 45, 30, 15, 0]) {
                 const r = g.R * (90 - alt) / (90 - SERVICE_MAP_MIN_ALT);
                 ctx.fillText(`${alt}°`, g.cx + 3 * scale, g.cy - r + 7 * scale);
             }

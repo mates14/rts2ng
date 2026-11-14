@@ -4137,4 +4137,5 @@ SBT: the site horizon only. A real move from the map worked on D50
 2026-11-15 [JS]: the hard horizon also as a red line (its red area alone
 merged with the ceiling's under a closed roof, and JS saw only the site
 horizon), and for orientation the stars to 4 mag (bsc-stars.json, as the
-sky chart) and the Moon.
+sky chart) and the Moon. Altitude circles every 15 deg, as on the sky
+chart.
