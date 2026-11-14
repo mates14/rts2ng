@@ -5276,3 +5276,72 @@ Periods in time, per target (sky | encoder against the steps):
 
 Scripts: night.py, sw.py, per.py, pg.py, coh.py, brg.py in the session
 scratchpad (not kept); rewrite from this entry.
+
+## D50 PEC: the RA servo position in the worm log (2026-11-14) [JS]
+
+The night's fit (entry above) leaves three questions the worm encoder
+alone cannot answer: is the 37.41 s family the motor (one motor turn:
+RA_TICKS is 2304 x 65536 counts, 2304 = 480 teeth x 4.8 gearbox, and
+179.5 s / 4.8 = 37.40 s) or the gearbox; does the worm encoder have
+errors of its own (its once-per-turn 0.47" against the steps could be
+the encoder's eccentricity); where the 43.2 s family sits.
+
+`D50::logServo` (teld/d50/d50.cpp, from `idle ()`): while tracking on
+the step generator (not moving, RA servo in stepper mode) and with the
+worm encoder open, once a second it reads the RA servo's actual position
+(`getPositionAct`, one `read4b` of TGA_CURRPOS, ~10 ms at 19200 Bd) and
+logs `<t> S <servo counts> <ms the read took> <turns> <pos>`. One count
+is 0.0086" of HA. Not during slews, so a move never waits for it; a
+failed read only drops the line (the next `info ()` reports a dead
+servo). The analysis: servo against the steps = servo following error;
+servo / 4.8 against the worm encoder = gearbox and the encoder's errors;
+the sky against both = what comes after the worm.
+
+Built with GCC and the Debian hardening flags, no warnings; the worm
+test passes. Not run against the real servo (no TGDrive on the bench):
+first check on D50 is `grep -c " S " /var/log/rts2-worm/worm-<date>.log`
+growing once a second while tracking, and the read time in the line.
+
+## D50 PEC stage 3: the correction, off by default (2026-11-14) [JS]
+
+`PecModel` (teld/d50/pec.h, pec.cpp) holds the worm model, one shape per
+side of the meridian: the sky error without guiding, in arcsec of HA,
+p(phi) = sum c_h cos(h phi) + s_h sin(h phi), phi = 2 pi S / 2^23 from the
+worm encoder. The guider's offset moves by +0.96 x the commanded extra
+motion (measured on the 2026-11-13 pulses, frames with a pulse between
+them, the sidereal motion per second removed), so cancelling p needs
+f = f_default x (1 - 2 pi / 2700 x dp/dphi), whichever way the encoder
+counts. `test_pec` checks the factor against a numerical derivative and
+that the extra motion it commands over a turn is -p.
+
+The model file is `base/teld/d50/pec-model.txt` in the repository, the
+fit as made; on D50 it is site configuration, `/etc/rts2/pec-model.txt`,
+copied by hand (not packaged, not under /etc/rts2/scripts): 8 harmonics a side, fitted on the whole night of 2026-11-13/14 (east HA
+< -0.3 h, west > +0.6 h). It needs up to 2.31 % of the step frequency
+(h7 and h8 are steep), so the refusal limit is 5 % (`PEC_MAX_CHANGE`;
+the guide pulses use 10 %). Run on last night's data with the default
+blend: unguided rms 1.53-1.86" -> 0.60-0.92" on the west targets, 1.82 ->
+1.21" in the east, 1.46 -> 1.18" between -0.3 and +0.6 h (Dec +52 near
+the meridian only 1.65 -> 1.46: the mount was already west there).
+
+T0 (teld/d50/d50.cpp): `--pec-model <file>`; values `pec` (writable,
+off at start; refused without a model or the worm encoder), `pec_ha_east`
+-0.3 and `pec_ha_west` +0.6 h (the shapes blended linearly between, HA
+from the servo position), `pec_factor`, `pec_west`. `updatePec` from
+`idle ()`, once a second while tracking on the step generator: the worm
+angle half a second ahead (the middle of the interval the frequency
+holds), the factor, `setWormStepsFreq (default x factor)`. A running
+guide pulse keeps its frequency, its end and the pulses themselves use
+`trackingStepsFreq ()` (default x factor), as does the safety reset in
+`info ()`. Off (factor 1, the plain default back) when `pec` is
+switched off, the mount moves, the RA servo leaves stepper mode or the
+encoder reading is not valid; a factor beyond the limit switches `pec`
+off with an error. The worm log gets `C 1|0` for on/off; the frequency
+changes are its `F` lines, so the stage 2 analysis still rebuilds the
+unguided error.
+
+Built with GCC and the Debian hardening flags, no warnings; `test_pec`
+and `test_wormencoder` pass. Not run on the mount (no REMOTES or servos on
+the bench). First test on D50, a guided target in the west: `pec` on for
+half an hour, off for half an hour; the guider's RA residual and the
+worm log's `F` lines (one change a second, within 2.3 %) show it.

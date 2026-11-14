@@ -1,0 +1,21 @@
+# D50 PEC worm model: the sky error without guiding, arcsec of HA,
+#   p (phi) = sum c cos (h phi) + s sin (h phi), phi = 2 pi S / 2^23 (worm encoder)
+# fitted 2026-11-14 from the night of 2026-11-13/14 [JS]: east HA < -0.3 h (1797 frames),
+# west HA > +0.6 h (7260 frames), C1 guiding, Dec -2..+71; base/HISTORY.md "D50 PEC".
+# side h c s
+east 1 -0.771 -1.438
+east 2 -0.040 +0.228
+east 3 +0.483 -0.349
+east 4 -0.009 +0.558
+east 5 +0.022 +0.319
+east 6 +0.282 +0.089
+east 7 -0.306 -0.473
+east 8 +0.305 -0.117
+west 1 -1.550 +1.382
+west 2 +0.243 +0.036
+west 3 +0.278 -0.324
+west 4 -0.001 +0.400
+west 5 +0.207 +0.177
+west 6 +0.198 +0.082
+west 7 -0.096 -0.223
+west 8 +0.204 -0.057

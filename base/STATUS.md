@@ -34,8 +34,12 @@ with the date and `[MJ]`/`[JS]`.
   of GRB guiding (HISTORY, "D50 PEC stage 2"): h3-h8 steady, the
   fundamental switches with the side of the meridian. 2026-11-14 [JS]: the
   whole night, 8 targets at Dec -2..+71 (HISTORY, "D50 PEC: the whole
-  night"): one west and one east shape for all Decs. Next: the correction
-  (stage 3), worm shape per side plus the 37.4 s family from the encoder.
+  night"): one west and one east shape for all Decs. 2026-11-14 [JS]: the
+  RA servo position logged too (`S` lines), and stage 3, the correction
+  (`--pec-model`, value `pec`, off by default; HISTORY "D50 PEC stage
+  3"), not released yet, not run on the mount. Next: a night with `pec`
+  on and off; later the 37.4 s family (one motor turn) from the servo or
+  the encoder.
 
 ## What base is
 

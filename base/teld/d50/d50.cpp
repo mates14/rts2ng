@@ -34,6 +34,7 @@
 #include "tgdrive.h"
 #include "d50path.h"
 #include "wormencoder.h"
+#include "pec.h"
 #include "connremotes.h"
 #include "fork.h"
 
@@ -50,6 +51,7 @@
 #define OPT_DOME_OPENSWITCH_VARIABLE	OPT_LOCAL + 2205
 #define OPT_WORM_ENCODER		OPT_LOCAL + 2206
 #define OPT_WORM_LOG			OPT_LOCAL + 2207
+#define OPT_PEC_MODEL			OPT_LOCAL + 2208
 
 #define RTS2_D50_TIMER_GUIDE_RA		RTS2_LOCAL_EVENT + 1210
 #define RTS2_D50_TIMER_GUIDE_DEC	RTS2_LOCAL_EVENT + 1211
@@ -301,6 +303,27 @@ class D50:public Fork
 		rts2core::ValueInteger *wormErrors;
 		void updateWorm ();
 		void wormLog (const char *fmt, ...) __attribute__ ((format (printf, 2, 3)));
+		// base note: not in classic. The RA servo position, logged next to the
+		// worm reading once a second while tracking: separates the motor, the
+		// gearbox and the worm encoder's own errors [JS 2026-11-14]
+		double lastServoLog;
+		void logServo ();
+
+		// base note: not in classic. Stage 3 of the PEC: the step frequency
+		// times a factor from the worm model (pec.h) at the worm encoder's
+		// angle, once a second while tracking; off by default [JS 2026-11-14]
+		const char *pecModelFile;
+		PecModel pecModel;
+		rts2core::ValueBool *pecOn;
+		rts2core::ValueDouble *pecHaEast;
+		rts2core::ValueDouble *pecHaWest;
+		rts2core::ValueDouble *pecFactor;
+		rts2core::ValueDouble *pecWest;
+		double lastPecUpdate;
+		void updatePec ();
+		void pecOff ();
+		// the tracking step frequency: the default, times the PEC factor
+		double trackingStepsFreq () { return remotesWormStepsFreqDefault->getValueDouble () * pecFactor->getValueDouble (); }
 
 		int32_t lastSafeRaPos;
 		int32_t lastSafeDecPos;
@@ -417,6 +440,7 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	addOption (OPT_DOME_OPENSWITCH_VARIABLE, "dome-openswitch-variable", 1, "name of variable in dome, which holds the dome-open info [roof_opened]");
 	addOption (OPT_WORM_ENCODER, "worm-encoder", 1, "serial port of the HA worm encoder board (none: not read)");
 	addOption (OPT_WORM_LOG, "worm-log", 1, "directory for the HA worm log, worm-YYYYMMDD.log (none: no log)");
+	addOption (OPT_PEC_MODEL, "pec-model", 1, "PEC worm model file (east|west <h> <c> <s>); the value pec switches it on");
 
 	addParkPosOption ();
 
@@ -465,6 +489,7 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	wormEncoder = nullptr;
 	wormStarted = 0;
 	wormSilentReported = false;
+	lastServoLog = 0;
 	createValue (wormValid, "worm_encoder", "HA worm encoder gives valid readings", false);
 	wormValid->setValueBool (false);
 	createValue (wormAngle, "worm_angle", "[deg] HA worm angle, in its turn", false, RTS2_DT_DEGREES);
@@ -473,6 +498,19 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	createValue (wormPeriod, "worm_period", "[s] HA worm turn period, measured over 30 s (NaN at rest)", false);
 	wormPeriod->setValueDouble (NAN);
 	createValue (wormErrors, "worm_encoder_errors", "HA worm encoder readings refused (CRC, flags, garbled)", false);
+
+	pecModelFile = nullptr;
+	lastPecUpdate = 0;
+	createValue (pecOn, "pec", "periodic error correction of the HA step frequency (needs --pec-model and the worm encoder)", false, RTS2_VALUE_WRITABLE);
+	pecOn->setValueBool (false);
+	createValue (pecHaEast, "pec_ha_east", "[h] PEC: the east worm shape up to this HA", false, RTS2_VALUE_WRITABLE);
+	pecHaEast->setValueDouble (-0.3);
+	createValue (pecHaWest, "pec_ha_west", "[h] PEC: the west worm shape from this HA (blended between)", false, RTS2_VALUE_WRITABLE);
+	pecHaWest->setValueDouble (0.6);
+	createValue (pecFactor, "pec_factor", "PEC: factor on the HA step frequency now (1 = no correction)", false);
+	pecFactor->setValueDouble (1.0);
+	createValue (pecWest, "pec_west", "PEC: weight of the west worm shape now (0 east .. 1 west)", false);
+	pecWest->setValueDouble (NAN);
 
 	// apply all corrections by rts2 for mount
 	setCorrections (true, true, true, true);
@@ -620,6 +658,9 @@ int D50::processOption (int opt)
                 case OPT_WORM_LOG:
                         wormLogDir = optarg;
                         break;
+                case OPT_PEC_MODEL:
+                        pecModelFile = optarg;
+                        break;
                 default:
                         return Fork::processOption (opt);
         }
@@ -655,6 +696,16 @@ int D50::init ()
 		wormEncoder->start ();
 		wormStarted = getNow ();
 		wormLog ("start");
+	}
+	if (pecModelFile)
+	{
+		std::string err;
+		if (!pecModel.load (pecModelFile, err))
+			logStream (MESSAGE_ERROR) << "PEC model not loaded, no correction: " << err << sendLog;
+		else if (wormEncoder == nullptr)
+			logStream (MESSAGE_WARNING) << "--pec-model without --worm-encoder, no correction" << sendLog;
+		else
+			logStream (MESSAGE_INFO) << "PEC model " << pecModelFile << " loaded" << sendLog;
 	}
 	else if (wormLogDir)
 	{
@@ -779,8 +830,8 @@ int D50::info ()
 
 	// base note: classic compared the pointer (guidePulseRA == 0), which is never
 	// true, so this reset never ran
-	if (guidePulseRA->getValueInteger () == 0 && remotesWormStepsFreqTarget->getValueDouble () != remotesWormStepsFreqDefault->getValueDouble ())	// safe check
-		setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
+	if (guidePulseRA->getValueInteger () == 0 && remotesWormStepsFreqTarget->getValueDouble () != trackingStepsFreq ())	// safe check
+		setWormStepsFreq (trackingStepsFreq ());
 
 	readAbsEncoders ();
 	updateWorm ();
@@ -818,6 +869,8 @@ int D50::idle ()
 #endif
 	checkSunApproach ();
 	runD50 ();
+	logServo ();
+	updatePec ();
 	return Fork::idle ();
 }
 
@@ -1314,7 +1367,7 @@ void D50::performGuideRA (int pulseLength)
 	deleteTimers (RTS2_D50_TIMER_GUIDE_RA);
 	if (pulseLength == 0 )	// stop and reset guiding after realization
 	{
-		setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
+		setWormStepsFreq (trackingStepsFreq ());
 		guidePulseRA->setValueInteger (0);
 		sendValueAll (guidePulseRA);
 	}
@@ -1329,14 +1382,14 @@ void D50::performGuideRA (int pulseLength)
 		}
 		wormLog ("P %d 1", pulseLength);
 		if (pulseLength>0)	// increase RA => decrease speed
-			setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble () * (1.0 - guideSpeedRA->getValueDouble ()/100.0));
+			setWormStepsFreq (trackingStepsFreq () * (1.0 - guideSpeedRA->getValueDouble ()/100.0));
 		else			// decrease RA => increase speed
-			setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble () * (1.0 + guideSpeedRA->getValueDouble ()/100.0));
+			setWormStepsFreq (trackingStepsFreq () * (1.0 + guideSpeedRA->getValueDouble ()/100.0));
 		if (abs (pulseLength)<30)
 		{
 			// realize using sleep for shorter intervals
 			usleep (abs(pulseLength) * 1000);
-			setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
+			setWormStepsFreq (trackingStepsFreq ());
 			addTimer (1.0/1000.0, new rts2core::Event (RTS2_D50_TIMER_GUIDE_RA));	// minimal timer interval
 		}
 		else
@@ -1425,6 +1478,15 @@ int D50::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 	{
 		return setWormStepsGenerator (new_value->getValueInteger ());
 	}
+	else if (old_value == pecOn)
+	{
+		if (new_value->getValueInteger () && (pecModel.empty () || wormEncoder == nullptr))
+			return -2;
+		wormLog ("C %d", new_value->getValueInteger () ? 1 : 0);
+		if (!new_value->getValueInteger ())
+			pecOff ();
+		return 0;
+	}
 	else if (old_value == remotesWormStepsFreqDefault)
 	{
 		return setWormStepsFreq (new_value->getValueDouble ());
@@ -1469,6 +1531,7 @@ int D50::scriptEnds ()
 	{
 		moveTurboSwitch->setValueBool (false);
 	}
+	pecFactor->setValueDouble (1.0);
 	setWormStepsFreq (remotesWormStepsFreqDefault->getValueDouble ());
 	return Telescope::scriptEnds ();
 }
@@ -1934,6 +1997,93 @@ void D50::wormLog (const char *fmt, ...)
 	vsnprintf (buf, sizeof (buf), fmt, ap);
 	va_end (ap);
 	wormEncoder->logEvent (buf);
+}
+
+void D50::logServo ()
+{
+	// only while tracking on the step generator: a slew needs the line, and
+	// one read (~10 ms at 19200 Bd) a second is all this costs. idle () runs
+	// at least once a second after a move (setTimeout (USEC_SEC)).
+	if (wormEncoder == nullptr || (getState () & TEL_MOVING) || !raDrive->isInStepperMode ())
+		return;
+	double t0 = getNow ();
+	if (t0 - lastServoLog < 0.95)
+		return;
+	lastServoLog = t0;
+	int32_t pos;
+	try
+	{
+		pos = raDrive->getPositionAct ();
+	}
+	catch (rts2core::Error &e)
+	{
+		// the next info () reports a dead servo; the log just misses a line
+		return;
+	}
+	// S <servo counts> <ms the read took>, then the worm reading: the servo
+	// was read up to that long before the line's time
+	wormLog ("S %d %.0f", pos, (getNow () - t0) * 1000.0);
+}
+
+void D50::pecOff ()
+{
+	pecWest->setValueDouble (NAN);
+	if (pecFactor->getValueDouble () == 1.0)
+		return;
+	pecFactor->setValueDouble (1.0);
+	sendValueAll (pecFactor);
+	sendValueAll (pecWest);
+	// back to the plain step frequency, unless a guide pulse is running (its
+	// end sets trackingStepsFreq ())
+	if (guidePulseRA->getValueInteger () == 0 && remotesWormStepsGenerator->getValueBool ())
+		setWormStepsFreq (trackingStepsFreq ());
+}
+
+void D50::updatePec ()
+{
+	if (!pecOn->getValueBool () || pecModel.empty () || wormEncoder == nullptr
+		|| (getState () & TEL_MOVING) || !raDrive->isInStepperMode ())
+	{
+		pecOff ();
+		return;
+	}
+	double now = getNow ();
+	if (now - lastPecUpdate < 0.95)
+		return;
+	lastPecUpdate = now;
+	WormStatus st = wormEncoder->getStatus ();
+	if (!st.valid)
+	{
+		pecOff ();
+		return;
+	}
+	// the worm angle half a second ahead, the middle of the interval this
+	// frequency holds; the encoder counts down while tracking
+	double rate = std::isfinite (st.rate) ? st.rate : -46753.0;
+	double pos = fmod (st.pos + rate * (now - st.t + 0.5), (double) WORM_COUNTS);
+	if (pos < 0)
+		pos += WORM_COUNTS;
+	double phi = 2 * M_PI * pos / WORM_COUNTS;
+	// HA [h] from the servo position of the last info (), west positive
+	double ha = ln_range_degrees ((double) (raDrive->getPosition () / haCpd) + haZero + 180.0) - 180.0;
+	double w = PecModel::westWeight (ha / 15.0, pecHaEast->getValueDouble (), pecHaWest->getValueDouble ());
+	double f = pecModel.factor (phi, w);
+	if (std::isnan (f))
+	{
+		logStream (MESSAGE_ERROR) << "PEC factor out of range, the correction switched off" << sendLog;
+		pecOn->setValueBool (false);
+		sendValueAll (pecOn);
+		wormLog ("C 0");
+		pecOff ();
+		return;
+	}
+	pecFactor->setValueDouble (f);
+	pecWest->setValueDouble (w);
+	sendValueAll (pecFactor);
+	sendValueAll (pecWest);
+	// a running guide pulse keeps its frequency; its end takes the new factor
+	if (guidePulseRA->getValueInteger () == 0)
+		setWormStepsFreq (trackingStepsFreq ());
 }
 
 int main (int argc, char **argv)
