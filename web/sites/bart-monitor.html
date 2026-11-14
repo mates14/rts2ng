@@ -360,6 +360,51 @@
 
         hr { margin: 10px 0; border: 1px solid var(--border); }
 
+        /* Service commands: the dialog of openService() */
+        .service {
+            position: fixed;
+            inset: 0;
+            z-index: 900;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            overflow-y: auto;
+            padding: 20px 8px;
+            box-sizing: border-box;
+        }
+        .service[hidden] { display: none; }
+        .service-box {
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px 12px 10px;
+            width: 100%;
+            max-width: 480px;
+            box-sizing: border-box;
+        }
+        .service-head { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 14px; margin-bottom: 4px; }
+        .service-close { cursor: pointer; font-size: 22px; line-height: 1; padding: 0 4px; user-select: none; }
+        .service-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 6px 0; border-top: 1px solid var(--border); }
+        .service-row .svc-label { flex: 0 0 85px; font-weight: bold; }
+        .service-row .svc-state { flex: 1 1 auto; color: var(--text-muted); font-size: 11px; }
+        .service-row .svc-hint { flex: 1 1 100%; color: var(--text-muted); font-size: 11px; }
+        .service button, .service select, .service input {
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+        }
+        .service button { cursor: pointer; }
+        .service button:disabled { cursor: default; opacity: 0.45; }
+        .service button.active { background: var(--good); color: white; border-color: var(--good); }
+        .service button.svc-stop { font-weight: bold; color: white; background: #c62828; border-color: #c62828; }
+        .service input { width: 95px; }
+        #svc-msg { margin-top: 6px; min-height: 1.4em; font-size: 11px; white-space: pre-wrap; }
+
         /* Lightbox */
         .lightbox {
             display: none;
@@ -554,6 +599,7 @@
                 <button onclick="openArchive()">image archive</button>
                 <button onclick="toggleDarkMode()">dark mode</button>
                 <button onclick="toggleCompactMode()">compact mode</button>
+                <button onclick="openService()">service commands</button>
             </div>
         </div>
 
@@ -1339,6 +1385,7 @@
             updateServerdStatus();
             updateTelescopeStatus();
             updateDomeStatus();
+            updateServiceState();
             updateCameraStatus();
             updateWeatherStatus();
             drawSkyChart();
@@ -1807,6 +1854,313 @@
             } catch (e) {
                 msg.textContent = `failed to send "${state}": ${e}`;
                 msg.className = 'status-value error';
+            }
+        }
+
+        // Service commands [JS 2026-11-14]: a dialog of the commands and
+        // switches for servicing the site, so that they need no rts2-mon.
+        // Commands go through /api/cmd, which answers once the device has
+        // accepted or refused (a move: when it starts); values through
+        // /api/set, which is fire-and-forget. Both need the login of the
+        // ON/STANDBY/OFF buttons. A refusal's reason the device only logs,
+        // so the device's messages after the request are shown below.
+        // Every action asks first, except the STOP buttons. The moves
+        // still go through the mount's own checks (horizon, ceiling, the
+        // Sun); this only asks for them. Azimuth as the altaz command takes
+        // it, libnova's: 0 = south, 90 = west.
+        const SERVICE = { blockMove: false, pec: false, shutter: null, sunDrying: false, presets: [] };
+        let serviceEl = null;
+
+        function openService() {
+            if (!serviceEl)
+                buildService();
+            serviceEl.hidden = false;
+            // the fans' choice starts at their current power
+            const fan = SERVICE.shutter ? safeValue(systemData[SERVICE.shutter], 'OTAfanPower', null) : null;
+            if (fan !== null)
+                document.getElementById('svc-fan').value = String(fan);
+            updateServiceState();
+        }
+
+        function closeService() {
+            if (serviceEl)
+                serviceEl.hidden = true;
+        }
+
+        function buildService() {
+            const onOff = (key, label) => `
+                <div class="service-row">
+                    <span class="svc-label">${label}</span>
+                    <button data-svc="${key}" data-on="1">on</button>
+                    <button data-svc="${key}" data-on="0">off</button>
+                </div>`;
+            const presets = SERVICE.presets.map((p, i) =>
+                `<button onclick="servicePreset(${i})">${escapeHtml(p.label)}</button>`).join('');
+            const fans = ['off', '1', '2', '3', '4', '5', '6', '7', '8', 'full']
+                .map((f, i) => `<option value="${i}">${f}</option>`).join('');
+            serviceEl = document.createElement('div');
+            serviceEl.className = 'service';
+            serviceEl.hidden = true;
+            serviceEl.innerHTML = `
+                <div class="service-box">
+                    <div class="service-head">Service commands <span class="service-close" title="close (Esc)">&times;</span></div>
+                    <div class="service-row">
+                        <span class="svc-label">Dome</span>
+                        <button onclick="serviceCmd('DOME', 'open', 'Open the dome?')">open</button>
+                        <button onclick="serviceCmd('DOME', 'close', 'Close the dome?')">close</button>
+                        <button class="svc-stop" onclick="serviceCmd('DOME', 'stop')">STOP</button>
+                        <span class="svc-state" id="svc-dome"></span>
+                    </div>
+                    <div class="service-row">
+                        <span class="svc-label">Mount</span>
+                        <button class="svc-stop" onclick="serviceCmd('T0', 'stop')">STOP</button>
+                        <span class="svc-state" id="svc-mount"></span>
+                    </div>
+                    ${onOff('tracking', 'Tracking')}
+                    ${SERVICE.blockMove ? onOff('block_move', 'Block move') : ''}
+                    ${SERVICE.pec ? onOff('pec', 'PEC') : ''}
+                    ${SERVICE.presets.length || SERVICE.sunDrying ? `
+                    <div class="service-row">
+                        <span class="svc-label">Move to</span>
+                        ${presets}
+                        ${SERVICE.sunDrying ? '<button id="svc-drying" onclick="serviceDrying()">Sun drying</button>' : ''}
+                        ${SERVICE.sunDrying ? '<span class="svc-hint">Sun drying: at right angles to the Sun - the opposite azimuth, altitude 90&deg; minus the Sun&#39;s</span>' : ''}
+                    </div>` : ''}
+                    <div class="service-row">
+                        <span class="svc-label">Move to</span>
+                        <select id="svc-sys">
+                            <option value="altaz">alt / az</option>
+                            <option value="radec">RA / Dec</option>
+                            <option value="hadec">HA / Dec</option>
+                        </select>
+                        <input id="svc-c1" placeholder="alt [deg]">
+                        <input id="svc-c2" placeholder="az [deg]">
+                        <button onclick="serviceMove()">move</button>
+                        <span class="svc-hint" id="svc-sys-hint"></span>
+                    </div>
+                    ${SERVICE.shutter ? `
+                    <div class="service-row">
+                        <span class="svc-label">WF shutter</span>
+                        <button data-svc="shutter" data-on="1">open</button>
+                        <button data-svc="shutter" data-on="0">close</button>
+                        <span class="svc-state" id="svc-shutter"></span>
+                    </div>
+                    <div class="service-row">
+                        <span class="svc-label">OTA fans</span>
+                        <select id="svc-fan">${fans}</select>
+                        <button onclick="serviceFan()">set</button>
+                        <span class="svc-state" id="svc-fan-now"></span>
+                    </div>` : ''}
+                    <div id="svc-msg"></div>
+                </div>`;
+            document.body.appendChild(serviceEl);
+            serviceEl.addEventListener('click', e => {
+                if (e.target === serviceEl || e.target.classList.contains('service-close'))
+                    closeService();
+            });
+            for (const b of serviceEl.querySelectorAll('button[data-svc]'))
+                b.addEventListener('click', () => serviceToggle(b.dataset.svc, b.dataset.on === '1'));
+            document.getElementById('svc-sys').addEventListener('change', serviceSysHint);
+            serviceSysHint();
+        }
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && serviceEl && !serviceEl.hidden)
+                closeService();
+        });
+
+        // the switches: the device, the value, and its value for on and off
+        const SERVICE_TOGGLES = {
+            tracking: { device: 'T0', name: 'TRACKING', on: 1, off: 0, what: 'tracking' },
+            block_move: { device: 'T0', name: 'block_move', on: 1, off: 0, what: 'block move' },
+            pec: { device: 'T0', name: 'pec', on: 1, off: 0, what: 'PEC' },
+            shutter: { device: SERVICE.shutter, name: 'WFshutter', on: 1, off: 0, what: 'the WF shutter', onText: 'open', offText: 'close' },
+        };
+
+        function serviceToggle(key, on) {
+            const t = SERVICE_TOGGLES[key];
+            const verb = on ? (t.onText || 'switch on') : (t.offText || 'switch off');
+            serviceSet(t.device, t.name, on ? t.on : t.off, `${verb[0].toUpperCase() + verb.slice(1)} ${t.what}?`);
+        }
+
+        function serviceFan() {
+            const sel = document.getElementById('svc-fan');
+            serviceSet(SERVICE.shutter, 'OTAfanPower', sel.value,
+                `Set the OTA fans to ${sel.options[sel.selectedIndex].text}?`);
+        }
+
+        // The state the dialog shows, from the last status poll: the
+        // switches' buttons lit for their current value.
+        function updateServiceState() {
+            if (!serviceEl || serviceEl.hidden)
+                return;
+            for (const b of serviceEl.querySelectorAll('button[data-svc]')) {
+                const t = SERVICE_TOGGLES[b.dataset.svc];
+                const v = safeValue(systemData[t.device], t.name, null);
+                b.classList.toggle('active', v !== null && (Number(v) !== t.off) === (b.dataset.on === '1'));
+            }
+            const domeState = safeValue(systemData.DOME, 'state', null);
+            document.getElementById('svc-dome').textContent = domeState === null ? 'state unknown'
+                : ({ 1: 'closed', 2: 'opening', 4: 'open', 8: 'closing' })[domeState & 0x0f] || 'between';
+            const telState = safeValue(systemData.T0, 'state', null);
+            const [alt, az] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
+            document.getElementById('svc-mount').textContent = (telState === null ? 'state unknown'
+                : ({ 0: 'at rest or tracking', 1: 'moving', 2: 'parked', 4: 'parking' })[telState & 0x07] || 'between')
+                + (Number.isFinite(alt) ? `, alt ${alt.toFixed(1)}° az ${az.toFixed(1)}°` : '');
+            if (SERVICE.shutter) {
+                const fan = safeValue(systemData[SERVICE.shutter], 'OTAfanPower', null);
+                const shut = safeValue(systemData[SERVICE.shutter], 'WFshutter', null);
+                document.getElementById('svc-shutter').textContent = shut === null ? '' : shut == 1 ? 'open' : 'closed';
+                document.getElementById('svc-fan-now').textContent = fan === null ? '' : `now ${fan == 0 ? 'off' : fan == 9 ? 'full' : fan}`;
+            }
+            if (SERVICE.sunDrying) {
+                const p = sunDryingPosition();
+                const b = document.getElementById('svc-drying');
+                b.disabled = !p;
+                b.textContent = p ? `Sun drying (alt ${p.alt.toFixed(0)} az ${p.az.toFixed(0)})` : 'Sun drying (the Sun is down)';
+            }
+        }
+
+        // At right angles to the Sun: its azimuth turned by 180 deg, the
+        // altitude 90 deg minus its altitude. Null while it is down.
+        function sunDryingPosition() {
+            if (!horizonInfo)
+                return null;
+            const jd = julianDate(new Date());
+            const sun = sunEquatorial(jd);
+            const lst = normDeg(gmstDeg(jd) + horizonInfo.lon);
+            const s = equToHrz(lst - sun.ra, sun.dec, horizonInfo.lat);
+            if (s.alt <= 0)
+                return null;
+            return { alt: 90 - s.alt, az: normDeg(s.az + 180) };
+        }
+
+        function servicePreset(i) {
+            const p = SERVICE.presets[i];
+            serviceCmd('T0', p.cmd, `Move T0: ${p.cmd}?`);
+        }
+
+        function serviceDrying() {
+            const p = sunDryingPosition();
+            if (!p)
+                return;
+            const cmd = `altaz ${p.alt.toFixed(2)} ${p.az.toFixed(2)}`;
+            serviceCmd('T0', cmd, `Move T0 to the Sun drying position: ${cmd}?`);
+        }
+
+        const SERVICE_SYSTEMS = {
+            altaz: { names: ['alt [deg]', 'az [deg]'], hint: 'degrees (12.5 or 12:30:00); azimuth from the south through the west, 0 = S, 90 = W, 180 = N' },
+            radec: { names: ['RA [h]', 'Dec [deg]'], hint: 'RA in hours, Dec in degrees (12.5 or 12:30:00); J2000, tracking afterwards' },
+            hadec: { names: ['HA [h]', 'Dec [deg]'], hint: 'HA in hours, + west of the meridian; Dec in degrees (12.5 or 12:30:00)' },
+        };
+
+        function serviceSysHint() {
+            const s = SERVICE_SYSTEMS[document.getElementById('svc-sys').value];
+            document.getElementById('svc-c1').placeholder = s.names[0];
+            document.getElementById('svc-c2').placeholder = s.names[1];
+            document.getElementById('svc-sys-hint').textContent = s.hint;
+        }
+
+        // "12.5", "12:30:00", "12 30", "-0:30" -> 12.5, 12.5, 12.5, -0.5
+        function parseSexagesimal(text) {
+            const s = String(text).trim();
+            if (!/^[+-]?\d+(\.\d*)?([: ]\d+(\.\d*)?){0,2}$/.test(s))
+                return NaN;
+            const neg = s.startsWith('-');
+            const parts = s.replace(/^[+-]/, '').split(/[: ]/).map(Number);
+            const v = parts.reduce((a, p, i) => a + p / Math.pow(60, i), 0);
+            return neg ? -v : v;
+        }
+
+        // The commands take plain numbers as degrees, so the hours are
+        // converted here, never left to the daemon's parser.
+        function serviceMove() {
+            const sys = document.getElementById('svc-sys').value;
+            const a = parseSexagesimal(document.getElementById('svc-c1').value);
+            const b = parseSexagesimal(document.getElementById('svc-c2').value);
+            const msg = document.getElementById('svc-msg');
+            const bad = text => { msg.className = 'error'; msg.textContent = text; };
+            if (!Number.isFinite(a) || !Number.isFinite(b))
+                return bad('two numbers are needed, e.g. 45.5 or 45:30:00');
+            let cmd, text;
+            if (sys === 'altaz') {
+                if (a < -90 || a > 90 || b < 0 || b >= 360)
+                    return bad('alt must be -90..90, az 0..360');
+                cmd = `altaz ${a.toFixed(4)} ${b.toFixed(4)}`;
+                text = `alt ${a.toFixed(2)}°, az ${b.toFixed(2)}° (from the south)`;
+            } else {
+                if (b < -90 || b > 90)
+                    return bad('Dec must be -90..90');
+                if (sys === 'radec' && (a < 0 || a >= 24) || sys === 'hadec' && (a < -12 || a > 12))
+                    return bad(sys === 'radec' ? 'RA must be 0..24 h' : 'HA must be -12..12 h');
+                cmd = `${sys === 'radec' ? 'move' : 'hadec'} ${(a * 15).toFixed(5)} ${b.toFixed(5)}`;
+                text = `${sys === 'radec' ? 'RA' : 'HA'} ${a.toFixed(4)} h, Dec ${b.toFixed(4)}°`;
+            }
+            serviceCmd('T0', cmd, `Move T0 to ${text}?`);
+        }
+
+        function serviceMsg(cls, text) {
+            const msg = document.getElementById('svc-msg');
+            msg.className = cls;
+            msg.textContent = text;
+        }
+
+        async function serviceCmd(device, cmd, question) {
+            if (question && !confirm(question))
+                return;
+            const since = Date.now() / 1000 - 1;
+            serviceMsg('', `${device}: sending "${cmd}"...`);
+            try {
+                const res = await fetch(`${API_BASE}/cmd?d=${encodeURIComponent(device)}&c=${encodeURIComponent(cmd)}`);
+                if (res.status === 401)
+                    return serviceMsg('error', 'not authorized (login required for this action)');
+                const ans = await res.json();
+                if (ans.ok)
+                    serviceMsg('good', `${device}: "${cmd}" accepted`);
+                else
+                    serviceMsg('error', `${device}: "${cmd}" refused${ans.error ? ': ' + ans.error : ''}`);
+            } catch (e) {
+                return serviceMsg('error', `${device}: "${cmd}" failed: ${e}`);
+            }
+            updateStatus().then(updateServiceState).catch(e => console.error(e));
+            serviceDeviceLog(device, since);
+        }
+
+        async function serviceSet(device, name, value, question) {
+            if (question && !confirm(question))
+                return;
+            const since = Date.now() / 1000 - 1;
+            serviceMsg('', `${device}: setting ${name} to ${value}...`);
+            try {
+                const res = await fetch(`${API_BASE}/set?d=${encodeURIComponent(device)}&n=${encodeURIComponent(name)}&v=${encodeURIComponent(value)}`);
+                if (res.status === 401)
+                    return serviceMsg('error', 'not authorized (login required for this action)');
+                const ans = await res.json();
+                if (ans.error)
+                    return serviceMsg('error', `${device}: cannot set ${name}: ${ans.error}`);
+                serviceMsg('good', `${device}: ${name} = ${value} sent`);
+            } catch (e) {
+                return serviceMsg('error', `${device}: setting ${name} failed: ${e}`);
+            }
+            setTimeout(() => updateStatus().then(updateServiceState).catch(e => console.error(e)), 1000);
+            serviceDeviceLog(device, since);
+        }
+
+        // The device's errors, warnings and infos since the request, a
+        // second and a half later: why a move was refused, or what it did.
+        async function serviceDeviceLog(device, since) {
+            await new Promise(r => setTimeout(r, 1500));
+            try {
+                const res = await fetch(`${API_BASE}/messages`);
+                const list = (await res.json())
+                    .filter(m => m.device === device && m.time >= since && (m.type & 0x17))
+                    .slice(-5);
+                if (!list.length)
+                    return;
+                const msg = document.getElementById('svc-msg');
+                msg.textContent += '\n' + list.map(m => `${hhmmss(m.time * 1000)} ${m.text}`).join('\n');
+            } catch (e) {
+                console.error(e);
             }
         }
 

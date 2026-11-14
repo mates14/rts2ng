@@ -4065,3 +4065,30 @@ After a first look at the live page with JS:
 
 Open: a demo plan for priority tuning (a scheduler run that writes
 nowhere live). That needs a dry-run mode in the scheduler first.
+
+## Monitor pages: service commands; PEC on D50 (2026-11-14) [JS]
+
+A "service commands" button opens a dialog (both pages): dome open/close,
+tracking on/off, a generic move (alt/az, RA/Dec, HA/Dec), and STOP for the
+dome and the mount; at D50 also block move, PEC, preset moves (altaz 2 45,
+2 330, 2 260, 0 90, 0 270), the Sun drying position (at right angles to
+the Sun: the opposite azimuth, altitude 90 deg minus the Sun's; only while
+it is up), the WF shutter and the OTA fans (SHUTTER1). Commands through
+/api/cmd, values through /api/set, the same login as ON/STANDBY/OFF.
+Everything asks first except the STOPs. A refusal's reason the device only
+logs, so its messages after the request are shown. The page sends RA and
+HA converted to degrees: the daemons take a plain number as degrees and
+h:m:s as hours. Azimuth is libnova's (0 = S, 90 = W), as `altaz` takes it.
+The moves go through the mount's own checks; the page does not check
+horizon, ceiling or the Sun.
+
+D50's status shows PEC (T0 `pec`) between Tracking and block move.
+
+Tested in headless Chromium against both sites' live API, with every
+write answered by the test proxy (nothing sent): each button sends the
+command or value above, invalid coordinates are refused in the page, the
+drying position for 2026-11-14 11:00 UT (Sun alt 21.7 az 3.8) is alt 68.3
+az 183.8. Not tested: a real write, so the login and the devices' answers.
+
+Next: the click-to-move map with the allowed areas (D50's hard horizon and
+ceiling), which needs rts2-httpd to serve T0's horizon files.
