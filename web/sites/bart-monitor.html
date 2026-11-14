@@ -1920,13 +1920,13 @@
                     ${onOff('tracking', 'Tracking')}
                     ${SERVICE.blockMove ? onOff('block_move', 'Block move') : ''}
                     ${SERVICE.pec ? onOff('pec', 'PEC') : ''}
-                    ${SERVICE.presets.length || SERVICE.sunDrying ? `
                     <div class="service-row">
                         <span class="svc-label">Move to</span>
+                        <button onclick="serviceCmd('T0', 'park', 'Park T0?')">park</button>
                         ${presets}
                         ${SERVICE.sunDrying ? '<button id="svc-drying" onclick="serviceDrying()">Sun drying</button>' : ''}
                         ${SERVICE.sunDrying ? '<span class="svc-hint">Sun drying: at right angles to the Sun - the opposite azimuth, altitude 90&deg; minus the Sun&#39;s</span>' : ''}
-                    </div>` : ''}
+                    </div>
                     <div class="service-row">
                         <span class="svc-label">Move to</span>
                         <select id="svc-sys">

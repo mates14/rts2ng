@@ -4138,4 +4138,5 @@ SBT: the site horizon only. A real move from the map worked on D50
 merged with the ceiling's under a closed roof, and JS saw only the site
 horizon), and for orientation the stars to 4 mag (bsc-stars.json, as the
 sky chart) and the Moon. Altitude circles every 15 deg, as on the sky
-chart.
+chart. "park" first in the "Move to" row, on both sites (the
+mount's own park position, COMMAND_TELD_PARK; asks first).
