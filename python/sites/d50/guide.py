@@ -64,9 +64,11 @@ LEVELS_RE = re.compile(r'Fitted parameters: A=(\S+?), B=(\S+?), C=(\S+?) ')
 
 # Kept frames are sorted into per-night directories named the way RTS2
 # names nights (%N: the UT date at the start of the night, boundary near
-# local noon). The first frame of a new night deletes the older ones -
-# they are debugging material, not data. 1 = keep tonight only.
-KEEP_NIGHTS = 1
+# local noon). The first frame of a new night deletes the older ones.
+# 30 nights (~70 MB each): their headers (DATE-OBS, GUIDE_DX, PULSE_RA)
+# are the guide log the D50 PEC fit needs, kept longer than the journal
+# [JS 2026-11-14]. 1 = keep tonight only.
+KEEP_NIGHTS = 30
 
 # Longitude, in degrees east, only for that night boundary - the same
 # utOffset Configuration::getNight() uses (see base/kernel: night =
