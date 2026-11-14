@@ -2160,3 +2160,17 @@ target 2 again until the night, the darks (target 1) never came.
 rts2ng: a device that runs a script ignores the target attached to
 `EVENT_SCRIPT_ENDED`; when its script ends, the executor decides with the
 queue as it is then.
+
+## A command keeps a deleted device client as its originator (`lib/rts2/command.cpp`) [JS 2026-11-14]
+
+A device script's command for another device (`T0.WOFFS=...` in C0's
+script) is queued on that device's connection with the script's device
+client (`DevClientCameraExec`) as its originator. When the scripting device
+leaves, its connection and the client are deleted;
+`Command::deleteConnection` only clears an originator equal to the
+connection itself, so the command keeps the freed client, and the reply
+(`commandReturnOK`/`Failed`) posts an event to it. D50 2026-11-14: C0
+died while its WOFFS was on T0, EXEC segfaulted on T0's reply 2 s later.
+
+rts2ng: `Command::deleteConnection` also clears the originator when it is
+the deleted connection's device client.

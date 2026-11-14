@@ -133,7 +133,13 @@ int Command::commandReturnFailed (int status, Connection * conn)
 
 void Command::deleteConnection (Connection * conn)
 {
-	if (conn == originator)
+	// base note: classic cleared the originator only when it was the
+	// deleted connection itself. A device's script queues commands for other
+	// devices (C0's "T0.WOFFS=..." on T0) with the device client as the
+	// originator (DevClientCameraExec, execcli.cpp), and the client is deleted
+	// with its connection; T0's reply then posted an event to freed memory
+	// (D50 EXEC, 2026-11-14).
+	if (originator && (originator == conn || originator == conn->getOtherDevClient ()))
 		originator = nullptr;
 }
 

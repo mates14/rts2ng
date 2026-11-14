@@ -5393,3 +5393,26 @@ darks in ~40 s). ctest db and base 15/15 each; hardened build clean.
 Also seen that dusk, not touched: the first flat came after the slew
 (obs start 15:49:22, first flat 15:49:25 - cc81471 works on the mount);
 QUEUE sent `next 8031` every 5 s while target 1159 was ending (16:30).
+
+## Executor: a command outlives the device whose script sent it (2026-11-14) [JS]
+
+D50 2026-11-14, after the 8548677 upgrade: EXEC restarted at 21:37:07, ran
+target 1050 (C0 `for 5 { T0.WOFFS=(...) filter=r E 20 ... }`, C1 guiding).
+At 21:37:11 C0 (the Andor daemon from 14:24) closed its connections without
+a word - cause unknown, any core it left was overwritten by EXEC's, both
+`core` in /root. At 21:37:13 EXEC segfaulted in
+`Command::commandReturnOK` (core + MJ's unstripped build, the same build
+ID): T0 answered the `T0.WOFFS` that C0's script had sent, and the
+command's originator was C0's `DevClientCameraExec`, deleted with C0's
+connection. `Command::deleteConnection` cleared the originator only when it
+was the connection itself (classic, UPSTREAM_BUGS "A command keeps a deleted
+device client"). Now it also clears it when it is the deleted connection's
+device client. Restarted by hand at 21:38 (no C0 then) and C0 at 21:44,
+both running fine.
+
+Bench (lascaux, test database: centrald, dummy T0/C0/C1/C2, executor under
+gdb; target 1 C0 `E 1 T0.WOFFS=(0.01,0.01) E 20`, C1 `E 2`; `now 1`, T0
+SIGSTOPped at 1.5 s so the WOFFS waits, C0 killed at 4 s, T0 continued at
+6 s). Before: SIGSEGV in `Command::commandReturnOK` on T0's reply, the
+D50 stack. With the fix: T0's offset done, EXEC goes on with C1. ctest base
+15/15; hardened compile clean.
