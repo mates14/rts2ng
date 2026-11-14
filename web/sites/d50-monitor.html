@@ -414,6 +414,7 @@
         .service button.active { background: var(--good); color: white; border-color: var(--good); }
         .service button.svc-stop { font-weight: bold; color: white; background: #c62828; border-color: #c62828; }
         .service input { width: 95px; }
+        #svc-map { display: block; width: 100%; max-width: 420px; aspect-ratio: 1; margin: 0 auto; cursor: crosshair; }
         #svc-msg { margin-top: 6px; min-height: 1.4em; font-size: 11px; white-space: pre-wrap; }
 
         /* Lightbox */
@@ -2578,6 +2579,8 @@
             pec: true,
             shutter: 'SHUTTER1',        // the WF shutter and the OTA fans
             sunDrying: true,
+            // D50Path's SUN_AVOID_DISTANCE and SUN_AVOID_ALTITUDE (base/teld/d50/d50path.h)
+            sunAvoid: { distance: 15, minAlt: -0.833 },
             // dew: low, so that what drops inside the tube misses the mirror
             presets: ['altaz 2 45', 'altaz 2 330', 'altaz 2 260', 'altaz 0 90', 'altaz 0 270']
                 .map(cmd => ({ label: cmd.replace(/^altaz (\S+) (\S+)$/, 'alt $1 az $2'), cmd })),
@@ -2651,6 +2654,10 @@
                         <button onclick="serviceMove()">move</button>
                         <span class="svc-hint" id="svc-sys-hint"></span>
                     </div>
+                    <div class="service-row">
+                        <canvas id="svc-map"></canvas>
+                        <span class="svc-hint" id="svc-map-hint"></span>
+                    </div>
                     ${SERVICE.shutter ? `
                     <div class="service-row">
                         <span class="svc-label">WF shutter</span>
@@ -2675,6 +2682,10 @@
                 b.addEventListener('click', () => serviceToggle(b.dataset.svc, b.dataset.on === '1'));
             document.getElementById('svc-sys').addEventListener('change', serviceSysHint);
             serviceSysHint();
+            document.getElementById('svc-map').addEventListener('click', serviceMapClick);
+            for (const id of ['svc-sys', 'svc-c1', 'svc-c2'])
+                document.getElementById(id).addEventListener(id === 'svc-sys' ? 'change' : 'input', serviceMapFromInputs);
+            window.addEventListener('resize', drawServiceMap);
         }
 
         document.addEventListener('keydown', e => {
@@ -2732,6 +2743,7 @@
                 b.disabled = !p;
                 b.textContent = p ? `Sun drying (alt ${p.alt.toFixed(0)} az ${p.az.toFixed(0)})` : 'Sun drying (the Sun is down)';
             }
+            drawServiceMap();
         }
 
         // At right angles to the Sun: its azimuth turned by 180 deg, the
@@ -2810,6 +2822,282 @@
                 text = `${sys === 'radec' ? 'RA' : 'HA'} ${a.toFixed(4)} h, Dec ${b.toFixed(4)}°`;
             }
             serviceCmd('T0', cmd, `Move T0 to ${text}?`);
+        }
+
+        // The move map [JS 2026-11-14]: the sky as the mount may reach it,
+        // from the zenith down to SERVICE_MAP_MIN_ALT, North up, East on
+        // the left as on the sky chart. Red where the mount refuses to
+        // end: under its hard horizon, over its ceiling while
+        // inside_dome_limit holds (the roof is not open), and near the Sun
+        // while it is up and the ceiling does not hold - the rules of
+        // D50Path (base/teld/d50/d50path.cpp). The limits come from
+        // /api/horizon (hardHorizon, ceiling: rts2.ini's [observatory]
+        // hard_horizon and ceiling); without them the map shows only the
+        // site's horizon and judges nothing. A click fills in alt/az for
+        // "move"; the mount still checks the whole way, the map only the
+        // end.
+        const SERVICE_MAP_MIN_ALT = 0;
+        let serviceMapPick = null;      // {alt, az} clicked, libnova az
+
+        // ObjectCheck::getHorizonHeight (): linear in azimuth between the
+        // nodes, wrapping from the last to the first; 0 without nodes
+        function horizonHeight(nodes, az) {
+            if (!nodes || !nodes.length)
+                return 0;
+            if (nodes.length === 1)
+                return nodes[0][1];
+            az = normDeg(az);
+            for (let i = 0; i < nodes.length; i++) {
+                const [az1, alt1] = nodes[i];
+                const [az2, alt2] = nodes[(i + 1) % nodes.length];
+                const span = normDeg(az2 - az1);
+                if (span === 0)         // a vertical step
+                    continue;
+                const d = normDeg(az - az1);
+                if (d <= span)
+                    return alt1 + (alt2 - alt1) * d / span;
+            }
+            return nodes[0][1];
+        }
+
+        function angularDistance(alt1, az1, alt2, az2) {
+            const r = Math.PI / 180;
+            const c = Math.sin(alt1 * r) * Math.sin(alt2 * r) + Math.cos(alt1 * r) * Math.cos(alt2 * r) * Math.cos((az1 - az2) * r);
+            return Math.acos(Math.max(-1, Math.min(1, c))) / r;
+        }
+
+        // the limits now: which hold, and where the Sun is
+        function serviceMapLimits() {
+            const info = horizonInfo || {};
+            const hard = info.hardHorizon && info.hardHorizon.length ? info.hardHorizon : null;
+            const ceiling = info.ceiling && info.ceiling.length ? info.ceiling : null;
+            const ceilingHolds = !!ceiling && safeValue(systemData.T0, 'inside_dome_limit', 0) == 1;
+            let sun = null;
+            if (horizonInfo) {
+                const jd = julianDate(new Date());
+                const s = sunEquatorial(jd);
+                sun = equToHrz(normDeg(gmstDeg(jd) + horizonInfo.lon) - s.ra, s.dec, horizonInfo.lat);
+            }
+            const sunHolds = !!SERVICE.sunAvoid && !!sun && !ceilingHolds && sun.alt > SERVICE.sunAvoid.minAlt;
+            return { hard, ceiling, ceilingHolds, sun, sunHolds };
+        }
+
+        // why the mount would refuse to end at alt/az, or null
+        function serviceMapRefusal(alt, az, lim) {
+            if (lim.hard && alt <= horizonHeight(lim.hard, az))
+                return 'below the mount\'s hard horizon';
+            if (lim.ceilingHolds && alt > horizonHeight(lim.ceiling, az))
+                return 'above the ceiling (the roof is not open)';
+            if (lim.sunHolds) {
+                const d = angularDistance(alt, az, lim.sun.alt, lim.sun.az);
+                if (d < SERVICE.sunAvoid.distance)
+                    return `${d.toFixed(1)}° from the Sun (the limit is ${SERVICE.sunAvoid.distance}°)`;
+            }
+            return null;
+        }
+
+        function serviceMapGeometry(canvas) {
+            const size = canvas.width;
+            const margin = 14;
+            return { cx: size / 2, cy: size / 2, R: size / 2 - margin };
+        }
+
+        function serviceMapProject(g, alt, az) {
+            const r = g.R * Math.min(1, (90 - alt) / (90 - SERVICE_MAP_MIN_ALT));
+            const a = normDeg(az + 180) * Math.PI / 180;
+            return { x: g.cx - r * Math.sin(a), y: g.cy - r * Math.cos(a) };
+        }
+
+        function drawServiceMap() {
+            const canvas = document.getElementById('svc-map');
+            if (!canvas || !serviceEl || serviceEl.hidden)
+                return;
+            const size = Math.round(canvas.clientWidth * (window.devicePixelRatio || 1));
+            if (size > 0 && canvas.width !== size)
+                canvas.width = canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const g = serviceMapGeometry(canvas);
+            const scale = canvas.width / (canvas.clientWidth || canvas.width);
+            const lim = serviceMapLimits();
+            const dark = document.body.classList.contains('dark');
+            const forbid = 'rgba(220, 40, 40, 0.45)';
+            const path = (pts, close = true) => {
+                ctx.beginPath();
+                pts.forEach(([az, alt], i) => {
+                    const p = serviceMapProject(g, alt, az);
+                    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                if (close)
+                    ctx.closePath();
+            };
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = dark ? '#05070d' : '#4a7fc9';
+            ctx.beginPath();
+            ctx.arc(g.cx, g.cy, g.R, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // under the hard horizon: the rim minus the outline
+            if (lim.hard) {
+                ctx.beginPath();
+                ctx.arc(g.cx, g.cy, g.R, 0, 2 * Math.PI);
+                horizonOutline(lim.hard).forEach(([az, alt], i) => {
+                    const p = serviceMapProject(g, alt, az);
+                    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                ctx.closePath();
+                ctx.fillStyle = forbid;
+                ctx.fill('evenodd');
+            }
+            // over the ceiling: inside its outline; dashed while it does not hold
+            if (lim.ceiling) {
+                path(horizonOutline(lim.ceiling));
+                if (lim.ceilingHolds) {
+                    ctx.fillStyle = forbid;
+                    ctx.fill();
+                }
+                ctx.setLineDash(lim.ceilingHolds ? [] : [6 * scale, 4 * scale]);
+                ctx.strokeStyle = 'rgba(255, 170, 60, 0.9)';
+                ctx.lineWidth = 1.2 * scale;
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // grid: altitude circles, 0 deg stronger; azimuth every 30 deg
+            ctx.lineWidth = 1 * scale;
+            for (const alt of [60, 30, 0]) {
+                const r = g.R * (90 - alt) / (90 - SERVICE_MAP_MIN_ALT);
+                ctx.strokeStyle = alt === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.18)';
+                ctx.beginPath();
+                ctx.arc(g.cx, g.cy, r, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+            for (let az = 0; az < 360; az += 30) {
+                const p = serviceMapProject(g, SERVICE_MAP_MIN_ALT, az);
+                ctx.beginPath();
+                ctx.moveTo(g.cx, g.cy);
+                ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+            }
+            // the site's horizon (the scheduler's), a line only
+            if (horizonInfo && horizonInfo.horizon && horizonInfo.horizon.length > 2) {
+                path(horizonOutline(horizonInfo.horizon));
+                ctx.strokeStyle = dark ? '#c08030' : '#2d5a26';
+                ctx.lineWidth = 1.5 * scale;
+                ctx.stroke();
+            }
+            ctx.fillStyle = dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.75)';
+            ctx.font = `${11 * scale}px Arial, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            for (const [label, az] of [['S', 0], ['W', 90], ['N', 180], ['E', 270]]) {
+                const r = g.R + 7 * scale;
+                const a = normDeg(az + 180) * Math.PI / 180;
+                ctx.fillText(label, g.cx - r * Math.sin(a), g.cy - r * Math.cos(a));
+            }
+            ctx.fillStyle = 'rgba(255,255,255,0.45)';
+            ctx.font = `${9 * scale}px Arial, sans-serif`;
+            for (const alt of [60, 30, 0]) {
+                const r = g.R * (90 - alt) / (90 - SERVICE_MAP_MIN_ALT);
+                ctx.fillText(`${alt}°`, g.cx + 3 * scale, g.cy - r + 7 * scale);
+            }
+
+            // the Sun, and its zone when it holds
+            if (lim.sun && lim.sun.alt > SERVICE_MAP_MIN_ALT) {
+                if (SERVICE.sunAvoid) {
+                    const d = SERVICE.sunAvoid.distance * Math.PI / 180;
+                    const a1 = lim.sun.alt * Math.PI / 180, z1 = lim.sun.az * Math.PI / 180;
+                    const ring = [];
+                    for (let k = 0; k <= 72; k++) {
+                        const b = k * 2 * Math.PI / 72;
+                        const a2 = Math.asin(Math.sin(a1) * Math.cos(d) + Math.cos(a1) * Math.sin(d) * Math.cos(b));
+                        const z2 = z1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(a1), Math.cos(d) - Math.sin(a1) * Math.sin(a2));
+                        ring.push([z2 * 180 / Math.PI, a2 * 180 / Math.PI]);
+                    }
+                    path(ring);
+                    if (lim.sunHolds) {
+                        ctx.fillStyle = forbid;
+                        ctx.fill();
+                    } else {
+                        ctx.setLineDash([4 * scale, 3 * scale]);
+                        ctx.strokeStyle = 'rgba(255, 210, 60, 0.8)';
+                        ctx.lineWidth = 1 * scale;
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                    }
+                }
+                const p = serviceMapProject(g, lim.sun.alt, lim.sun.az);
+                ctx.fillStyle = '#ffd23c';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 5 * scale, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+
+            // the telescope now: a red ring; the pick: a white cross
+            const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
+            if (Number.isFinite(telAlt) && Number.isFinite(telAz)) {
+                const p = serviceMapProject(g, telAlt, telAz);
+                ctx.strokeStyle = '#ff4040';
+                ctx.lineWidth = 2 * scale;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 6 * scale, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            if (serviceMapPick) {
+                const p = serviceMapProject(g, serviceMapPick.alt, serviceMapPick.az);
+                const s = 7 * scale;
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2 * scale;
+                ctx.beginPath();
+                ctx.moveTo(p.x - s, p.y); ctx.lineTo(p.x + s, p.y);
+                ctx.moveTo(p.x, p.y - s); ctx.lineTo(p.x, p.y + s);
+                ctx.stroke();
+            }
+            serviceMapHint(lim);
+        }
+
+        function serviceMapHint(lim) {
+            const el = document.getElementById('svc-map-hint');
+            const judged = lim.hard || lim.ceiling || SERVICE.sunAvoid;
+            if (!serviceMapPick) {
+                el.className = 'svc-hint';
+                el.textContent = 'Click the map to choose a position, then "move". '
+                    + (judged ? 'Red: where the mount refuses to end. ' : 'The mount\'s limits are not known here. ')
+                    + 'Red ring: the telescope now.';
+                return;
+            }
+            const why = judged ? serviceMapRefusal(serviceMapPick.alt, serviceMapPick.az, lim) : null;
+            el.className = 'svc-hint ' + (why ? 'error' : judged ? 'good' : '');
+            el.textContent = `alt ${serviceMapPick.alt.toFixed(1)}°, az ${serviceMapPick.az.toFixed(1)}° (from the south): `
+                + (why ? `refused - ${why}` : judged ? 'allowed as the end of a move; the mount checks the way' : 'not judged here');
+        }
+
+        function serviceMapClick(ev) {
+            const canvas = ev.currentTarget;
+            const rect = canvas.getBoundingClientRect();
+            const scale = canvas.width / rect.width;
+            const g = serviceMapGeometry(canvas);
+            const dx = (ev.clientX - rect.left) * scale - g.cx, dy = (ev.clientY - rect.top) * scale - g.cy;
+            const alt = 90 - Math.hypot(dx, dy) / g.R * (90 - SERVICE_MAP_MIN_ALT);
+            if (alt < SERVICE_MAP_MIN_ALT)
+                return;
+            const az = normDeg(Math.atan2(-dx, -dy) * 180 / Math.PI - 180);
+            serviceMapPick = { alt, az };
+            document.getElementById('svc-sys').value = 'altaz';
+            serviceSysHint();
+            document.getElementById('svc-c1').value = alt.toFixed(1);
+            document.getElementById('svc-c2').value = az.toFixed(1);
+            drawServiceMap();
+        }
+
+        // typed alt/az moves the cross too
+        function serviceMapFromInputs() {
+            const a = parseSexagesimal(document.getElementById('svc-c1').value);
+            const b = parseSexagesimal(document.getElementById('svc-c2').value);
+            serviceMapPick = document.getElementById('svc-sys').value === 'altaz' && Number.isFinite(a) && Number.isFinite(b)
+                ? { alt: a, az: normDeg(b) } : null;
+            drawServiceMap();
         }
 
         function serviceMsg(cls, text) {

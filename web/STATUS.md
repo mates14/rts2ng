@@ -4092,3 +4092,43 @@ az 183.8. Not tested: a real write, so the login and the devices' answers.
 
 Next: the click-to-move map with the allowed areas (D50's hard horizon and
 ceiling), which needs rts2-httpd to serve T0's horizon files.
+
+## Monitor pages: the move map; /api/horizon with the mount's limits (2026-11-14) [JS]
+
+The service dialog has a map of the sky from the zenith to 0 deg alt
+(where the hard horizon dips below 0 it only lets old moves through; no
+one should send the telescope there, so the map does not offer it),
+North up, East left as on the sky chart. A click fills alt/az for "move"
+(which still asks); typed alt/az moves the cross. Red where the mount
+refuses to end a move, by D50Path's rules (base/teld/d50/d50path.cpp):
+under the hard horizon always; over the ceiling while T0's
+inside_dome_limit holds; within 15 deg of the Sun while it is above -0.833
+deg and the ceiling does not hold (SUN_AVOID_DISTANCE, SUN_AVOID_ALTITUDE,
+copied into the page's SERVICE.sunAvoid: keep them in step). The
+interpolation is ObjectCheck::getHorizonHeight's. The map judges only the
+end; the mount checks the whole way. Without the limits (SBT: its T0 has
+none of its own) it shows the site horizon and judges nothing.
+
+rts2-httpd: `/api/horizon` adds `hardHorizon` and `ceiling` ([[az, alt]],
+libnova azimuth, [] when not set), loaded from rts2.ini, which must name
+the files the mount driver takes as --horizon and --ceiling; httpd cannot
+see the driver's options. A file that does not load is a warning, the
+rest works. D50 needs, in /etc/rts2/rts2.ini:
+
+    [observatory]
+    hard_horizon = "/etc/rts2/horizon-hard"
+    ceiling = "/etc/rts2/horizon-ceiling"
+
+Note: the no-DB build of rts2-httpd never loads rts2.ini (only DeviceDb
+does), so there /api/horizon is lat 0 and empty, as before.
+
+Tested: the test rts2-httpd on lascaux (DB build, GCC 12, no warnings;
+also built here with dpkg-buildflags, no warnings) with D50's two files
+gives 19 and 24 nodes, a missing file a warning and []. The D50 page in
+headless Chromium on D50's live API with that /api/horizon, writes
+answered by the proxy: the heights at az 0/170/175/330 are -6, 59.5,
+60.035, -1.946 as ObjectCheck gives them; a click on alt 30 az 90 fills
+30.0/90.0; closed roof: alt 20 az 100 over the ceiling, alt 5 az 100 under
+the hard horizon, the Sun not checked; open roof at noon: 5 deg from the
+Sun refused, 20 deg allowed, alt 55 to the north under the hard horizon.
+SBT: the site horizon only. Not tested: a real move from the map.

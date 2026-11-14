@@ -460,6 +460,14 @@ class HttpD:public HttpDBase
 		std::string authFile;
 		UserLogins userLogins;
 
+		// The mount's own limits, for the monitor pages' move map: the
+		// files its driver takes as --horizon and --ceiling, named again
+		// in rts2.ini ([observatory] hard_horizon, ceiling), as httpd
+		// cannot see the driver's options. Empty when not named.
+		// [JS 2026-11-14]
+		ObjectCheck hardHorizon;
+		ObjectCheck ceiling;
+
 		// STATUS.md task 8: the static frontend (web/static/) - served by
 		// the daemon itself directly, matching the "daemon is fully
 		// self-sufficient, proxy is opportunistic, not required"
@@ -946,6 +954,18 @@ int HttpD::init ()
 
 	if (!staticDir.empty ())
 		logStream (MESSAGE_INFO) << "serving static frontend from " << staticDir << sendLog;
+
+	// a file that does not load leaves its map empty, the rest works
+	for (auto [key, check] : { std::make_pair ("hard_horizon", &hardHorizon), std::make_pair ("ceiling", &ceiling) })
+	{
+		std::string file = Configuration::instance ()->getStringDefault ("observatory", key, "-");
+		if (file == "-")
+			continue;
+		if (check->loadHorizon (file.c_str ()))
+			logStream (MESSAGE_WARNING) << "cannot load [observatory] " << key << " " << file << ", the move map goes without it" << sendLog;
+		else
+			logStream (MESSAGE_INFO) << "move map " << key << " from " << file << sendLog;
+	}
 
 	// MHD_ALLOW_UPGRADE is required for MHD_create_response_for_upgrade()/
 	// MHD_UPGRADE_ACTION to work at all (STATUS.md task 4, WebSocket) -
@@ -2759,17 +2779,22 @@ MHD_Result HttpD::handleRequest (struct MHD_Connection *connection, const char *
 				<< ",\"alt\":" << Configuration::instance ()->getObservatoryAltitude ()
 				<< ",\"nightHorizon\":" << Configuration::instance ()->getDoubleDefault ("observatory", "night_horizon", -10)
 				<< ",\"dayHorizon\":" << Configuration::instance ()->getDoubleDefault ("observatory", "day_horizon", 0)
-				<< ",\"horizon\":[";
-			bool first = true;
-			for (horizon_t::iterator iter = Configuration::instance ()->getObjectChecker ()->begin ();
-				iter != Configuration::instance ()->getObjectChecker ()->end (); iter++)
+				<< ",\"horizon\":";
+			// [[az, alt], ...], libnova's azimuth
+			auto writeHorizon = [&os] (ObjectCheck *check)
 			{
-				if (!first)
-					os << ",";
-				first = false;
-				os << "[" << iter->hrz.az << "," << iter->hrz.alt << "]";
-			}
-			os << "]}";
+				os << "[";
+				for (horizon_t::iterator iter = check->begin (); iter != check->end (); iter++)
+					os << (iter == check->begin () ? "" : ",") << "[" << iter->hrz.az << "," << iter->hrz.alt << "]";
+				os << "]";
+			};
+			writeHorizon (Configuration::instance ()->getObjectChecker ());
+			// the mount's limits, for the move map; [] when not configured
+			os << ",\"hardHorizon\":";
+			writeHorizon (&hardHorizon);
+			os << ",\"ceiling\":";
+			writeHorizon (&ceiling);
+			os << "}";
 		}
 		else if (!strcmp (url, "/api/devices"))
 		{
