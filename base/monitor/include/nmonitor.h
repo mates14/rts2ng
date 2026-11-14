@@ -114,6 +114,13 @@ class NMonitor:public rts2core::Client
 
 		virtual void message (rts2core::Message & msg);
 
+		// base note: rts2-mon's own log messages go into its message window;
+		// App writes them to stderr, over the curses screen. The link
+		// reconnect (Block, 668ab32) logs every lost device, so each dropped
+		// connection garbled the screen and lost the focus. [JS 2026-11-14]
+		virtual void sendMessage (messageType_t in_messageType, const char *in_messageString);
+		virtual void sendMessageNoEndl (messageType_t in_messageType, const char *in_messageString) { sendMessage (in_messageType, in_messageString); }
+
 		void resize ();
 
 		void processKey (int key);

@@ -456,6 +456,8 @@ NMonitor::~NMonitor (void)
 	nocbreak ();
 	echo ();
 	endwin ();
+	// the screen is gone: log messages to stderr again (sendMessage)
+	msgwindow = NULL;
 
 	delete msgBox;
 	delete statusWindow;
@@ -647,6 +649,20 @@ void NMonitor::deleteClient (int p_centraldId)
 void NMonitor::message (rts2core::Message & msg)
 {
 	*msgwindow << msg;
+}
+
+void NMonitor::sendMessage (messageType_t in_messageType, const char *in_messageString)
+{
+	// before the screen is set up and after it is closed, stderr is fine
+	if (msgwindow == NULL)
+	{
+		rts2core::Client::sendMessage (in_messageType, in_messageString);
+		return;
+	}
+	if (getDebug () == 0 && in_messageType == MESSAGE_DEBUG)
+		return;
+	rts2core::Message msg (getAppName (), in_messageType, in_messageString);
+	message (msg);
 }
 
 void NMonitor::resize ()

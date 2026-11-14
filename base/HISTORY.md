@@ -5345,3 +5345,24 @@ and `test_wormencoder` pass. Not run on the mount (no REMOTES or servos on
 the bench). First test on D50, a guided target in the west: `pec` on for
 half an hour, off for half an hour; the guider's RA residual and the
 worm log's `F` lines (one change a second, within 2.3 %) show it.
+
+## rts2-mon: its own messages in the message window (2026-11-14) [JS]
+
+JS at D50: "connection to COND lost, reconnecting in 10 s" appeared over
+the rts2-mon screen, garbled, and rts2-mon lost the focus (several Tab
+presses to get back). rts2-mon's own log messages went through
+`App::sendMessage`, which writes to stderr - straight over the curses
+screen. Classic rarely logged anything in rts2-mon; since the link
+reconnect (`Block::addressLost`, 668ab32, 2026-10-20) and the dropped-link
+warnings every lost device link logs, and COND (rtspy) dropped its
+listeners every ~650 s (rtspy fixed separately: its keepalive counted our
+own sends). `NMonitor::sendMessage` now puts them into the message window
+like the devices' messages (its mask applies: INFO is hidden by default);
+before the screen is up and after `endwin ()` they still go to stderr.
+
+Bench (centrald, an rtspy dummy device that drops rts2-mon's link, rts2-mon
+in a pty with stderr captured): the old rts2-mon wrote "connection RFOC
+... dropped: closed by the peer" to stderr twice; the new one nothing
+after the screen is up. Not seen on a site yet. If the focus still jumps
+when a device goes away, the next suspect is `NMonitor::deleteConnection`
+(the device list shifts under the selected row).
