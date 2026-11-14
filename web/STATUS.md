@@ -4131,4 +4131,10 @@ answered by the proxy: the heights at az 0/170/175/330 are -6, 59.5,
 30.0/90.0; closed roof: alt 20 az 100 over the ceiling, alt 5 az 100 under
 the hard horizon, the Sun not checked; open roof at noon: 5 deg from the
 Sun refused, 20 deg allowed, alt 55 to the north under the hard horizon.
-SBT: the site horizon only. Not tested: a real move from the map.
+SBT: the site horizon only. A real move from the map worked on D50
+(2026-11-15, deployed with 13eb710).
+
+2026-11-15 [JS]: the hard horizon also as a red line (its red area alone
+merged with the ceiling's under a closed roof, and JS saw only the site
+horizon), and for orientation the stars to 4 mag (bsc-stars.json, as the
+sky chart) and the Moon.

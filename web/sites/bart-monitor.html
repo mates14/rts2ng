@@ -2222,6 +2222,24 @@
             ctx.arc(g.cx, g.cy, g.R, 0, 2 * Math.PI);
             ctx.fill();
 
+            // stars to 4 mag and the Moon, for orientation only
+            const jd = julianDate(new Date());
+            const lst = horizonInfo ? normDeg(gmstDeg(jd) + horizonInfo.lon) : 0;
+            if (horizonInfo && starCatalog) {
+                ctx.fillStyle = dark ? 'rgba(255,255,255,0.8)' : 'white';
+                for (const [ra, dec, mag] of starCatalog) {
+                    if (mag > 4.0)
+                        continue;
+                    const hz = equToHrz(lst - ra, dec, horizonInfo.lat);
+                    if (hz.alt <= SERVICE_MAP_MIN_ALT)
+                        continue;
+                    const p = serviceMapProject(g, hz.alt, hz.az);
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, Math.max(0.5, (5.5 - mag) * 0.45) * scale, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+
             // under the hard horizon: the rim minus the outline
             if (lim.hard) {
                 ctx.beginPath();
@@ -2233,6 +2251,10 @@
                 ctx.closePath();
                 ctx.fillStyle = forbid;
                 ctx.fill('evenodd');
+                path(horizonOutline(lim.hard));
+                ctx.strokeStyle = '#ff4040';
+                ctx.lineWidth = 1.5 * scale;
+                ctx.stroke();
             }
             // over the ceiling: inside its outline; dashed while it does not hold
             if (lim.ceiling) {
@@ -2319,6 +2341,18 @@
                 ctx.fill();
             }
 
+            if (horizonInfo) {
+                const m = moonEquatorial(jd);
+                const hz = equToHrz(lst - m.ra, m.dec, horizonInfo.lat);
+                if (hz.alt > SERVICE_MAP_MIN_ALT) {
+                    const p = serviceMapProject(g, hz.alt, hz.az);
+                    ctx.fillStyle = '#c8c8d0';
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 4.5 * scale, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+
             // the telescope now: a red ring; the pick: a white cross
             const [telAlt, telAz] = parseRaDec(safeValue(systemData.T0, 'TEL_', ''));
             if (Number.isFinite(telAlt) && Number.isFinite(telAz)) {
@@ -2348,8 +2382,8 @@
             if (!serviceMapPick) {
                 el.className = 'svc-hint';
                 el.textContent = 'Click the map to choose a position, then "move". '
-                    + (judged ? 'Red: where the mount refuses to end. ' : 'The mount\'s limits are not known here. ')
-                    + 'Red ring: the telescope now.';
+                    + (judged ? 'Red: where the mount refuses to end (red line: its hard horizon; orange: the site horizon, dashed: the ceiling). ' : 'The mount\'s limits are not known here. ')
+                    + 'Red ring: the telescope now; yellow: the Sun, grey: the Moon.';
                 return;
             }
             const why = judged ? serviceMapRefusal(serviceMapPick.alt, serviceMapPick.az, lim) : null;
