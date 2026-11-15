@@ -5560,3 +5560,66 @@ d50.cpp and pec.cpp clean with the hardening flags. Not run on the mount:
 check the `M` line and `pec_factor` there, and `/etc/rts2/pec-model.txt`
 must be replaced by the repo copy (the old one has no motor lines, which
 is valid: the worm terms alone).
+
+## D50 park below the hard horizon: a margin, and no crawl back (2026-11-15) [JS]
+
+JS reported: during the horizon tuning (14:31 UTC, T0 started 14:20 with an
+intermediate `horizon-hard`, since overwritten), a park from HA 111.8 /
+Dec 20.7 (alt 2.7, az 119.6) stopped, then crept slowly the other way
+until JS sent `stop`. From `rts2.log` and the worm log (1 Hz, 0.75 deg HA
+per worm turn):
+- The logged plan (95/4.9 +5 s, 85/-5.1 +1, 80/-10.1 +1, 70/-15.1 +3,
+  40/-25.1 +5, park), replayed through `D50Path`'s movement model, passes
+  0.06 deg above the -3 deg horizon at HA 87.7 / Dec -5.8 (az 84.5). The
+  planner accepted any way above the horizon. The real RA was 0.4-0.8 deg
+  off the model (backlash phase not modelled), and at 14:31:53.1 info saw
+  alt -3.11 at HA 86.9 / Dec -6.7.
+- `Telescope::info` -> `abortMoveTracking` -> `stopMove`: the drives
+  decelerate normally (RA 0.78 deg/s^2 from 5 deg/s, ~16 deg), and
+  `waitDrivesStopped ()` blocks the main loop until they stand. The "below
+  horizon" message came out at 14:31:59.9, after the wait; RA stood at
+  HA 70, back above the horizon.
+- `D50::abortMoveTracking` then compared the position of the last info
+  (HA 86.9, before the brake) with the last safe one (HA ~89): within its
+  10 deg, so it drove to it at `speed_backlash` (0.3 deg/s), unseen by
+  rts2: the worm shows +0.29 deg/s, HA 70.0 -> 73.25, until JS's stop.
+  With the real position (19 deg away) it would not have moved.
+
+Changes:
+- `D50Path::horizonMargin` (T0 `horizon_margin`, default 0.5 deg): every
+  sample of a passage stays that far above the hard horizon. Near the
+  start and the target of the move the margin narrows to their own
+  clearance plus `HORIZON_MARGIN_SLOPE` (0.25) times the distance from
+  them, so a mount standing low can leave and a low target stays
+  reachable. Targets themselves (and the stop check in `info`) still only
+  need the horizon. `safeStep ()` counts the margin as the limit. The
+  ceiling has no margin.
+- `D50::abortMoveTracking`: reads both drives after the stop
+  (`getPositionAct ()`); above the hard horizon it stays, below it the
+  classic return to the last safe position (within 10 deg).
+
+- A stop command and a stop below the horizon brake at T0 `stop_decel`
+  (default 5 deg/s^2 until tested on the mount - JS expects 10 to be
+  fine mechanically; 0: the drives' DECEL as before): `TGDrive::stop (stopDecel)` writes it to the
+  DECEL register (RA x 2304/360, Dec x 4000/360 r/s^2) before the speed
+  0, `restoreDecel ()` writes the old value back after the wait. From
+  5 deg/s that is 1 s and 2.5 deg. Not the drives' EMERDECEL (~500
+  r/s^2, far too hard, and how the drive triggers it is not known here).
+  Other stops (a new move over a running one, a park) keep DECEL.
+
+Not changed: the blocking `waitDrivesStopped ()` (short now with
+`stop_decel`).
+
+Measured on the mount (roof closed, `block_move` cleared for the test and
+set back, parked after): `hadec` HA -40 -> +40 at Dec -33 (pure RA,
+between the hard horizon and the ceiling), `stop` at full speed: no info
+and no value from T0 for 7.4 s, RA from HA -2.5 to +15.8 (~17 deg at
+5 deg/s). This was the released build; the changes above are not on the
+mount yet, and `stop_decel` has not braked the mount yet: JS tests it.
+
+`test_d50path`: all cases now run with the 0.5 deg margin (as T0); new:
+random night moves between low positions (alt -6..15) at margin 0 / 0.5 /
+1.0 - without one a path comes 0.008 deg to the horizon, with one none
+goes under it (outside the narrowing at the ends), 266 tried, all found.
+The replay checks the margin independently. ctest base 15/15; d50.cpp and
+d50path.cpp clean with the hardening flags.

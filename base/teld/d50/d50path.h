@@ -34,6 +34,9 @@
 //   the sky at full speed).
 // - a mount already in the Sun's proximity may leave it, moving away from
 //   the Sun from the first step on (checkPassage (), new).
+// - a passage keeps horizonMargin above the hard horizon, except near the
+//   start and the target of the move (checkPassage (), new) [JS 2026-11-15]:
+//   on 2026-11-15 14:31 UTC a park planned 0.06 deg above it crossed it.
 
 #pragma once
 
@@ -65,6 +68,9 @@
 // ...while the Sun is above the horizon: centre altitude of a Sun whose upper
 // limb touches the horizon, refraction included [deg]
 #define SUN_AVOID_ALTITUDE (-0.833)
+// how fast [deg per deg of distance] the horizon margin (D50Path::horizonMargin) grows from the start or the target
+// of a move that is closer to the horizon: a mount standing low leaves it, and a low target is reached, climbing 1 in 4
+#define HORIZON_MARGIN_SLOPE 0.25
 
 namespace rts2teld
 {
@@ -88,6 +94,13 @@ class D50Path
 		ObjectCheck *hardHorizon;
 		ObjectCheck *hardCeiling;	// may be nullptr
 		bool checkCeiling;		// the dome is not open: stay below the ceiling (the Sun cannot reach us then)
+
+		// how far [deg] above the hard horizon a passage stays (0: on it is enough, as in classic). The mount
+		// does not follow the movement model exactly: on 2026-11-15 a park planned 0.06 deg above the horizon
+		// went 0.2 deg lower and crossed it. Near the start and the target of findPath () the margin narrows to
+		// what they have, growing with the distance from them (HORIZON_MARGIN_SLOPE), so a mount standing low can
+		// leave and a target near the horizon stays reachable. [JS 2026-11-15]
+		double horizonMargin;
 
 		/**
 		 * Set the time of the path: computes the Sun position and whether it is
@@ -197,6 +210,17 @@ class D50Path
 		double safeStep (int32_t AC, int32_t DC, double sunDist);
 
 		/**
+		* Altitude [deg] of (AC, DC) above the hard horizon, negative below it.
+		*/
+		double horizonClearance (int32_t AC, int32_t DC);
+
+		/**
+		* Is (AC, DC) at least horizonMargin above the hard horizon - or, near the start or the target of the
+		* last findPath (), as high as that one plus HORIZON_MARGIN_SLOPE times the distance [deg] from it?
+		*/
+		bool clearOfHorizon (int32_t AC, int32_t DC);
+
+		/**
 		* Why the mount may not stand at (AC, DC), for the log: nullptr when it may, else "below the hard horizon",
 		* "above the ceiling" or "too close to the Sun".
 		*/
@@ -230,6 +254,10 @@ class D50Path
 		void slopeBins (ObjectCheck *oc, std::vector <double> &bins);
 		double steepest (const std::vector <double> &bins, double az, double daz);
 		std::vector <double> horizonBins, ceilingBins;
+
+		// the start [0] and the target [1] of the last findPath (), and their horizonClearance (), for clearOfHorizon ()
+		int32_t endAC[2], endDC[2];
+		double endClearance[2];
 
 		double JD;
 		double gmst;			// mean sidereal time at JD [deg]

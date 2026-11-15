@@ -233,7 +233,16 @@ class TGDrive: public rts2core::ConnSerial
 		bool isMovingSpeed () { return (appStatus->getValueInteger () & 0x09) == 0x01; }
 		bool isMovingPosition () { return (appStatus->getValueInteger () & 0x03) == 0x01; }
 
-		void stop ();
+		/**
+		 * Stop by setting the speed to 0. With stopDecel [r/s**2] > 0 the drive brakes at that instead of its
+		 * deceleration (DECEL), until restoreDecel ().
+		 */
+		void stop (double stopDecel = 0);
+
+		/**
+		 * Write back the deceleration stop () replaced, if it did.
+		 */
+		void restoreDecel ();
 
 		bool checkStop ();
 		bool checkStopPlain ();
@@ -332,6 +341,8 @@ class TGDrive: public rts2core::ConnSerial
 
 		bool stopped;
 		int32_t stoppedPosition;
+		// the DECEL register stop () replaced, -1 when it did not
+		int32_t savedDecel;
 };
 
 }

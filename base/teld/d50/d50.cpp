@@ -195,6 +195,10 @@ class D50:public Fork
 		bool backlashCrossEncoderStartValid;	// false when the start positions could not be read
 		rts2core::ValueDouble *moveSpeedBacklash;
 		rts2core::ValueDouble *moveSpeedBacklashInterval;
+		rts2core::ValueDouble *horizonMargin;
+		rts2core::ValueDouble *stopDecel;
+		// the next stopMove () brakes at stopDecel: a stop command or the mount below the horizon
+		bool fastStop;
 		rts2core::ValueDouble *moveSpeedFull;
 		rts2core::ValueDouble *moveSpeedTurbo;
 		rts2core::ValueBool *moveTurboSwitch;
@@ -388,6 +392,13 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 
 	createValue (moveSpeedBacklash, "speed_backlash", "[deg/s] initial speed to cross backlash", false, RTS2_VALUE_WRITABLE);
 	moveSpeedBacklash->setValueDouble (0.3);
+
+	createValue (horizonMargin, "horizon_margin", "[deg] a move's way keeps this far above the hard horizon (less near its start and target)", false, RTS2_VALUE_WRITABLE);
+	horizonMargin->setValueDouble (0.5);
+
+	createValue (stopDecel, "stop_decel", "[deg/s**2] deceleration of a stop command and of a stop below the horizon (0: the drives' DECEL)", false, RTS2_VALUE_WRITABLE);
+	stopDecel->setValueDouble (5);
+	fastStop = false;
 
 	createValue (backlashCrossStrategy, "backlash_cross_strategy", "strategy to get over backlash in gearings", false, RTS2_VALUE_WRITABLE);
 	backlashCrossStrategy->addSelVal ("Time interval");
@@ -633,6 +644,13 @@ int D50::commandAuthorized (rts2core::Connection * conn)
                 decDrive->write2b (TGA_MASTER_CMD, 3);
                 return 0;
         }
+	if (conn->isCommand ("stop"))
+	{
+		fastStop = true;
+		int ret = Fork::commandAuthorized (conn);
+		fastStop = false;
+		return ret;
+	}
         return Fork::commandAuthorized (conn);
 }
 
@@ -1140,13 +1158,27 @@ int D50::abortMoveTracking ()
 #ifdef DEBUG_BRUTAL
 	logStream (MESSAGE_DEBUG) << "****** abortMoveTracking ()" << sendLog;
 #endif
+	fastStop = true;
 	Telescope::abortMoveTracking ();	// stop tracking, also waits till stop is really finished
+	fastStop = false;
 
 	// OK, this might be a bit controversial, let's try this approach - after being caught in a "below horizon" area, we stop and then return to the previously known safe position.
 	// We use only a "low level" (and slow) movements for it, i.e. rts2 doesn't know we are moving. When there will be some moving-attempt in meantime, it will be either accepted
 	// (which will lead to normal operations) or denied by a below-horizon situation again, in which case a new "extrication attempt" will follow in the next info cycle.
 	// As this is only an emergency case (which should happen only rarely), this should be acceptable.
-	if (labs (raDrive->getPosition () - lastSafeRaPos) < (int32_t) fabs (10.0 * haCpd) && labs (decDrive->getPosition () - lastSafeDecPos) < (int32_t) fabs (10.0 * decCpd)) // safety limit
+	// base note: classic decided on the position of the last info, before the stop. The mount brakes for ~17 deg
+	// in HA from full speed (6.5 s, measured 2026-11-15), usually back above the horizon: on 2026-11-15 14:31 UTC it stopped 19 deg
+	// from the last safe position, above the horizon, and then crawled back towards it, as the stale position was
+	// within the 10 deg. Now the position after the stop decides, and a mount above the horizon stays. [JS 2026-11-15]
+	int32_t raPos = raDrive->getPositionAct ();
+	int32_t decPos = decDrive->getPositionAct ();
+	preparePath ();
+	double clearance = path.horizonClearance (raPos, decPos);
+	if (clearance > 0)
+	{
+		logStream (MESSAGE_INFO) << "abortMoveTracking - stopped " << clearance << " deg above the hard horizon, staying there" << sendLog;
+	}
+	else if (labs (raPos - lastSafeRaPos) < (int32_t) fabs (10.0 * haCpd) && labs (decPos - lastSafeDecPos) < (int32_t) fabs (10.0 * decCpd)) // safety limit
 	{
 		logStream (MESSAGE_DEBUG) << "abortMoveTracking - returning back to last known safe position: " << lastSafeRaPos << " " << lastSafeDecPos << sendLog;
 		// this move is not checked against the ceiling, so we can no longer promise the dome we stay inside
@@ -1156,7 +1188,7 @@ int D50::abortMoveTracking ()
 	}
 	else
 	{
-		logStream (MESSAGE_DEBUG) << "abortMoveTracking - distance to lastSafePos too high:" << labs (raDrive->getPosition () - lastSafeRaPos) / haCpd << " " << labs (decDrive->getPosition () - lastSafeDecPos) / decCpd << sendLog;
+		logStream (MESSAGE_DEBUG) << "abortMoveTracking - distance to lastSafePos too high:" << labs (raPos - lastSafeRaPos) / haCpd << " " << labs (decPos - lastSafeDecPos) / decCpd << sendLog;
 	}
 	return 0;
 }
@@ -1170,9 +1202,16 @@ int D50::stopMove ()
 	if (raDrive->isMoving () || decDrive->isMoving ())	// otherwise it's only about cleaning the TEL_MOVING state, we don't want to clean parking flag and other things then
 	{
         	parking = false;
-        	raDrive->stop ();
-        	decDrive->stop ();
+		// base note: classic braked at the drives' DECEL (RA 5 r/s**2 = 0.78 deg/s**2: ~17 deg and 6.5 s from
+		// 5 deg/s, measured 2026-11-15). A stop command and a stop below the horizon brake at stop_decel. [JS 2026-11-15]
+		double d = fastStop ? stopDecel->getValueDouble () : 0;
+		if (d > 0)
+			logStream (MESSAGE_INFO) << "stopping at " << d << " deg/s^2" << sendLog;
+		raDrive->stop (RA_TRANSMISION / 360.0 * d);
+		decDrive->stop (DEC_TRANSMISION / 360.0 * d);
 		ret = waitDrivesStopped ();	// on timeout still clean up below, then report the failure
+		raDrive->restoreDecel ();
+		decDrive->restoreDecel ();
 	}
 	setWormPressureLimiter (false);
 	deleteTimers (RTS2_D50_BOOSTSPEED);
@@ -1574,6 +1613,7 @@ void D50::preparePath ()
 	path.hardHorizon = &hardHorizon;
 	path.hardCeiling = &hardCeiling;
 	path.checkCeiling = insideDomeOnlyMovement->getValueBool ();
+	path.horizonMargin = horizonMargin->getValueDouble ();
 	path.setTime (ln_get_julian_from_sys ());
 }
 

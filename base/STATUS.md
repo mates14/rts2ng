@@ -43,6 +43,12 @@ with the date and `[MJ]`/`[JS]`.
   the repo copy. Next: a night to confirm (a crossing of HA -0.6, ideally
   at another Dec; `pec_motor` off/on); refit the east shape (it has
   fewer frames); then the worm-encoder loop.
+- 2026-11-15 [JS] D50 horizon margin and no crawl back after a stop
+  (teld/d50, HISTORY "D50 park below the hard horizon"): not released.
+  To see: T0 `horizon_margin` 0.5; parks from low west/east positions
+  still found; `stop_decel` (5 deg/s^2, stop command and below-horizon
+  stop) to be tested by JS on the mount. Open: the main loop blocked
+  while braking (7.4 s measured at DECEL).
 
 ## What base is
 
@@ -329,6 +335,14 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   10 min, or has, parks (checked once a minute), unless `block_move` is set
   (then a critical report). `teld/tests/test_d50path`
   replays the found paths independently. [JS 2026-11-07]
+- A passage keeps `horizon_margin` (0.5 deg) above the hard horizon,
+  narrowing only near the start and the target of the move: the mount
+  runs up to ~0.8 deg off the movement model, and a park planned
+  0.06 deg above the horizon crossed it (2026-11-15). After a stop below
+  the horizon the mount returns to the last safe position only if it is
+  still below it, judged by the drives' position read after the stop
+  (at DECEL it brakes ~17 deg from full speed; a stop command and a
+  below-horizon stop brake at `stop_decel`, 5 deg/s^2). [JS 2026-11-15]
 - The HA worm encoder (`--worm-encoder`, `teld/d50/wormencoder.cpp`) is
   read in its own thread and only published and logged: no move, no
   tracking and no guide pulse waits for it or depends on it, and a missing

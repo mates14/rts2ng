@@ -34,6 +34,12 @@ D50Path::D50Path ()
 	hardHorizon = nullptr;
 	hardCeiling = nullptr;
 	checkCeiling = false;
+	horizonMargin = 0;
+	for (int i = 0; i < 2; i++)
+	{
+		endAC[i] = endDC[i] = 0;
+		endClearance[i] = NAN;
+	}
 	searchedNodes = 0;
 	JD = gmst = NAN;
 	sun.ra = sun.dec = 0;
@@ -101,7 +107,7 @@ double D50Path::safeStep (int32_t AC, int32_t DC, double sunDist)
 	const double step = v * CHECKPASSAGE_TIME_RESOLUTION;
 	const double c = std::max (cos ((fabs (hrzPosition.alt) + step) * M_PI / 180.0), 0.2);
 	const double daz = step / c;
-	dt = std::min (dt, (hrzPosition.alt - hardHorizon->getHorizonHeight (&hrzPosition, 0)) / (v * (1 + steepest (horizonBins, hrzPosition.az, daz) / c)));
+	dt = std::min (dt, (hrzPosition.alt - hardHorizon->getHorizonHeight (&hrzPosition, 0) - std::max (horizonMargin, 0.0)) / (v * (1 + steepest (horizonBins, hrzPosition.az, daz) / c)));
 	if (checkCeiling && hardCeiling != nullptr)
 		dt = std::min (dt, (hardCeiling->getHorizonHeight (&hrzPosition, 0) - hrzPosition.alt) / (v * (1 + steepest (ceilingBins, hrzPosition.az, daz) / c)));
 	return std::max (dt, CHECKPASSAGE_FINE_RESOLUTION);
@@ -116,6 +122,13 @@ int D50Path::findPath (int32_t acStart, int32_t dcStart, int32_t acFin, int32_t 
 	// a target the mount may not stand at has no way to it - no need to search the whole grid for one
 	if (!checkRawPosition (acFin, dcFin))
 		return -1;
+
+	endAC[0] = acStart;
+	endDC[0] = dcStart;
+	endAC[1] = acFin;
+	endDC[1] = dcFin;
+	for (int i = 0; i < 2; i++)
+		endClearance[i] = horizonClearance (endAC[i], endDC[i]);
 
 	// The essential approach used for dealing the problematic movements is to change the final target positon of servos gradually,
 	// while all the temporary targets (as well as the way to them) are safe and don't collide with the hard-horizon (as we cannot
@@ -379,7 +392,7 @@ double D50Path::checkPassage (int32_t fromAC, int32_t fromDC, int32_t toAC, int3
 		}
 		posAC = computeMovement (0, fromAC, toAC, initSpeedAC, inspectionTime);
 		posDC = computeMovement (1, fromDC, toDC, initSpeedDC, inspectionTime);
-		if (!checkRawPosition (posAC, posDC, &sunDist))
+		if (!checkRawPosition (posAC, posDC, &sunDist) || !clearOfHorizon (posAC, posDC))
 			return -1.0 * inspectionTime;
 		if (escaping)
 		{
@@ -496,6 +509,38 @@ int32_t D50Path::computeMovement (int isDec, int32_t fromCount, int32_t toCount,
 	if (speedAtInspectionTime != nullptr)
 		*speedAtInspectionTime = 0.0;
 	return toCount;
+}
+
+double D50Path::horizonClearance (int32_t AC, int32_t DC)
+{
+	struct ln_equ_posn equPosition;
+	struct ln_hrz_posn hrzPosition;
+	equPosition.ra = - ( (double) (AC / haCpd) + haZero);
+	equPosition.dec = (double) (DC / decCpd) + decZero;
+	ln_get_hrz_from_equ_sidereal_time (&equPosition, &observer, -observer.lng/15.0, &hrzPosition);
+	return hrzPosition.alt - hardHorizon->getHorizonHeight (&hrzPosition, 0);
+}
+
+bool D50Path::clearOfHorizon (int32_t AC, int32_t DC)
+{
+	if (!(horizonMargin > 0))
+		return true;
+	double clearance = horizonClearance (AC, DC);
+	if (clearance >= horizonMargin)
+		return true;
+	struct ln_equ_posn pos, end;
+	pos.ra = (double) (AC / haCpd) + haZero;
+	pos.dec = (double) (DC / decCpd) + decZero;
+	for (int i = 0; i < 2; i++)
+	{
+		if (!std::isfinite (endClearance[i]))
+			continue;
+		end.ra = (double) (endAC[i] / haCpd) + haZero;
+		end.dec = (double) (endDC[i] / decCpd) + decZero;
+		if (clearance >= endClearance[i] + HORIZON_MARGIN_SLOPE * ln_get_angular_separation (&pos, &end))
+			return true;
+	}
+	return false;
 }
 
 const char *D50Path::whyNot (int32_t AC, int32_t DC)

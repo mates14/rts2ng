@@ -102,6 +102,7 @@ TGDrive::TGDrive (const char *_devName, const char *prefix, rts2core::Device *_m
 	_master->createValue (firmware, pbuf, "firmware version", false);
 
 	stopped = false;
+	savedDecel = -1;
 }
 
 int TGDrive::init ()
@@ -313,16 +314,32 @@ void TGDrive::setPositionKp (float newPositionKp)
 	write2b (TGA_POSITIONREG_KP, newPositionKp * TGA_GAINFACTOR);
 }
 
-void TGDrive::stop ()
+void TGDrive::stop (double stopDecel)
 {
 	// other way to stop..with backslahs
 	// setTargetPos (getPosition ());
+
+	// base note: classic always braked at DECEL; a stop deceleration (D50 stop_decel) is new [JS 2026-11-15]
+	if (stopDecel > 0)
+	{
+		if (savedDecel < 0)
+			savedDecel = read4b (TGA_DECEL);
+		write4b (TGA_DECEL, stopDecel * TGA_ACCELFACTOR);
+	}
 
 	// other possibility is to switch to speed mode..
 	write4b (TGA_DSPEED, 0);
 	stoppedPosition = read4b (TGA_CURRPOS);
 	setMode (TGA_MODE_DS);
 	stopped = true;
+}
+
+void TGDrive::restoreDecel ()
+{
+	if (savedDecel < 0)
+		return;
+	write4b (TGA_DECEL, savedDecel);
+	savedDecel = -1;
 }
 
 bool TGDrive::checkStop ()

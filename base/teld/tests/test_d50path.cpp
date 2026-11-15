@@ -15,6 +15,7 @@
 
 #include "d50path.h"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -117,6 +118,7 @@ static void setupD50 (D50Path &p)
 	p.hardHorizon = &horizon;
 	p.hardCeiling = nullptr;
 	p.checkCeiling = false;
+	p.horizonMargin = 0.5;		// the T0 default (horizon_margin)
 }
 
 static int32_t acOf (D50Path &p, double ha) { return (int32_t) ((ha - p.haZero) * p.haCpd); }
@@ -153,6 +155,16 @@ static bool aboveHardHorizon (double ha, double dec)
 	return horizon.is_good (&h);
 }
 
+// altitude above the hard horizon [deg]
+static double clearanceOf (double ha, double dec)
+{
+	struct ln_equ_posn e = { -ha, dec };
+	struct ln_lnlat_posn obs = { LNG, LAT };
+	struct ln_hrz_posn h;
+	ln_get_hrz_from_equ_sidereal_time (&e, &obs, -LNG / 15.0, &h);
+	return h.alt - horizon.getHorizonHeight (&h, 0);
+}
+
 static bool belowCeiling (double ha, double dec)
 {
 	struct ln_equ_posn e = { -ha, dec };
@@ -187,10 +199,17 @@ static void haDecOf (double alt, double az, double JD, double &ha, double &dec)
 	dec = e.dec;
 }
 
+// the lowest the path came, relative to what p.horizonMargin asks there [deg] (set by replay ())
+static double marginLeft;
+
 // replay the path through the movement model; returns the closest approach to the Sun [deg] (after leaving its
 // proximity, for a start in it), -1 on a horizon hit, -2 when a start in the proximity got closer to the Sun
 static double replay (D50Path &p, int n, int32_t ac, int32_t dc, double JD, bool sunChecked, int32_t acFin, int32_t dcFin)
 {
+	// the margin narrows near the start and the target: their own clearance plus the distance from them
+	const double ha0 = haOf (p, ac), dec0 = decOf (p, dc), haF = haOf (p, acFin), decF = decOf (p, dcFin);
+	const double c0 = clearanceOf (ha0, dec0), cF = clearanceOf (haF, decF);
+	marginLeft = INFINITY;
 	double sha, sdec, salt;
 	sunAt (JD, sha, sdec, salt);
 	double vac = 0, vdc = 0, closest = 360;
@@ -213,6 +232,8 @@ static double replay (D50Path &p, int n, int32_t ac, int32_t dc, double JD, bool
 			double ha = haOf (p, a), dec = decOf (p, d);
 			if (!aboveHardHorizon (ha, dec))
 				return -1;
+			double need = std::min ({ p.horizonMargin, c0 + HORIZON_MARGIN_SLOPE * sepDeg (ha, dec, ha0, dec0), cF + HORIZON_MARGIN_SLOPE * sepDeg (ha, dec, haF, decF) });
+			marginLeft = std::min (marginLeft, clearanceOf (ha, dec) - need);
 			if (p.checkCeiling && !belowCeiling (ha, dec))
 				return -1;
 			if (a < std::min (p.acMin, p.acMax) || a > std::max (p.acMin, p.acMax) || d < p.dcMin || d > p.dcMax)
@@ -541,6 +562,46 @@ int main ()
 		printf ("random daytime moves: %d tried (%d with the Sun up), %d by the classic strategies, %d on the grid, %d without a safe way; closest to the Sun %.2f deg; slowest findPath %.1f ms\n",
 			tried, sunned, classic, grid, none, worstClosest, worstMs);
 		assert (grid > 0);
+	}
+
+	// --- 2026-11-15 14:31 UTC: a park planned 0.06 deg above the hard horizon crossed it. Random night moves between
+	// low positions: without a margin paths skim the horizon, with horizonMargin they keep it (except near their ends).
+	{
+		for (double margin : { 0.0, 0.5, 1.0 })
+		{
+			std::mt19937 rng (20261115);
+			std::uniform_real_distribution <double> ualt (-6, 15), uaz (0, 360), uday (0, 365);
+			p.horizonMargin = margin;
+			int tried = 0, none = 0;
+			double lowest = INFINITY;
+			for (int i = 0; i < 1500; i++)
+			{
+				double JD = julian (2026, 1, 1, 0, 0, 0) + floor (uday (rng)) + 0.5;	// midnight UTC: the Sun is not avoided
+				p.setTime (JD);
+				double ha0, d0, ha1, d1;
+				haDecOf (ualt (rng), uaz (rng), JD, ha0, d0);
+				haDecOf (ualt (rng), uaz (rng), JD, ha1, d1);
+				int32_t ac0 = acOf (p, ha0), dc0 = dcOf (p, d0), ac1 = acOf (p, ha1), dc1 = dcOf (p, d1);
+				if (dc0 < p.dcMin || dc1 < p.dcMin || fabs (ha0) > 170 || fabs (ha1) > 170 || !p.checkRawPosition (ac0, dc0) || !p.checkRawPosition (ac1, dc1))
+					continue;
+				tried++;
+				int n = p.findPath (ac0, dc0, ac1, dc1);
+				if (n < 0)
+				{
+					none++;
+					continue;
+				}
+				assert (replay (p, n, ac0, dc0, JD, false, ac1, dc1) >= 0);
+				lowest = std::min (lowest, marginLeft);
+			}
+			printf ("low night moves, horizon margin %.1f deg: %d tried, %d without a way; lowest %.3f deg against the margin\n", margin, tried, none, lowest);
+			// the replay samples every 5 ms, checkPassage () as densely as the margin requires: 0.035 deg at 7 deg/s
+			if (margin > 0)
+				assert (lowest > -0.04);
+			else
+				assert (lowest < 0.1);	// without one, some path does skim the horizon
+		}
+		p.horizonMargin = 0.5;
 	}
 
 	return 0;
