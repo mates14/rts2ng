@@ -5704,3 +5704,26 @@ localhost UDP flood (60 kB datagrams) old 524 lost, new 0. Not on the
 mount yet: after the release and a T0 restart, `/proc/net/packet` should
 show T0's two sockets with Iface 2 and an Rmem near 0, and the timeouts
 should stop.
+
+## rts2.service killed a manual restart (2026-11-15) [JS]
+
+After the upgrade to f75e97d JS ran `sudo rts2-start -r` (all daemons) on
+lascaux50. It stopped them all (20:41:54-20:42:08) and started them again
+from the terminal, outside `rts2.service`. At 20:42:17 systemd found none
+of the unit's own daemons left, ended `rts2.service` (`Type=forking`: no
+process left = the service is over) and ran its `ExecStop=rts2-stop all`,
+which stopped the centrald, DOME and T0 just started ("stopped"); the
+daemons the restart started after that kept running without a centrald.
+
+Reproduced with `systemd-run --user` (a start script leaving two
+background processes, both then killed): `Type=forking` - the unit
+inactive and ExecStop run; `Type=oneshot` + `RemainAfterExit=yes` - the
+unit active, ExecStop not run. `rts2.service.in` is now the latter; it
+also no longer stops everything when the daemons it started happen to
+exit. The 2026-10-24 entry ("An upgrade stopped rts2.service") is a
+different path (debhelper's preinst), unchanged.
+
+Recovery on lascaux50: `systemctl daemon-reload` and `systemctl restart
+rts2` (the new unit file was not loaded yet). Until the fixed
+package is installed and loaded, restart everything with `systemctl
+restart rts2`, and use `rts2-start -r` only for named daemons.

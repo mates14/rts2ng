@@ -197,6 +197,13 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   created after `beforeRun ()` (cloud4's TEMP_AMB) cannot be marked.
   [MJ 2026-11-03]
 
+**systemd** [JS 2026-11-15]
+- `rts2.service` is `Type=oneshot` + `RemainAfterExit=yes`: it starts the
+  daemons and stays active. Under `Type=forking` it ended, and ran
+  `rts2-stop all`, when its last own daemon exited - which a manual
+  `rts2-start -r` (all) causes, killing the daemons that had just been
+  started again.
+
 **Raw ethernet** (`ConnEthernet`, D50's REMOTES units) [JS 2026-11-15]
 - The packet socket is `bind ()`-ed to its interface, and frames go out
   by that interface's index. `SO_BINDTODEVICE` does not restrict a packet

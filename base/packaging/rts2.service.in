@@ -11,7 +11,14 @@ Documentation=https://github.com/RTS2/rts2
 After=postgresql.service
 
 [Service]
-Type=forking
+# base note: classic had Type=forking, under which systemd ends the unit, and
+# runs ExecStop (rts2-stop all), as soon as none of the daemons it started is
+# left. On 2026-11-15 a manual "rts2-start -r" stopped them all and started new
+# ones outside the unit; 9 s later systemd's rts2-stop all killed the new
+# centrald, DOME and T0. rts2-start all only starts the daemons and exits:
+# oneshot, and the unit stays active until "systemctl stop rts2". [JS 2026-11-15]
+Type=oneshot
+RemainAfterExit=yes
 ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rts2-start all
 ExecStop=@CMAKE_INSTALL_FULL_BINDIR@/rts2-stop all
 
