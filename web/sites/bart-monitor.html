@@ -2113,7 +2113,7 @@
         // from the zenith down to SERVICE_MAP_MIN_ALT, North up, East on
         // the left as on the sky chart. Red where the mount refuses to
         // end: under its hard horizon, over its ceiling while
-        // inside_dome_limit holds (the roof is not open), and near the Sun
+        // the roof is not fully open, and near the Sun
         // while it is up and the ceiling does not hold - the rules of
         // D50Path (base/teld/d50/d50path.cpp). The limits come from
         // /api/horizon (hardHorizon, ceiling: rts2.ini's [observatory]
@@ -2156,7 +2156,12 @@
             const info = horizonInfo || {};
             const hard = info.hardHorizon && info.hardHorizon.length ? info.hardHorizon : null;
             const ceiling = info.ceiling && info.ceiling.length ? info.ceiling : null;
-            const ceilingHolds = !!ceiling && safeValue(systemData.T0, 'inside_dome_limit', 0) == 1;
+            // As the mount decides at the start of each move (D50::startResync):
+            // the ceiling holds unless DOME's roof_opened is 1 or T0's
+            // disable_domeopen_check is on. inside_dome_limit tells only how
+            // the last move went: it stays on after the roof has opened.
+            const ceilingHolds = !!ceiling && safeValue(systemData.T0, 'disable_domeopen_check', 0) != 1
+                && safeValue(systemData.DOME, 'roof_opened', null) != 1;
             let sun = null;
             if (horizonInfo) {
                 const jd = julianDate(new Date());
@@ -2372,6 +2377,19 @@
                 ctx.moveTo(p.x - s, p.y); ctx.lineTo(p.x + s, p.y);
                 ctx.moveTo(p.x, p.y - s); ctx.lineTo(p.x, p.y + s);
                 ctx.stroke();
+            }
+            // the roof, top left
+            const domeState = safeValue(systemData.DOME, 'state', null);
+            const roof = domeState === null ? 'unknown'
+                : ({ 1: 'closed', 2: 'opening', 4: 'open', 8: 'closing' })[domeState & 0x0f] || 'between';
+            ctx.font = `${11 * scale}px Arial, sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = dark ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.8)';
+            ctx.fillText(`roof ${roof}`, 2 * scale, 2 * scale);
+            if (lim.ceiling) {
+                ctx.fillStyle = lim.ceilingHolds ? '#ff6060' : (dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)');
+                ctx.fillText(lim.ceilingHolds ? 'ceiling in force' : 'ceiling off', 2 * scale, 16 * scale);
             }
             serviceMapHint(lim);
         }
@@ -3821,6 +3839,8 @@
                         redrawSkyMarkers();
                         updateTelescopeStatus();
                     }
+                    if (moved)
+                        updateServiceState();
                 }
             }
             setTimeout(telLoop, netMode === 'low' ? 60000 : netMode === 'idle' ? 30000

@@ -4101,8 +4101,8 @@ one should send the telescope there, so the map does not offer it),
 North up, East left as on the sky chart. A click fills alt/az for "move"
 (which still asks); typed alt/az moves the cross. Red where the mount
 refuses to end a move, by D50Path's rules (base/teld/d50/d50path.cpp):
-under the hard horizon always; over the ceiling while T0's
-inside_dome_limit holds; within 15 deg of the Sun while it is above -0.833
+under the hard horizon always; over the ceiling unless DOME's roof_opened
+is 1 (or T0's disable_domeopen_check is on); within 15 deg of the Sun while it is above -0.833
 deg and the ceiling does not hold (SUN_AVOID_DISTANCE, SUN_AVOID_ALTITUDE,
 copied into the page's SERVICE.sunAvoid: keep them in step). The
 interpolation is ObjectCheck::getHorizonHeight's. The map judges only the
@@ -4140,3 +4140,10 @@ horizon), and for orientation the stars to 4 mag (bsc-stars.json, as the
 sky chart) and the Moon. Altitude circles every 15 deg, as on the sky
 chart. "park" first in the "Move to" row, on both sites (the
 mount's own park position, COMMAND_TELD_PARK; asks first).
+
+2026-11-15 [JS]: the ceiling as the mount decides at the start of a move
+(D50::startResync), from DOME's roof_opened and T0's disable_domeopen_check,
+not from inside_dome_limit: that one tells how the last move went and stays
+on after the roof has opened. The roof state ("ceiling in force" / "off" on
+D50) top left on the map; the telescope's ring follows the 2 s TEL_ poll as
+on the sky chart.
