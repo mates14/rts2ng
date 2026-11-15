@@ -1604,8 +1604,16 @@ void GeminiCaringLoop::handleGoto ()
 		// commented out on the assumption the firmware picks the rate itself).
 		// RTS2 makes no distinction between a long slew and a small correction,
 		// so the driver has to.
+		// base note: a goto that may flip is never short. The sky distance
+		// says nothing about the axes then: the tracking-limit flip (:MM# to
+		// the target the mount is on) was 0.4 deg on the sky, went at
+		// centering rate, and the crawl check stood down for it - the mount
+		// crept towards the pole at 20x sidereal until the 300 s timeout
+		// (SBT 2026-11-15 01:41, incident, position LOST).
+		bool mayFlip = sideMode == GOTO_FLIP || prediction.outcome == GeminiSidePrediction::FLIP
+			|| (prediction.outcome != GeminiSidePrediction::UNKNOWN && prediction.ambiguous (ambiguityMargin));
 		double shortDeg = shortMoveDeg.load ();
-		if (shortDeg > 0)
+		if (shortDeg > 0 && !mayFlip)
 		{
 			double curRa, curDec;
 			{

@@ -203,7 +203,15 @@ What the driver does with it:
 - **The tracking-limit flip** is an `:MM#` to the same target. It is sent at most 660 s before the western
   limit, and **not before it is predicted to flip**: the other side of the pier accepts the target only once
   it is east of `−(E − 90°)`, and the tracking side stops at `W − 90°`. If the limits leave no such moment,
-  the mount parks instead. The old same-target `:MS#` never flipped at that point.
+  the mount parks instead. The old same-target `:MS#` never flipped at that point. A goto that may flip
+  (predicted FLIP, too close to call, or `:MM#`) always goes at slew rate (`:RS#`), however short it is on
+  the sky: the same-target flip is ~0.5° there, and at centering rate it crept towards the pole at 20×
+  sidereal, with the crawl check off, until the 5-minute timeout (SBT 2026-11-15). [JS]
+  If the mount fails to execute the flip (crawl, stall, timeout), it goes through the move recovery
+  without the retry: stop, the IMU checks the counters, park at CWD. It ends parked with the position
+  trusted and exposures unblocked, so the next target moves from there. Only if the IMU disagrees, or
+  cannot check, is it an incident. A clean flip now unblocks the exposures when it ends; before, they
+  stayed blocked until the next target's move. [JS 2026-11-15]
 - **The near-arrival model retarget** is skipped if it would flip the mount (logged as a warning), instead
   of flipping on arrival.
 - **Wrong-way safety check:** during a predicted flip it is suspended from the start of the move.

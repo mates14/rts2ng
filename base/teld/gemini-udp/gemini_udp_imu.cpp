@@ -345,6 +345,7 @@ class GeminiUDP:public Telescope
 		double recoverTargetRa, recoverTargetDec;
 		int moveRetries;			// used so far for the framework's current target
 		bool recoverGiveUp;			// budget spent - isMoving() fails the move once
+		bool recoverLimitFlip;		// this recovery is for the tracking-limit flip: park at CWD, no retry
 		rts2core::ValueString *moveRecoveryValue;
 		rts2core::ValueInteger *moveRetriesValue;
 
@@ -466,6 +467,9 @@ class GeminiUDP:public Telescope
 		void armLimitAction (LimitAction wanted);
 		bool trackingLimitWaitLogged;
 		void executeLimitAction (LimitAction action);
+		unsigned limitFlipSerial;	// the flip's goto until it ends, 0 = none - see checkLimitFlip()
+		void checkLimitFlip (const GeminiStatus &st);
+		void endLimitFlipRecovery ();
 
 		// writable mount parameters, native-command backed - see
 		// GEMINI_CMD_RATE_GUIDE/CENTER above and
@@ -786,6 +790,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	restStableCount = 0;
 	recoverTargetRa = recoverTargetDec = NAN;
 	recoverGiveUp = false;
+	recoverLimitFlip = false;
 	createValue (moveRecoveryValue, "move_recovery", "auto-recovery of a move the mount failed to execute: IDLE, STOPPING, PARKING", false);
 	moveRecoveryValue->setValueCharArr ("IDLE");
 	createValue (moveRetriesValue, "move_retries", "how many times a move the mount fails to execute is retried from CWD before the mount is left parked for a look", false, RTS2_VALUE_WRITABLE);
@@ -843,6 +848,7 @@ GeminiUDP::GeminiUDP (int argc, char **argv):Telescope (argc, argv, true, true)
 	trackingLimitWaitLogged = false;
 	pendingLimitAction = LIMIT_ACTION_NONE;
 	limitActionInFlight = false;
+	limitFlipSerial = 0;
 
 	createValue (guidingSpeedValue, "guiding_speed", "speed used for guiding the mount on target", false, RTS2_VALUE_WRITABLE);
 	guidingSpeedValue->setValueFloat (0.8);
@@ -1528,6 +1534,7 @@ void GeminiUDP::applyStatus (const GeminiStatus &st)
 		}
 	}
 
+	checkLimitFlip (st);
 	checkSafety (st);
 
 	// once per poll, not once per applyStatus () call - and while nothing
@@ -3185,7 +3192,8 @@ bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
 	if (caring == nullptr || positionLost () || rezeroState != REZERO_IDLE || recoverState != RECOVER_IDLE || imuProbeBusy ()
 		|| safetyState != SAFETY_OK)
 		return false;
-	if (moveRetries >= moveRetriesValue->getValueInteger ())
+	// the tracking-limit flip is not retried, so it spends nothing of the budget
+	if (!recoverLimitFlip && moveRetries >= moveRetriesValue->getValueInteger ())
 	{
 		logStream (MESSAGE_CRITICAL) << "GeminiUDP: move failed to execute (" << reason << ") - retry budget of "
 			<< moveRetriesValue->getValueInteger () << " spent; leaving the mount to park at CWD" << sendLog;
@@ -3196,10 +3204,18 @@ bool GeminiUDP::tryStartMoveRecovery (const std::string &reason)
 	getTelTargetRaDec (&tar);	// with the astrometric corrections, see startResync ()
 	recoverTargetRa = tar.ra;
 	recoverTargetDec = tar.dec;
-	moveRetries++;
-	logStream (MESSAGE_WARNING) << "GeminiUDP: move failed to execute (" << reason << ") - recovery " << moveRetries
-		<< " of " << moveRetriesValue->getValueInteger () << ": stop, park to CWD, then retry RA=" << tar.ra << " Dec=" << tar.dec << sendLog;
-	appendIncidentLine ("move execution failure, recovery " + std::to_string (moveRetries) + ": " + reason);
+	if (recoverLimitFlip)
+	{
+		logStream (MESSAGE_WARNING) << "GeminiUDP: move failed to execute (" << reason << ") - recovery: stop, park to CWD, no retry" << sendLog;
+		appendIncidentLine ("move execution failure, recovery without retry: " + reason);
+	}
+	else
+	{
+		moveRetries++;
+		logStream (MESSAGE_WARNING) << "GeminiUDP: move failed to execute (" << reason << ") - recovery " << moveRetries
+			<< " of " << moveRetriesValue->getValueInteger () << ": stop, park to CWD, then retry RA=" << tar.ra << " Dec=" << tar.dec << sendLog;
+		appendIncidentLine ("move execution failure, recovery " + std::to_string (moveRetries) + ": " + reason);
+	}
 
 	caring->requestAbort ();
 	recoverState = RECOVER_STOPPING;
@@ -3223,7 +3239,11 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 		logStream (MESSAGE_ERROR) << "GeminiUDP: move recovery gave up (" << why << ") - mount left parked at CWD, position still trusted" << sendLog;
 		appendIncidentLine (std::string ("move recovery gave up: ") + why);
 		recoverState = RECOVER_IDLE;
-		recoverGiveUp = true;
+		// the flip was not the framework's move: its next move must not fail for it
+		if (recoverLimitFlip)
+			endLimitFlipRecovery ();
+		else
+			recoverGiveUp = true;
 		moveRecoveryValue->setValueCharArr ("IDLE");
 		sendValueAll (moveRecoveryValue);
 	};
@@ -3232,6 +3252,7 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 	{
 		logStream (MESSAGE_WARNING) << "GeminiUDP: move recovery stood down - a safety incident has the mount" << sendLog;
 		recoverState = RECOVER_IDLE;
+		recoverLimitFlip = false;
 		moveRecoveryValue->setValueCharArr ("IDLE");
 		sendValueAll (moveRecoveryValue);
 		return;
@@ -3302,6 +3323,14 @@ void GeminiUDP::runMoveRecovery (const GeminiStatus &st)
 				recoverState = RECOVER_IDLE;
 				moveRecoveryValue->setValueCharArr ("IDLE");
 				sendValueAll (moveRecoveryValue);
+				if (recoverLimitFlip)
+				{
+					// not retried: the same :MM# from the same place would fail
+					// the same way, and from CWD the target, minutes from the
+					// western limit, may well land on pier W again
+					endLimitFlipRecovery ();
+					return;
+				}
 				logStream (MESSAGE_INFO) << "GeminiUDP: move recovery parked at CWD, re-sending the target" << sendLog;
 				if (!doGoto (recoverTargetRa, recoverTargetDec, "move recovery: retry from CWD"))
 					giveUp ("the retry goto was refused");
@@ -3775,6 +3804,7 @@ void GeminiUDP::executeLimitAction (LimitAction action)
 		if (doGoto (tar.ra, tar.dec, "tracking-limit flip", GeminiCaringLoop::GOTO_FLIP))
 		{
 			started = true;
+			limitFlipSerial = caring->getStatus ().gotoSerial;
 		}
 		else
 		{
@@ -3799,6 +3829,80 @@ void GeminiUDP::executeLimitAction (LimitAction action)
 		limitActionInFlight = false;
 		clearExposure ();
 	}
+}
+
+// base note: the tracking-limit flip is the driver's own goto, so the
+// framework never sees it end: endMove () did not run after it (the exposure
+// block stayed up until the next target's move), and isMoving ()'s move
+// recovery did not run on a failure. SBT 2026-11-15 01:46: the flip timed
+// out, the incident locked the mount with its position LOST, and it stayed
+// parked for the rest of the night. Now its end is watched here: a clean one
+// unblocks the cameras; one the mount failed to execute goes through the
+// move recovery (stop, the IMU checks the counters, park at CWD) without the
+// retry, and ends parked with the position trusted, so the next target moves
+// from there. [JS 2026-11-15]
+void GeminiUDP::checkLimitFlip (const GeminiStatus &st)
+{
+	if (limitFlipSerial == 0 || (st.moveInProgress && st.gotoSerial == limitFlipSerial))
+		return;
+	unsigned serial = limitFlipSerial;
+	limitFlipSerial = 0;
+	// replaced by another goto before it ended: that move's endMove () lifts the block
+	if (st.gotoSerial != serial || st.moveEndSerial != serial)
+		return;
+
+	std::string how = st.moveEndReason.empty () ? st.moveFailReason : st.moveEndReason;
+	if (!st.moveFailed && !st.moveAborted)
+	{
+		limitActionInFlight = false;
+		clearExposure ();
+		logStream (MESSAGE_INFO) << "GeminiUDP: tracking-limit flip finished (" << how << "), exposures unblocked" << sendLog;
+		return;
+	}
+	if (!st.moveExecutionFault)
+	{
+		// someone's stop: the mount is where it stopped, and the next move is theirs
+		limitActionInFlight = false;
+		clearExposure ();
+		logStream (MESSAGE_WARNING) << "GeminiUDP: tracking-limit flip stopped (" << how << "), exposures unblocked" << sendLog;
+		return;
+	}
+
+	// checkSafety () must not take this failure as well
+	moveFailHandledSerial = serial;
+	moveFailReported = true;
+	if (!imuStallCheckPossible ())
+	{
+		triggerIncident ("move ended away from its target", "tracking-limit flip: " + how + " (the IMU cannot check the counters)", true);
+		return;
+	}
+	imuStallCheckPending = true;
+	imuStallPendingSince = getNow ();
+	imuStallRestSince = NAN;
+	imuStallLastAxisTs = 0;
+	imuStallStill = false;
+	imuStallReason = "tracking-limit flip: " + how;
+	recoverLimitFlip = true;
+	if (!tryStartMoveRecovery (imuStallReason))
+	{
+		recoverLimitFlip = false;
+		imuStallCheckPending = false;
+		triggerIncident ("move ended away from its target", imuStallReason + " (no move recovery to check it in)", true);
+		return;
+	}
+	logStream (MESSAGE_WARNING) << "GeminiUDP: " << imuStallReason << " - the IMU checks the counters, then the mount parks at CWD (no retry)" << sendLog;
+}
+
+// the flip's recovery has the mount parked at CWD (or gave up with it there):
+// say so to the framework, and give the cameras back
+void GeminiUDP::endLimitFlipRecovery ()
+{
+	recoverLimitFlip = false;
+	limitActionInFlight = false;
+	clearExposure ();
+	maskState (TEL_MASK_MOVING, TEL_PARKED, "tracking-limit flip failed, parked at CWD");
+	logStream (MESSAGE_WARNING) << "GeminiUDP: tracking-limit flip failed - the mount is parked at CWD, its position still trusted; exposures unblocked, the next target moves from there" << sendLog;
+	appendIncidentLine ("tracking-limit flip failed, parked at CWD, position trusted");
 }
 
 void GeminiUDP::setFullBopState (rts2_status_t new_state)
@@ -4198,6 +4302,7 @@ bool GeminiUDP::imuStallCheck (const GeminiStatus &st, bool)
 	{
 		imuStallCheckPending = false;
 		recoverState = RECOVER_IDLE;
+		recoverLimitFlip = false;
 		moveRecoveryValue->setValueCharArr ("IDLE");
 		sendValueAll (moveRecoveryValue);
 		triggerIncident ("move ended away from its target", imuStallReason + " - " + why, true);

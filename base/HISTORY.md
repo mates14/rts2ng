@@ -5416,3 +5416,38 @@ SIGSTOPped at 1.5 s so the WOFFS waits, C0 killed at 4 s, T0 continued at
 6 s). Before: SIGSEGV in `Command::commandReturnOK` on T0's reply, the
 D50 stack. With the fix: T0's offset done, EXEC goes on with C1. ctest base
 15/15; hardened compile clean.
+
+## Gemini UDP: the tracking-limit flip went at centering rate (2026-11-15) [JS]
+
+SBT 2026-11-15 01:41:35: the tracking limit came near (358 s) on target
+RA 94.79 Dec 28.66 (HA -0.4, pier W), and the driver re-sent it with :MM#
+(predicted FLIP W->E, margins 0.88 / -0.38). The mount moved the right way
+- Dec rising towards the pole - but at 0.168 deg/s in Dec and 0.088 deg/s
+on the RA axis, the centering speed (native 170 = 20x, +1 for the sky),
+not the ~3.8 deg/s of the night's slews. At 01:46:36 the move timed out
+(300 s) at HA -26.6 Dec 80.5, still pier W, 51 deg from the target;
+10 s later the incident: stop -> park -> locked, position LOST (astrometry
+had confirmed the counters). The mount stayed parked until morning.
+
+Cause: `GeminiCaringLoop::handleGoto ()` sends a goto at centering rate
+(:RC#) when the target is within `shortMoveDeg` (1 deg) of the current
+position on the sky (2e2ea27, the short-move rule). The same-target flip
+is 0.4 deg on the sky and 180 deg of RA axis, so it went at :RC#, and the
+move was marked `moveAtCenteringRate`, which turns the RA-axis crawl check
+off. Fix: a goto that may flip (GOTO_FLIP, predicted FLIP, or too close to
+call) is never short. Built clean; not tested - no Gemini simulator. To
+see at the next tracking-limit flip: the poll lines show Dec at slew speed.
+
+Second fix, in gemini_udp_imu.cpp (`checkLimitFlip ()`): the flip is the
+driver's own goto, and the framework never saw it end. `isMoving ()`'s move
+recovery did not run on a failure, and `endMove ()` did not run after a
+clean flip either, so the exposure block stayed up until the next target's
+move. Now the flip's goto serial is watched. A clean end unblocks the
+cameras. An operator's stop unblocks them too. A failure to execute goes
+through the move recovery (`recoverLimitFlip`): stop, IMU stall check,
+:hC# to CWD, then no retry; `TEL_PARKED`, position trusted, cameras
+unblocked. It does not use the retry budget. If the IMU disagrees or
+cannot check, it is the incident, as before. Built clean, also with
+the hardening flags; ctest base 15/15. Not tested on the mount, and
+gemini_udp.cpp (the non-IMU driver) is not changed. This flip was the
+first tracking-limit flip in the logs kept (since 2026-11-06).
