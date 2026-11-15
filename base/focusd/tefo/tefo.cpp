@@ -40,6 +40,13 @@
 #define UDP_RETRY_ATTEMPTS	5
 #define UDP_RESPONSE_TIMEOUT	0.5
 
+// sendCommand () results besides 0 (OK)
+#define TEFO_ERROR		-1
+#define TEFO_NO_RESPONSE	-2
+
+// how long [s] a move waits for the TEFO daemon to start and to home (D50 2026-11-15: 1:51 after its start)
+#define TEFO_READY_TIMEOUT	300.0
+
 
 namespace rts2focusd
 {
@@ -74,11 +81,29 @@ class TEFO:public Focusd
 		unsigned short messageID;
 		unsigned short motorState;
 		unsigned short last_movement_result;
+		bool lastMovementKnown;		// false while the daemon reports "None" (no movement since it started)
 		unsigned short position_actual;
 		unsigned short position_set;
 		float time_to_moveend;
 
-		int sendCommand (const char *command);
+		// a move asked for before the daemon was ready, -1 when none; it waits until pendingDeadline
+		int pendingTarget;
+		double pendingDeadline;
+
+		/**
+		 * @param attempts	how many times to send it when no response comes (UDP_RESPONSE_TIMEOUT each)
+		 * @param quiet		do not log a missing response
+		 *
+		 * @return 0 on success, TEFO_NO_RESPONSE when the daemon did not answer, TEFO_ERROR on a wrong reply
+		 */
+		int sendCommand (const char *command, int attempts = UDP_RETRY_ATTEMPTS, bool quiet = false);
+
+		// the daemon homed and finished its own move after it (to the position in its config): idle, with a known
+		// last movement result
+		bool isReady () { return motorState == MOTOR_STATE_IDLE && lastMovementKnown; }
+
+		// send the move to num: M, or CM (calibrate first) when the daemon was restarted, or when forced
+		int sendMove (int num, bool calibrate = false);
 };
 
 };
@@ -88,6 +113,10 @@ using namespace rts2focusd;
 TEFO::TEFO (int argc, char **argv):Focusd (argc, argv)
 {
 	host = nullptr;
+	connTEFO = nullptr;
+	lastMovementKnown = false;
+	pendingTarget = -1;
+	pendingDeadline = 0;
 
 	setFocusExtent(1, 1000);	// It's hardcoded in the daemon's code at the moment
 
@@ -138,51 +167,56 @@ int TEFO::initValues ()
 	return Focusd::initValues ();
 }
 
-int TEFO::sendCommand (const char *command)
+int TEFO::sendCommand (const char *command, int attempts, bool quiet)
 {
 	int ret = 0;
 	int attempt = 0;
 	char message[20], response[80];
 	unsigned short response_ID;
-	char response_command[10], request_status[10], motor_status[12];
+	char response_command[10], request_status[10], motor_status[12], last_result[12];
 
 	messageID++;
 	sprintf (message, "%i %s", messageID, command);
 
 	if (getDebug ())
 		logStream (MESSAGE_DEBUG) << "message: '" << message << "'" << sendLog;
-	while (ret <= 0 && attempt < UDP_RETRY_ATTEMPTS)
+	while (ret <= 0 && attempt < attempts)
 	{
 		attempt++;
-		ret = connTEFO->sendReceive ((const char *)message, response, 80, 0, UDP_RESPONSE_TIMEOUT);
+		ret = connTEFO->sendReceive ((const char *)message, response, 79, 0, UDP_RESPONSE_TIMEOUT);
 	}
 	if (ret<1)
 	{
-		logStream (MESSAGE_ERROR) << "Didn't get response from focuser daemon..." << sendLog;
-		return -1;
+		if (!quiet)
+			logStream (MESSAGE_ERROR) << "Didn't get response from focuser daemon..." << sendLog;
+		return TEFO_NO_RESPONSE;
 	}
 
 	response[ret] = 0;
 	if (getDebug ())
 		logStream (MESSAGE_DEBUG) << "response: '" << response << "'" << sendLog;
 	// <ID_int16> <command> <request-status_string> <motor-status_string> <last-movement-result_int> <actual-ABS-position_int> <set-ABS-position_int> <time-to-moveend_float>
-	ret = sscanf (response, "%hd %s %s %s %hd %hd %hd %f", &response_ID, response_command, request_status, motor_status, &last_movement_result, &position_actual, &position_set, &time_to_moveend);
+	// base note: the last movement result is "None" until the daemon's first movement (its homing at the start);
+	// classic read it as a number and failed on every reply then [JS 2026-11-15]
+	ret = sscanf (response, "%hu %9s %9s %11s %11s %hu %hu %f", &response_ID, response_command, request_status, motor_status, last_result, &position_actual, &position_set, &time_to_moveend);
 	if (ret !=8)
 	{
 		logStream (MESSAGE_ERROR) << "Cannot parse reply from focuser, reply was: '" << response << "', sscanf returned " << ret << sendLog;
-		return -1;
+		return TEFO_ERROR;
 	}
+	lastMovementKnown = strcmp (last_result, "None") != 0;
+	last_movement_result = lastMovementKnown ? atoi (last_result) : LAST_MOVEMENT_RESULT_OK;
 
 	if (response_ID != messageID)
 	{
 		logStream (MESSAGE_ERROR) << "responseID is not the same as messageID?!?" << sendLog;
-		return -1;
+		return TEFO_ERROR;
 	}
 
 	if (strcmp(request_status, "wrong") == 0)
 	{
 		logStream (MESSAGE_ERROR) << "request_status reported as wrong in daemon's response!" << sendLog;
-		return -1;
+		return TEFO_ERROR;
 	}
 
 	if (strcmp(motor_status, "idle") == 0)
@@ -211,38 +245,75 @@ int TEFO::info ()
 int TEFO::setTo (double num)
 {
 	int ret;
-	char command[10];
 
-	ret = info ();
-	if (ret)
-		return ret;
-
-	if (motorState == MOTOR_STATE_CALIBRATING)
-	{
-		logStream (MESSAGE_ERROR) << "focuser is not accepting a movement commands at the moment (calibration is in progress)" << sendLog;
-		// OK, this situation can be solved by postponing the movement command internally, sending it later within the scope of isFocusing () function
-		// however, it should be very unlikely to ever happen at all - so we can "solve" it this way...
+	ret = sendCommand ("S", UDP_RETRY_ATTEMPTS, true);
+	if (ret == TEFO_ERROR)
 		return -1;
-	}
 
-	if (motorState == MOTOR_STATE_IDLE && last_movement_result == LAST_MOVEMENT_RESULT_OK && position_actual != position_set)
+	// base note: classic refused a move while the daemon was not running or homing, which is what it does after a
+	// reboot (both sites 2026-11-15: the start position failed, F0 stayed at 240 instead of 760). The move now
+	// waits for the daemon, up to TEFO_READY_TIMEOUT, in the focusing state (no exposure meanwhile); isFocusing ()
+	// sends it. [JS 2026-11-15]
+	if (ret == TEFO_NO_RESPONSE || !isReady ())
+	{
+		pendingTarget = (int) num;
+		pendingDeadline = getNow () + TEFO_READY_TIMEOUT;
+		logStream (MESSAGE_INFO) << "focuser daemon " << (ret == TEFO_NO_RESPONSE ? "does not answer" : "is not ready (homing)") << ", the move to " << pendingTarget << " waits for it (at most " << TEFO_READY_TIMEOUT << " s)" << sendLog;
+		return 0;
+	}
+	position->setValueInteger ((int) position_actual);
+	pendingTarget = -1;
+
+	return sendMove ((int) num);
+}
+
+int TEFO::sendMove (int num, bool calibrate)
+{
+	char command[20];
+
+	if (calibrate || (motorState == MOTOR_STATE_IDLE && last_movement_result == LAST_MOVEMENT_RESULT_OK && position_actual != position_set))
 	{
 		// it seems like the TEFO daemon has been restarted, we have to recalibrate!
-		sprintf (command, "CM%i", (int) num);
+		sprintf (command, "CM%i", num);
 	}
 	else
 	{
-		sprintf (command, "M%i", (int) num);
+		sprintf (command, "M%i", num);
 	}
 
-	ret = sendCommand (command);
-
-	return ret;
+	return sendCommand (command) ? -1 : 0;
 }
 
 int TEFO::isFocusing ()
 {
 	int ret;
+
+	if (pendingTarget >= 0)
+	{
+		// one attempt and no log while waiting: the main loop is not held 2.5 s at every poll
+		// a wrong reply (a late answer to an unanswered request has the old ID) is waited out as no answer
+		ret = sendCommand ("S", 1, true);
+		if (ret == 0)
+			position->setValueInteger ((int) position_actual);
+		bool late = getNow () > pendingDeadline;
+		// a daemon that is idle but reports no movement past the deadline did not home by itself: calibrate first
+		if (ret == 0 && (isReady () || (late && motorState == MOTOR_STATE_IDLE)))
+		{
+			int num = pendingTarget;
+			pendingTarget = -1;
+			logStream (MESSAGE_INFO) << "focuser daemon ready, moving to " << num << sendLog;
+			if (sendMove (num, !isReady ()))
+				return -1;
+			return USEC_SEC / 10;
+		}
+		if (late)
+		{
+			logStream (MESSAGE_ERROR) << "focuser daemon not ready within " << TEFO_READY_TIMEOUT << " s, the move to " << pendingTarget << " is given up" << sendLog;
+			pendingTarget = -1;
+			return -1;
+		}
+		return ret == 0 ? USEC_SEC / 10 : USEC_SEC;
+	}
 
 	ret = info ();
 	if (ret)

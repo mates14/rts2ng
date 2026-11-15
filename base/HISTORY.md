@@ -5623,3 +5623,48 @@ random night moves between low positions (alt -6..15) at margin 0 / 0.5 /
 goes under it (outside the narrowing at the ends), 266 tried, all found.
 The replay checks the margin independently. ctest base 15/15; d50.cpp and
 d50path.cpp clean with the hardening flags.
+
+## TEFO focuser: the start position waits for the daemon (2026-11-15) [JS]
+
+After the reboot of lascaux and lascaux50 (19:22 UTC) neither TEFO went to
+its start position: D50's F0 stayed at 240 (start 760), SBT's F3 at 280
+(start 300), both rts2 drivers in a hardware error with no position. The
+MLAB daemons (`mlab-tefo@<config>.service`, Type=simple) were up but
+homing - 1:51 on D50 - and until their first movement report the last
+movement result as `None`: `1 S accepted calibrating None -117 240 0.0`.
+The driver read it as a number, failed on every reply ("Cannot parse
+reply"), and the start-position move was refused ("cannot set focuser to
+760"); nothing asked again.
+
+systemd ordering would not help: `After=mlab-tefo.target` waits for the
+python process only, waiting for the homing needs `Type=notify` in MLAB's
+code, it would hold all of rts2 for the homing at boot, and not cover a
+restart of the daemon alone.
+
+`focusd/tefo/tefo.cpp`:
+- the last movement result is read as a string, `None` = no movement yet;
+- `setTo ()` with the daemon not answering, homing, or without a movement
+  yet keeps the target and returns OK: the device stays focusing (with
+  BOP_EXPOSURE, so no exposure meanwhile); `isFocusing ()` polls with one
+  attempt and no log (0.1 s while it answers, 1 s while not) and sends
+  the move when the daemon is idle with a known result - after its own
+  move to the configured position. After `TEFO_READY_TIMEOUT` (300 s) an
+  idle daemon still without a movement gets `CM` (calibrate and move),
+  anything else gives up with the error as before.
+
+Bench (fake daemon `scratchpad/tefo/fake_tefo.py` imitating the replies
+above, private centrald): daemon silent 10 s then homing 8 s - the start
+position 760 sent 20 s later, reached; a normal move after it immediate;
+the daemon restarted under a running driver and a move asked during its
+start - sent after its homing, reached; a daemon that never homes by
+itself - `CM` after 300 s; no daemon at all - the error after 300 s.
+The last case first ended "focuser moved to nan", without an error:
+`Focusd::idle ()` (all focusers) took `isFocusing ()`'s -1 (error) like
+its -2 (reached) and only `endFocusing ()` (always 0) decided. Now -1 sets
+the hardware error (classic bug, UPSTREAM_BUGS). The other drivers return
+-1 only for errors too (fli, nstep, the base timeout); aaf also for an
+unexpected status letter, which SBT's retained logs never show.
+Rerun with a 20 s deadline: given up, no "moved" message.
+
+Not run on the real focusers: needs a release and a reboot (or a restart
+of mlab-tefo, then of F0/F3).

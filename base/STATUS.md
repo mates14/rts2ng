@@ -482,6 +482,11 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
 - `makak-shutter` keeps the value names the makak scripts use (`shutter`,
   `htSwitch`, `heating`, `temp`, `humidity`) and re-sends the heating mode
   after every USB reset (the arduino forgets it).
+- `focusd-tefo` (D50 F0, SBT F3): a move asked for before the MLAB daemon
+  answers and has homed (after a boot it reports `calibrating` and a last
+  result `None`) waits for it in the focusing state, up to 300 s, then
+  sends calibrate-and-move to an idle daemon that never homed, or gives
+  up with a hardware error. [JS 2026-11-15]
 - `teld-dummy` parks to the current zenith, re-locked on every poll.
 - `Block::~Block()` deletes pending timers.
 - `[observatory]` longitude/latitude/altitude are mandatory. This is a

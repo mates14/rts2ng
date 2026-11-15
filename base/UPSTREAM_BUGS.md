@@ -2174,3 +2174,16 @@ died while its WOFFS was on T0, EXEC segfaulted on T0's reply 2 s later.
 
 rts2ng: `Command::deleteConnection` also clears the originator when it is
 the deleted connection's device client.
+
+## A failed focuser move ends "without error" (`lib/rts2/focusd.cpp`) [JS 2026-11-15]
+
+`Focusd::idle ()` ends a move whenever `isFocusing ()` returns a negative
+value, and decides the outcome by `endFocusing ()` alone, which is 0 in
+the base class and in every driver. `isFocusing ()`'s -1 (error: the
+driver lost the focuser, or the base class's focus timeout) and -2
+(reached) both end as "focusing finished without error", "focuser moved
+to ...", with no error state. Seen on the bench with rts2ng's TEFO driver
+giving up a move: "focuser moved to nan".
+
+rts2ng: -1 from `isFocusing ()` sets the hardware error as a failed
+`endFocusing ()` does.

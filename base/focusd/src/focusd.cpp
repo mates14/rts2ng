@@ -146,11 +146,14 @@ int Focusd::idle ()
 		}
 		else
 		{
+			// base note: classic ended a move that isFocusing () reported failed (-1) as finished without error,
+			// unless endFocusing () failed too [JS 2026-11-15]
+			bool failed = (ret == -1);
 			ret = endFocusing ();
 			sendValueAll (position);
 			infoAll ();
 			setTimeout (USEC_SEC);
-			if (ret)
+			if (ret || failed)
 			{
 				maskState (DEVICE_ERROR_MASK | FOC_MASK_FOCUSING | BOP_EXPOSURE, DEVICE_ERROR_HW | FOC_SLEEPING, "focusing finished with error");
 			}
