@@ -5467,3 +5467,22 @@ its path, then TRACKING off.
 The moves there found their ways around the Sun ("avoiding the Sun", via
 HA 15 / Dec -40). Nothing changed in the code.
 
+
+## The build ID is taken on every build, not at configure (2026-11-15) [JS]
+
+D50 2026-11-15: the Andor driver, rebuilt by hand at 11:30 from a tree at
+8d338b2, logged `build 8548677`. Its `Command::deleteConnection` had the
+4a20623 fix (seen in the disassembly), so only the label was stale:
+`BASE_GIT_DESCRIBE` came from `git describe` when CMake configured, and an
+incremental `cmake --build` after a pull kept the old one - the header said
+so, but that defeats the ID, which is there to tell what runs.
+
+Now `cmake/BuildId.cmake` writes `generated/base-build-id.h` at configure
+and again from the `base_build_id` target on every build (`base_kernel`
+depends on it). `configure_file ()` rewrites it only when the ID changes,
+and it is its own header (only `kernel/src/device.cpp` includes it), so a
+new commit recompiles device.cpp and relinks, and an unchanged tree
+rebuilds nothing. `RTS2_BUILD_ID` (buildme.sh -d) still wins. Checked in a
+fresh clone: commit -> ID follows, only device.cpp rebuilt; no change ->
+nothing built; RTS2_BUILD_ID honoured; db's nested build gets it too;
+ctest base 15/15.

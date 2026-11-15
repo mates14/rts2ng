@@ -33,6 +33,7 @@
 #include "device.h"
 #include "command.h"
 #include "base-config.h"
+#include "base-build-id.h"
 
 using namespace rts2core;
 
@@ -551,7 +552,7 @@ Device::Device (int in_argc, char **in_argv, int in_device_type, const char *def
 
 	// Identity, see the base note at the declaration (device.h). The
 	// executable's mtime is the link time (dpkg keeps it from the build);
-	// BASE_GIT_DESCRIBE is only as fresh as the last cmake configure, so
+	// BASE_GIT_DESCRIBE is taken on every build (cmake/BuildId.cmake), so
 	// the two together say what is running.
 	createConstValue (driverName, "DRIVER", "driver executable", true, RTS2_VALUE_DEVPREFIX);
 	const char *exe = (in_argc > 0 && in_argv[0] != nullptr) ? in_argv[0] : "";

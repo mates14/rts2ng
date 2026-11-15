@@ -24,30 +24,20 @@ set(BASE_CONFDIR "/etc" CACHE STRING "Base directory for rts2.ini and friends")
 # Which commit this build came from, so a log file can say what produced it.
 # Two rounds of field testing were spent arguing about whether the binary at
 # the telescope matched the source being discussed, and the honest answer was
-# that nobody could tell from the log. Best effort only: not a git checkout,
-# no git installed, or a source tarball all just give "unknown".
-set(BASE_GIT_DESCRIBE "unknown")
-find_package(Git QUIET)
-if(GIT_FOUND)
-	execute_process(
-		COMMAND ${GIT_EXECUTABLE} describe --always --dirty --tags
-		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-		OUTPUT_VARIABLE _base_git_describe
-		OUTPUT_STRIP_TRAILING_WHITESPACE
-		ERROR_QUIET
-		RESULT_VARIABLE _base_git_result
-	)
-	if(_base_git_result EQUAL 0 AND _base_git_describe)
-		set(BASE_GIT_DESCRIBE "${_base_git_describe}")
-	endif()
-endif()
-# buildme.sh -d passes the package version: it stamps debian/changelog
-# before dpkg-buildpackage runs, which would make the describe above
-# "-dirty" on every package build. [MJ 2026-11-03]
-if(DEFINED ENV{RTS2_BUILD_ID} AND NOT "$ENV{RTS2_BUILD_ID}" STREQUAL "")
-	set(BASE_GIT_DESCRIBE "$ENV{RTS2_BUILD_ID}")
-endif()
+# that nobody could tell from the log. Worked out again on every build, not
+# only at configure time - see cmake/BuildId.cmake. [JS 2026-11-15]
+set(BASE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(BASE_BUILD_ID_IN ${CMAKE_CURRENT_SOURCE_DIR}/config/base-build-id.h.in)
+set(BASE_BUILD_ID_OUT ${CMAKE_CURRENT_BINARY_DIR}/generated/base-build-id.h)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildId.cmake)
 message(STATUS "base: building from ${BASE_GIT_DESCRIBE}")
+add_custom_target(base_build_id ALL
+	COMMAND ${CMAKE_COMMAND} -DBASE_SOURCE_DIR=${BASE_SOURCE_DIR}
+		-DBASE_BUILD_ID_IN=${BASE_BUILD_ID_IN} -DBASE_BUILD_ID_OUT=${BASE_BUILD_ID_OUT}
+		-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildId.cmake
+	BYPRODUCTS ${BASE_BUILD_ID_OUT}
+	COMMENT "base: build ID"
+	VERBATIM)
 
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/config/base-config.h.in
@@ -114,6 +104,8 @@ add_subdirectory(kernel)
 # add_subdirectory() from a different directory scope - e.g. db - still
 # pick up base-config.h transitively through target_link_libraries.
 target_include_directories(base_kernel PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/generated)
+# device.cpp reports the build ID: the header must be current before it compiles
+add_dependencies(base_kernel base_build_id)
 add_subdirectory(centrald)
 add_subdirectory(camd)
 add_subdirectory(monitor)
