@@ -307,6 +307,9 @@ class D50:public Fork
 		// worm reading once a second while tracking: separates the motor, the
 		// gearbox and the worm encoder's own errors [JS 2026-11-14]
 		double lastServoLog;
+		// the last reading, for the PEC's motor terms: counts, and when (NAN: none)
+		int32_t lastServoPos;
+		double lastServoAt;
 		void logServo ();
 
 		// base note: not in classic. Stage 3 of the PEC: the step frequency
@@ -315,6 +318,7 @@ class D50:public Fork
 		const char *pecModelFile;
 		PecModel pecModel;
 		rts2core::ValueBool *pecOn;
+		rts2core::ValueBool *pecMotor;
 		rts2core::ValueDouble *pecHaEast;
 		rts2core::ValueDouble *pecHaWest;
 		rts2core::ValueDouble *pecFactor;
@@ -490,6 +494,8 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	wormStarted = 0;
 	wormSilentReported = false;
 	lastServoLog = 0;
+	lastServoPos = 0;
+	lastServoAt = NAN;
 	createValue (wormValid, "worm_encoder", "HA worm encoder gives valid readings", false);
 	wormValid->setValueBool (false);
 	createValue (wormAngle, "worm_angle", "[deg] HA worm angle, in its turn", false, RTS2_DT_DEGREES);
@@ -503,10 +509,15 @@ D50::D50 (int in_argc, char **in_argv):Fork (in_argc, in_argv, true, true)
 	lastPecUpdate = 0;
 	createValue (pecOn, "pec", "periodic error correction of the HA step frequency (needs --pec-model and the worm encoder)", false, RTS2_VALUE_WRITABLE);
 	pecOn->setValueBool (false);
+	createValue (pecMotor, "pec_motor", "PEC: also the model's motor terms (the gearbox, at the RA servo's motor angle)", false, RTS2_VALUE_WRITABLE);
+	pecMotor->setValueBool (true);
+	// base note: the switch between the worm shapes, measured on the night of
+	// 2026-11-14/15 at HA -0.6 h and sharp; was -0.3 / +0.6 from the first
+	// fit (HISTORY, "the first night with PEC and the servo position") [JS 2026-11-15]
 	createValue (pecHaEast, "pec_ha_east", "[h] PEC: the east worm shape up to this HA", false, RTS2_VALUE_WRITABLE);
-	pecHaEast->setValueDouble (-0.3);
+	pecHaEast->setValueDouble (-0.7);
 	createValue (pecHaWest, "pec_ha_west", "[h] PEC: the west worm shape from this HA (blended between)", false, RTS2_VALUE_WRITABLE);
-	pecHaWest->setValueDouble (0.6);
+	pecHaWest->setValueDouble (-0.5);
 	createValue (pecFactor, "pec_factor", "PEC: factor on the HA step frequency now (1 = no correction)", false);
 	pecFactor->setValueDouble (1.0);
 	createValue (pecWest, "pec_west", "PEC: weight of the west worm shape now (0 east .. 1 west)", false);
@@ -1487,6 +1498,11 @@ int D50::setValue (rts2core::Value * old_value, rts2core::Value * new_value)
 			pecOff ();
 		return 0;
 	}
+	else if (old_value == pecMotor)
+	{
+		wormLog ("M %d", new_value->getValueInteger () ? 1 : 0);
+		return 0;
+	}
 	else if (old_value == remotesWormStepsFreqDefault)
 	{
 		return setWormStepsFreq (new_value->getValueDouble ());
@@ -2005,7 +2021,10 @@ void D50::logServo ()
 	// one read (~10 ms at 19200 Bd) a second is all this costs. idle () runs
 	// at least once a second after a move (setTimeout (USEC_SEC)).
 	if (wormEncoder == nullptr || (getState () & TEL_MOVING) || !raDrive->isInStepperMode ())
+	{
+		lastServoAt = NAN;
 		return;
+	}
 	double t0 = getNow ();
 	if (t0 - lastServoLog < 0.95)
 		return;
@@ -2018,8 +2037,11 @@ void D50::logServo ()
 	catch (rts2core::Error &e)
 	{
 		// the next info () reports a dead servo; the log just misses a line
+		lastServoAt = NAN;
 		return;
 	}
+	lastServoPos = pos;
+	lastServoAt = t0;
 	// S <servo counts> <ms the read took>, then the worm reading: the servo
 	// was read up to that long before the line's time
 	wormLog ("S %d %.0f", pos, (getNow () - t0) * 1000.0);
@@ -2064,10 +2086,16 @@ void D50::updatePec ()
 	if (pos < 0)
 		pos += WORM_COUNTS;
 	double phi = 2 * M_PI * pos / WORM_COUNTS;
+	// the motor angle half a second ahead too, from logServo ()'s reading of
+	// this second (it runs just before); the servo moves 4.8 x 2^16 / 2^23 of
+	// the encoder's counts. No fresh reading: the worm terms alone.
+	double theta = NAN;
+	if (pecMotor->getValueBool () && pecModel.hasMotor () && std::isfinite (lastServoAt) && now - lastServoAt < 2.5)
+		theta = PecModel::motorAngle (lastServoPos + rate * PEC_MOTOR_PER_TURN * PEC_MOTOR_COUNTS / WORM_COUNTS * (now - lastServoAt + 0.5));
 	// HA [h] from the servo position of the last info (), west positive
 	double ha = ln_range_degrees ((double) (raDrive->getPosition () / haCpd) + haZero + 180.0) - 180.0;
 	double w = PecModel::westWeight (ha / 15.0, pecHaEast->getValueDouble (), pecHaWest->getValueDouble ());
-	double f = pecModel.factor (phi, w);
+	double f = pecModel.factor (phi, w, theta);
 	if (std::isnan (f))
 	{
 		logStream (MESSAGE_ERROR) << "PEC factor out of range, the correction switched off" << sendLog;

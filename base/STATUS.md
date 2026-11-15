@@ -36,9 +36,13 @@ with the date and `[MJ]`/`[JS]`.
   night"): one west and one east shape for all Decs. 2026-11-14 [JS]: the
   RA servo position logged too (`S` lines), and stage 3, the correction
   (`--pec-model`, value `pec`, off by default; HISTORY "D50 PEC stage
-  3"), not released yet, not run on the mount. Next: a night with `pec`
-  on and off; later the 37.4 s family (one motor turn) from the servo or
-  the encoder.
+  3"). 2026-11-15 [JS]: on the mount since 11-14, unguided error about
+  halved; the switch moved to HA -0.6 h and motor terms (the gearbox,
+  value `pec_motor`) added - not released yet (HISTORY, "D50 PEC: the
+  switch at -0.6 h and the motor terms"); `/etc/rts2/pec-model.txt` needs
+  the repo copy. Next: a night to confirm (a crossing of HA -0.6, ideally
+  at another Dec; `pec_motor` off/on); refit the east shape (it has
+  fewer frames); then the worm-encoder loop.
 
 ## What base is
 

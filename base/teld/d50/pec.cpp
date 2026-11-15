@@ -29,6 +29,7 @@ bool PecModel::load (const std::string &path, std::string &err)
 {
 	east.clear ();
 	west.clear ();
+	motor.clear ();
 	std::ifstream in (path);
 	if (!in)
 	{
@@ -50,20 +51,22 @@ bool PecModel::load (const std::string &path, std::string &err)
 		Term t;
 		std::string rest;
 		if (!(ls >> t.h >> t.c >> t.s) || (ls >> rest) || t.h < 1 || t.h > 64
-			|| !std::isfinite (t.c) || !std::isfinite (t.s) || (side != "east" && side != "west"))
+			|| !std::isfinite (t.c) || !std::isfinite (t.s) || (side != "east" && side != "west" && side != "motor"))
 		{
-			err = path + ":" + std::to_string (n) + ": expected \"east|west <h> <c> <s>\"";
+			err = path + ":" + std::to_string (n) + ": expected \"east|west|motor <h> <c> <s>\"";
 			east.clear ();
 			west.clear ();
+			motor.clear ();
 			return false;
 		}
-		(side == "east" ? east : west).push_back (t);
+		(side == "east" ? east : side == "west" ? west : motor).push_back (t);
 	}
 	if (east.empty () || west.empty ())
 	{
 		err = path + ": needs terms for both east and west";
 		east.clear ();
 		west.clear ();
+		motor.clear ();
 		return false;
 	}
 	return true;
@@ -85,18 +88,32 @@ double PecModel::slope (const std::vector<Term> &t, double phi)
 	return v;
 }
 
-double PecModel::error (double phi, double w) const
+double PecModel::error (double phi, double w, double theta) const
 {
-	return (1 - w) * value (east, phi) + w * value (west, phi);
+	double v = (1 - w) * value (east, phi) + w * value (west, phi);
+	if (std::isfinite (theta))
+		v += value (motor, theta);
+	return v;
 }
 
-double PecModel::factor (double phi, double w) const
+double PecModel::factor (double phi, double w, double theta) const
 {
 	double dp = (1 - w) * slope (east, phi) + w * slope (west, phi);
+	// d/dphi of a motor term: theta turns PEC_MOTOR_PER_TURN times per phi
+	if (std::isfinite (theta))
+		dp += PEC_MOTOR_PER_TURN * slope (motor, theta);
 	double f = 1 - 2 * M_PI / PEC_HA_PER_TURN * dp;
 	if (!std::isfinite (f) || fabs (f - 1) > PEC_MAX_CHANGE)
 		return NAN;
 	return f;
+}
+
+double PecModel::motorAngle (double counts)
+{
+	double r = fmod (counts, (double) PEC_MOTOR_COUNTS);
+	if (r < 0)
+		r += PEC_MOTOR_COUNTS;
+	return 2 * M_PI * r / PEC_MOTOR_COUNTS;
 }
 
 double PecModel::westWeight (double ha, double haEast, double haWest)

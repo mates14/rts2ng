@@ -28,9 +28,18 @@
 //	f = f_default * (1 - 2 pi / 2700 * dp/dphi)
 // (2700" of HA in one worm turn). This holds whichever way the encoder
 // counts. Between the two sides the shapes are blended linearly in HA.
+// Optional motor terms [JS 2026-11-15]: the gearbox between the motor and
+// the worm adds an error locked to the motor angle theta (the RA servo's
+// counts mod 65536, one motor turn = 1/4.8 worm turn), the same on both
+// sides (HISTORY, "the first night with PEC and the servo position"):
+//	m (theta) = sum over k of c_k cos (k theta) + s_k sin (k theta)
+// The servo counts down while tracking, as the worm encoder does, so a
+// motor term enters the factor as a worm term does, 4.8 times steeper:
+//	f = f_default * (1 - 2 pi / 2700 * (dp/dphi + 4.8 dm/dtheta))
 
 #pragma once
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -39,6 +48,10 @@ namespace rts2teld
 
 // arcsec of HA in one worm turn (1/480 of the wheel)
 const double PEC_HA_PER_TURN = 2700.0;
+// motor turns in one worm turn (RA_TICKS = 2304 x 65536, 2304 = 480 x 4.8),
+// and servo counts in one motor turn
+const double PEC_MOTOR_PER_TURN = 4.8;
+const int PEC_MOTOR_COUNTS = 65536;
 // a factor further from 1 than this is refused: the 2026-11-14 model needs
 // up to 2.3 % (h7, h8 are steep); the guide pulses use 10 %
 const double PEC_MAX_CHANGE = 0.05;
@@ -48,22 +61,32 @@ class PecModel
 	public:
 		/**
 		 * Read the model: one line per harmonic, "east|west <h> <c> <s>",
-		 * c and s in arcsec of HA; # starts a comment.
+		 * and optionally "motor <k> <c> <s>", c and s in arcsec of HA;
+		 * # starts a comment.
 		 *
 		 * @return true on success; false with err set (the model stays empty)
 		 */
 		bool load (const std::string &path, std::string &err);
 
 		bool empty () const { return east.empty () && west.empty (); }
-
-		/** the sky error [arcsec HA] at phi [rad], west weight w (0 east .. 1 west) */
-		double error (double phi, double w) const;
+		bool hasMotor () const { return !motor.empty (); }
 
 		/**
-		 * Step frequency factor at phi [rad] and west weight w; NAN when it
-		 * would change the frequency by more than PEC_MAX_CHANGE.
+		 * The sky error [arcsec HA] at phi [rad], west weight w (0 east .. 1
+		 * west), and the motor angle theta [rad]; theta NAN leaves the motor
+		 * terms out.
 		 */
-		double factor (double phi, double w) const;
+		double error (double phi, double w, double theta = NAN) const;
+
+		/**
+		 * Step frequency factor at phi [rad], west weight w and motor angle
+		 * theta [rad] (NAN: worm terms only); NAN when it would change the
+		 * frequency by more than PEC_MAX_CHANGE.
+		 */
+		double factor (double phi, double w, double theta = NAN) const;
+
+		/** the motor angle [rad] of a servo position [counts] */
+		static double motorAngle (double counts);
 
 		/** west weight at HA [h]: 0 up to haEast, 1 from haWest, linear between */
 		static double westWeight (double ha, double haEast, double haWest);
@@ -77,6 +100,7 @@ class PecModel
 		};
 		std::vector<Term> east;
 		std::vector<Term> west;
+		std::vector<Term> motor;
 
 		static double value (const std::vector<Term> &t, double phi);
 		static double slope (const std::vector<Term> &t, double phi);

@@ -19,3 +19,9 @@ west 5 +0.207 +0.177
 west 6 +0.198 +0.082
 west 7 -0.096 -0.223
 west 8 +0.204 -0.057
+# motor terms [JS 2026-11-15]: the gearbox, at the motor angle theta = 2 pi (RA servo
+# counts mod 65536) / 65536, the same on both sides; fitted on the night of 2026-11-14/15
+# (11384 frames, jointly with free worm harmonics per side), stable to 0.02" between the
+# halves of the night and the sides. k3 (0.08") left out.
+motor 1 +0.366 +0.119
+motor 2 -0.208 -0.001

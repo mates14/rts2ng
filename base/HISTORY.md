@@ -5527,3 +5527,36 @@ absent between servo and encoder (0.008"), and coherent in none of clock
 time, worm angle, motor angle, HA-axis position or time since the last
 tracking start. It is not in the drive train up to the worm encoder;
 it stays for the guider.
+
+## D50 PEC: the switch at -0.6 h and the motor terms (2026-11-15) [JS]
+
+From the night analysis above.
+- `pec_ha_east` / `pec_ha_west` default -0.7 / -0.5 h (were -0.3 / +0.6).
+- Motor terms in the model: `motor <k> <c> <s>` lines in
+  `pec-model.txt`, optional, the same on both sides. The motor angle is
+  `theta = 2 pi (servo counts mod 65536) / 65536`, from `logServo ()`'s
+  reading of the same second (it runs just before `updatePec ()` in
+  `idle ()`), moved half a second ahead at the encoder's rate x 4.8 x
+  2^16 / 2^23. The servo counts down while tracking, as the encoder does,
+  so a motor term enters the factor as a worm term, 4.8 times steeper:
+  `f = 1 - 2 pi / 2700 (dp/dphi + 4.8 dm/dtheta)`. No servo reading in the
+  last 2.5 s: the worm terms alone. `pec_motor` (default on) switches the
+  motor terms; `M 0|1` in the worm log.
+- Fitted on last night's 11384 frames, jointly with free worm harmonics
+  per side: k1 c +0.366 s +0.119, k2 c -0.208 s -0.001 (0.385", 0.208");
+  the halves of the night and the two sides agree to 0.02". k3 (0.08")
+  left out. The repo model now needs up to 3.00 % of the step frequency
+  (limit 5 %).
+- Rebuilt on last night's PEC frames, the unguided error, all frequencies,
+  frame-weighted rms: none 1.57", as run 0.98", new switch 0.85", new
+  switch + motor terms 0.79". The east targets stay at 1.0-1.2" (west
+  0.5-0.8"): the east shape came from 1797 frames, a refit from more east
+  data is next.
+
+`test_pec`: the motor terms against a numerical derivative along the drive
+(theta = theta0 + 4.8 phi), the extra motion cancelling them, the motor
+angle of negative counts, a model without motor lines. ctest base 15/15;
+d50.cpp and pec.cpp clean with the hardening flags. Not run on the mount:
+check the `M` line and `pec_factor` there, and `/etc/rts2/pec-model.txt`
+must be replaced by the repo copy (the old one has no motor lines, which
+is valid: the worm terms alone).
