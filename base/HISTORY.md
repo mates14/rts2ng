@@ -5486,3 +5486,44 @@ rebuilds nothing. `RTS2_BUILD_ID` (buildme.sh -d) still wins. Checked in a
 fresh clone: commit -> ID follows, only device.cpp rebuilt; no change ->
 nothing built; RTS2_BUILD_ID honoured; db's nested build gets it too;
 ctest base 15/15.
+
+## D50 PEC: the first night with PEC and the servo position (2026-11-15) [JS]
+
+Night 2026-11-14/15, PEC on from 17:47 UTC to the morning: 13173 C1 frames
+on 37 targets, 47366 `S` lines (servo read 9 ms median, 31 ms at most).
+Analysis as in the entries above: the guider's offset, the worm log and
+the observations from the database. Nothing changed in the code yet.
+
+**The switch between the worm shapes is at HA -0.6 h**, not in the blend
+T0 uses (`pec_ha_east` -0.3, `pec_ha_west` +0.6). Fitting both model shapes
+to the mount's own error per two worm turns: east 0.8-1.1 up to HA -0.8,
+both ~0.5 at -0.67, west from -0.4 on, sharp within ~0.2 h - one crossing
+(8075, Dec +23.5), the near-meridian targets bracket it. Far from the
+meridian PEC took the worm-locked unguided error from 1.2-1.6" to
+0.1-0.3", east side included (8053, 8074). In HA -0.6..+0.3 it applied
+mostly the wrong shape: 1145 1.19" -> 1.64", 1082 1.24" -> 1.74". Rebuilt
+with a switch at -0.7..-0.5 those come out 0.34-0.50" (the same rebuild
+with the current setting reproduces what PEC did to 0.04"). Near the
+meridian the worm error is ~0.8 of the model's amplitude.
+
+**The servo position splits the error by stage.** The servo follows the
+steps to 0.10" rms with nothing periodic in it (after splitting at the C0
+scripts' offsets, which the servo makes as position moves the steps do not
+see). Servo against the worm encoder, i.e. the gearbox and the encoder:
+0.44" rms, 0.38" once per motor turn and 0.21" twice per motor turn,
+coherent in the motor angle (servo counts mod 65536) all night, plus 0.38"
+once per worm turn. The sky against the steps has the same motor terms
+(0.38", 0.21", the same phases on both sides of the meridian); the sky
+against the worm encoder has none of them (0.04", 0.01"). So the 37.40 s /
+18.70 s family is made in the gearbox between motor and worm, and the worm
+encoder sees it: a loop on the encoder, or a feedforward on the motor
+angle from the `S` reading, would remove it. What stays after the encoder
+is the side-dependent worm error (h1 1.2-1.4", h3 0.45-0.57"), which the
+PEC model keeps covering. The once-per-worm-turn 0.38" between servo and
+encoder cannot be told apart from encoder eccentricity with these data.
+
+**The 43.2 s family** is after the encoder: 0.22-0.33" in each long run,
+absent between servo and encoder (0.008"), and coherent in none of clock
+time, worm angle, motor angle, HA-axis position or time since the last
+tracking start. It is not in the drive train up to the worm encoder;
+it stays for the guider.
