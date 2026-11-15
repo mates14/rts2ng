@@ -386,6 +386,9 @@
         }
         .service-head { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 14px; margin-bottom: 4px; }
         .service-close { cursor: pointer; font-size: 22px; line-height: 1; padding: 0 4px; user-select: none; }
+        .svc-ask { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; margin-right: 12px; font-weight: normal; font-size: 12px; cursor: pointer; }
+        .service .svc-ask input { width: auto; margin: 0; padding: 0; }
+        .svc-ask:has(input:not(:checked)) { color: #e8a030; }
         .service-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 6px 0; border-top: 1px solid var(--border); }
         .service-row .svc-label { flex: 0 0 85px; font-weight: bold; }
         .service-row .svc-state { flex: 1 1 auto; color: var(--text-muted); font-size: 11px; }
@@ -1913,7 +1916,9 @@
             serviceEl.hidden = true;
             serviceEl.innerHTML = `
                 <div class="service-box">
-                    <div class="service-head">Service commands <span class="service-close" title="close (Esc)">&times;</span></div>
+                    <div class="service-head">Service commands
+                        <label class="svc-ask" title="off: every button acts at once, until the page is reloaded"><input type="checkbox" id="svc-ask" checked> ask before each command</label>
+                        <span class="service-close" title="close (Esc)">&times;</span></div>
                     <div class="service-row">
                         <span class="svc-label">Dome</span>
                         <button onclick="serviceCmd('DOME', 'open', 'Open the dome?')">open</button>
@@ -2452,8 +2457,13 @@
             msg.textContent = text;
         }
 
+        // the "ask before each command" switch; on after every reload
+        function serviceConfirm(question) {
+            return !question || !document.getElementById('svc-ask').checked || confirm(question);
+        }
+
         async function serviceCmd(device, cmd, question) {
-            if (question && !confirm(question))
+            if (!serviceConfirm(question))
                 return;
             const since = Date.now() / 1000 - 1;
             serviceMsg('', `${device}: sending "${cmd}"...`);
@@ -2474,7 +2484,7 @@
         }
 
         async function serviceSet(device, name, value, question) {
-            if (question && !confirm(question))
+            if (!serviceConfirm(question))
                 return;
             const since = Date.now() / 1000 - 1;
             serviceMsg('', `${device}: setting ${name} to ${value}...`);
@@ -2489,8 +2499,21 @@
             } catch (e) {
                 return serviceMsg('error', `${device}: setting ${name} failed: ${e}`);
             }
-            setTimeout(() => updateStatus().then(updateServiceState).catch(e => console.error(e)), 1000);
             serviceDeviceLog(device, since);
+            // The device each second until it shows the new value, at most
+            // 20 s: a driver may answer only when done (the WF shutter's
+            // unit replies after the cover has moved), and a read before
+            // that got the old value, left on show until the next poll.
+            for (let i = 0; i < 20; i++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const d = await fetchDeviceData(device);
+                if (!d)
+                    continue;
+                systemData[device] = d;
+                updateServiceState();
+                if (Number(d[name]) === Number(value))
+                    break;
+            }
         }
 
         // The device's errors, warnings and infos since the request, a

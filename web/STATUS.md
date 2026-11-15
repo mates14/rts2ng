@@ -4150,3 +4150,11 @@ on the sky chart. That poll ran every 30 s in the 'idle' traffic mode
 (nothing observed), when the dialog is mostly used: an open dialog now keeps
 the page 'live' (status 10 s, TEL_ 2 s / 0.5 s while moving, the WebSocket)
 and polls TEL_ at once; closed, the mode follows the data again.
+
+2026-11-15 [JS]: after a set the dialog reads that device each second until
+it shows the new value (at most 20 s). The WF shutter kept its old state
+until the next poll: d50-wfunit's setValue waits for the unit's reply,
+which seems to come only after the cover has moved, and a read 1 s after
+the set got the value from before. A switch "ask before each command" in
+the dialog's head: off, the buttons act without the question; on again
+after every reload (not stored).
