@@ -82,8 +82,11 @@ class TEFO:public Focusd
 		unsigned short motorState;
 		unsigned short last_movement_result;
 		bool lastMovementKnown;		// false while the daemon reports "None" (no movement since it started)
-		unsigned short position_actual;
-		unsigned short position_set;
+		// "None" in a position field: no position (a failed homing reports no set position)
+		int position_actual;
+		int position_set;
+		bool positionActualKnown;
+		bool positionSetKnown;
 		float time_to_moveend;
 
 		// a move asked for before the daemon was ready, -1 when none; it waits until pendingDeadline
@@ -100,7 +103,14 @@ class TEFO:public Focusd
 
 		// the daemon homed and finished its own move after it (to the position in its config): idle, with a known
 		// last movement result
-		bool isReady () { return motorState == MOTOR_STATE_IDLE && lastMovementKnown; }
+		bool isReady () { return motorState == MOTOR_STATE_IDLE && lastMovementKnown && positionSetKnown; }
+
+		// the daemon's homing failed (SBT 2026-11-15: the end switch did not release within its 5 min): idle, the
+		// last movement failed and no set position. Only a restart of the daemon homes it again.
+		bool homingFailed () { return motorState == MOTOR_STATE_IDLE && lastMovementKnown && last_movement_result == LAST_MOVEMENT_RESULT_FAIL && !positionSetKnown; }
+
+		// FOC_POS from the last reply, NAN while the daemon has no position
+		void publishPosition () { position->setValueDouble (positionActualKnown ? position_actual : NAN); }
 
 		// send the move to num: M, or CM (calibrate first) when the daemon was restarted, or when forced
 		int sendMove (int num, bool calibrate = false);
@@ -115,6 +125,8 @@ TEFO::TEFO (int argc, char **argv):Focusd (argc, argv)
 	host = nullptr;
 	connTEFO = nullptr;
 	lastMovementKnown = false;
+	positionActualKnown = positionSetKnown = false;
+	position_actual = position_set = 0;
 	pendingTarget = -1;
 	pendingDeadline = 0;
 
@@ -173,7 +185,7 @@ int TEFO::sendCommand (const char *command, int attempts, bool quiet)
 	int attempt = 0;
 	char message[20], response[80];
 	unsigned short response_ID;
-	char response_command[10], request_status[10], motor_status[12], last_result[12];
+	char response_command[10], request_status[10], motor_status[12], last_result[12], actual[12], set[12];
 
 	messageID++;
 	sprintf (message, "%i %s", messageID, command);
@@ -196,9 +208,10 @@ int TEFO::sendCommand (const char *command, int attempts, bool quiet)
 	if (getDebug ())
 		logStream (MESSAGE_DEBUG) << "response: '" << response << "'" << sendLog;
 	// <ID_int16> <command> <request-status_string> <motor-status_string> <last-movement-result_int> <actual-ABS-position_int> <set-ABS-position_int> <time-to-moveend_float>
-	// base note: the last movement result is "None" until the daemon's first movement (its homing at the start);
-	// classic read it as a number and failed on every reply then [JS 2026-11-15]
-	ret = sscanf (response, "%hu %9s %9s %11s %11s %hu %hu %f", &response_ID, response_command, request_status, motor_status, last_result, &position_actual, &position_set, &time_to_moveend);
+	// base note: the last movement result is "None" until the daemon's first movement (its homing at the start),
+	// the set position "None" after a failed homing, and the actual position is negative while homing; classic
+	// read them as unsigned numbers and failed on every such reply [JS 2026-11-15]
+	ret = sscanf (response, "%hu %9s %9s %11s %11s %11s %11s %f", &response_ID, response_command, request_status, motor_status, last_result, actual, set, &time_to_moveend);
 	if (ret !=8)
 	{
 		logStream (MESSAGE_ERROR) << "Cannot parse reply from focuser, reply was: '" << response << "', sscanf returned " << ret << sendLog;
@@ -206,6 +219,10 @@ int TEFO::sendCommand (const char *command, int attempts, bool quiet)
 	}
 	lastMovementKnown = strcmp (last_result, "None") != 0;
 	last_movement_result = lastMovementKnown ? atoi (last_result) : LAST_MOVEMENT_RESULT_OK;
+	positionActualKnown = strcmp (actual, "None") != 0;
+	position_actual = positionActualKnown ? atoi (actual) : 0;
+	positionSetKnown = strcmp (set, "None") != 0;
+	position_set = positionSetKnown ? atoi (set) : 0;
 
 	if (response_ID != messageID)
 	{
@@ -237,7 +254,7 @@ int TEFO::info ()
 	if (ret)
 		return -1;
 
-	position->setValueInteger ((int) position_actual);
+	publishPosition ();
 
 	return Focusd::info ();
 }
@@ -249,6 +266,11 @@ int TEFO::setTo (double num)
 	ret = sendCommand ("S", UDP_RETRY_ATTEMPTS, true);
 	if (ret == TEFO_ERROR)
 		return -1;
+	if (ret == 0 && homingFailed ())
+	{
+		logStream (MESSAGE_ERROR) << "focuser daemon reports a failed homing, the move to " << (int) num << " is refused - check the focuser, then restart its daemon (mlab-tefo) and this driver" << sendLog;
+		return -1;
+	}
 
 	// base note: classic refused a move while the daemon was not running or homing, which is what it does after a
 	// reboot (both sites 2026-11-15: the start position failed, F0 stayed at 240 instead of 760). The move now
@@ -261,7 +283,7 @@ int TEFO::setTo (double num)
 		logStream (MESSAGE_INFO) << "focuser daemon " << (ret == TEFO_NO_RESPONSE ? "does not answer" : "is not ready (homing)") << ", the move to " << pendingTarget << " waits for it (at most " << TEFO_READY_TIMEOUT << " s)" << sendLog;
 		return 0;
 	}
-	position->setValueInteger ((int) position_actual);
+	publishPosition ();
 	pendingTarget = -1;
 
 	return sendMove ((int) num);
@@ -294,7 +316,13 @@ int TEFO::isFocusing ()
 		// a wrong reply (a late answer to an unanswered request has the old ID) is waited out as no answer
 		ret = sendCommand ("S", 1, true);
 		if (ret == 0)
-			position->setValueInteger ((int) position_actual);
+			publishPosition ();
+		if (ret == 0 && homingFailed ())
+		{
+			logStream (MESSAGE_ERROR) << "focuser daemon reports a failed homing, the move to " << pendingTarget << " is given up - check the focuser, then restart its daemon (mlab-tefo) and this driver" << sendLog;
+			pendingTarget = -1;
+			return -1;
+		}
 		bool late = getNow () > pendingDeadline;
 		// a daemon that is idle but reports no movement past the deadline did not home by itself: calibrate first
 		if (ret == 0 && (isReady () || (late && motorState == MOTOR_STATE_IDLE)))
@@ -325,7 +353,7 @@ int TEFO::isFocusing ()
 		return (int) (USEC_SEC / 10);
 
 	// the only left case is motorState == MOTOR_STATE_IDLE
-	if (last_movement_result == LAST_MOVEMENT_RESULT_FAIL || position_actual != position_set)
+	if (last_movement_result == LAST_MOVEMENT_RESULT_FAIL || !positionActualKnown || !positionSetKnown || position_actual != position_set)
 		return -1;	// error
 
 	return -2;	// OK, we are in place

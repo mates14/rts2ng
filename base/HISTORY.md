@@ -5727,3 +5727,32 @@ Recovery on lascaux50: `systemctl daemon-reload` and `systemctl restart
 rts2` (the new unit file was not loaded yet). Until the fixed
 package is installed and loaded, restart everything with `systemctl
 restart rts2`, and use `rts2-start -r` only for named daemons.
+
+## TEFO: a failed homing is told as such (2026-11-15) [JS]
+
+After the restart of lascaux (20:42 UTC) SBT's F3 stayed in the hardware
+error, logging "Cannot parse reply ... 'idle 1 0 None 0.0'". The MLAB
+daemon's homing had failed: it reached the end switch at 20:43:00, waited
+for it to release and gave up at 20:48:04 ("Timeout!!!"; in the 2023
+journal the release took 10 s). A failed homing reports the last movement
+failed (1) and no set position (`None`); only a restart of the daemon
+homes again. Not an rts2 problem - the focuser needs a check - but the
+driver could not even read the reply.
+
+`focusd/tefo/tefo.cpp`: both positions are read as text too (`None` = no
+position, FOC_POS NAN; a negative actual position while homing, `-117`,
+no longer wraps to 65419). A failed homing (idle, last result 1, no set
+position) refuses a move at once, or ends a waiting one, with "focuser
+daemon reports a failed homing ... check the focuser, then restart its
+daemon (mlab-tefo) and this driver"; no automatic re-homing, which would
+run the motor against a stuck switch for another 5 min. Ready for a move
+also needs a set position.
+
+Bench (fake daemon with a failing homing, private centrald): the driver
+started during the homing waits, then gives up when it fails (7 s, not
+300 s); started after it, refuses at once; a normal homing still ends in
+the move.
+
+The daemon logged as `python`/`python3` in the journal; JS gets a
+drop-in, `/etc/systemd/system/mlab-tefo@.service.d/journal.conf` with
+`SyslogIdentifier=tefo-%i`, at both sites (local files, not in the repo).

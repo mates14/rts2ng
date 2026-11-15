@@ -499,7 +499,8 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   answers and has homed (after a boot it reports `calibrating` and a last
   result `None`) waits for it in the focusing state, up to 300 s, then
   sends calibrate-and-move to an idle daemon that never homed, or gives
-  up with a hardware error. [JS 2026-11-15]
+  up with a hardware error. A failed homing (last result 1, set position
+  `None`) is an error at once, never re-homed by the driver. [JS 2026-11-15]
 - `teld-dummy` parks to the current zenith, re-locked on every poll.
 - `Block::~Block()` deletes pending timers.
 - `[observatory]` longitude/latitude/altitude are mandatory. This is a
