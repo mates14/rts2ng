@@ -2596,11 +2596,20 @@
             if (fan !== null)
                 document.getElementById('svc-fan').value = String(fan);
             updateServiceState();
+            // the page's live refresh while the dialog is open, and the
+            // telescope's poll at once
+            evaluateNetMode();
+            kickTelLoop();
         }
 
         function closeService() {
             if (serviceEl)
                 serviceEl.hidden = true;
+            evaluateNetMode();
+        }
+
+        function serviceOpen() {
+            return !!serviceEl && !serviceEl.hidden;
         }
 
         function buildService() {
@@ -3811,6 +3820,7 @@
         // deg; tracking moves the mount far less in 2 s
         const TEL_MOVED_DEG = 0.02;
         let telFastUntil = 0;
+        let telTimer = null, telBusy = false;
 
         // One value of a device, undefined when it did not answer.
         async function fetchValue(device, name) {
@@ -3839,6 +3849,8 @@
         }
 
         async function telLoop() {
+            telTimer = null;
+            telBusy = true;
             if (!document.hidden) {
                 const fast = Date.now() < telFastUntil;
                 const [tel, tar] = await Promise.all([fetchValue('T0', 'TEL_'),
@@ -3864,8 +3876,19 @@
                         updateServiceState();
                 }
             }
-            setTimeout(telLoop, netMode === 'low' ? 60000 : netMode === 'idle' ? 30000
-                : Date.now() < telFastUntil ? TEL_FAST_MS : TEL_POLL_MS);
+            telBusy = false;
+            // with the service dialog open always at the live rate: TEL_ is
+            // a few bytes, and the map's ring should follow a move
+            telTimer = setTimeout(telLoop, Date.now() < telFastUntil && (netMode === 'live' || serviceOpen()) ? TEL_FAST_MS
+                : serviceOpen() || netMode === 'live' ? TEL_POLL_MS : netMode === 'low' ? 60000 : 30000);
+        }
+
+        // the next round now (a running one schedules its own)
+        function kickTelLoop() {
+            if (telBusy || telTimer === null)
+                return;
+            clearTimeout(telTimer);
+            telLoop();
         }
 
         // The bars move every frame from their start and end, not in the
@@ -4102,7 +4125,8 @@
                 setNetMode('low');
                 return;
             }
-            setNetMode(observingNow() ? 'live' : 'idle');
+            // the service dialog wants the live refresh: its map and states
+            setNetMode(observingNow() || serviceOpen() ? 'live' : 'idle');
         }
 
         // The login is checked once before anything loads [JS 2026-11-07]. A

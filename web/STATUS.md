@@ -4146,4 +4146,7 @@ mount's own park position, COMMAND_TELD_PARK; asks first).
 not from inside_dome_limit: that one tells how the last move went and stays
 on after the roof has opened. The roof state ("ceiling in force" / "off" on
 D50) top left on the map; the telescope's ring follows the 2 s TEL_ poll as
-on the sky chart.
+on the sky chart. That poll ran every 30 s in the 'idle' traffic mode
+(nothing observed), when the dialog is mostly used: an open dialog now keeps
+the page 'live' (status 10 s, TEL_ 2 s / 0.5 s while moving, the WebSocket)
+and polls TEL_ at once; closed, the mode follows the data again.
