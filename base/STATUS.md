@@ -11,11 +11,8 @@ with the date and `[MJ]`/`[JS]`.
 
 ## In progress
 
-- 2026-11-07 [JS] D50 Sun watchdog (`D50::checkSunApproach ()`, teld/d50):
-  not yet seen on the mount - a standing mount (tracking off, `block_move`
-  0, dome open) that the Sun nears should park ~10 min before the 15 deg;
-  with `block_move` 1 a critical report every 5 min. Also unverified there:
-  leaving the Sun's proximity. gxccd stop: C2 untested. Morning flats:
+- 2026-11-07 [JS] D50 Sun watchdog: seen on the mount 2026-11-15, done
+  (HISTORY). gxccd stop: C2 untested. Morning flats:
   D50 seen 2026-11-08 (dome closed after the flats, 187 C0 darks by
   `python/sites/d50/flatC0.py`, no `BrokenPipeError`); SBT C3 darks still
   to see - its target 2 ran the old `/etc/rts2/flatC3.py` until 2026-11-08

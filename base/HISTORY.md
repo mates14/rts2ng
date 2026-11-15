@@ -5451,3 +5451,19 @@ cannot check, it is the incident, as before. Built clean, also with
 the hardening flags; ctest base 15/15. Not tested on the mount, and
 gemini_udp.cpp (the non-IMU driver) is not changed. This flip was the
 first tracking-limit flip in the logs kept (since 2026-11-06).
+
+## D50 Sun watchdog seen on the mount (2026-11-15) [JS]
+
+`D50::checkSunApproach ()` (2026-11-07) tested at noon, dome open, the
+Sun at alt 21: T0 moved with `hadec` to the Sun's Dec, west of it along
+its path, then TRACKING off.
+- `block_move` 0: 11:13:09 "the Sun comes within 15 deg ... in 90 s (now
+  15.27 deg), parking", parked in 14 s. The first check after tracking went
+  off - the mount was already inside the 10 min lead.
+- `block_move` 1: 11:16:10 the critical report (in 180 s, 15.68 deg), again
+  11:21:11 (5 min later, 14.50 deg, already inside).
+- Leaving the Sun's proximity: `block_move` 0 at 13.8 deg, 11:24:11 parking,
+  finished in 14 s, the direct way (no findPath detour).
+The moves there found their ways around the Sun ("avoiding the Sun", via
+HA 15 / Dec -40). Nothing changed in the code.
+
