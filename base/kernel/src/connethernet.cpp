@@ -55,8 +55,29 @@ int ConnEthernet::init ()
 	}
 
 	// bind socket to just our network adapter
-	if (setsockopt(sockE, SOL_SOCKET, SO_BINDTODEVICE, ethLocal, strlen(ethLocal)) == -1)	{
-		logStream (MESSAGE_ERROR) << "ConnEthernet::writeRead setsockopt: " << strerror (errno) << sendLog;
+	// base note: classic used SO_BINDTODEVICE, which a packet socket ignores on receive: it got every frame of the
+	// machine, localhost included, and its queue was full within 0.1-0.3 s (D50 2026-11-15, /proc/net/packet).
+	// A burst of rts2 traffic (a new target, a script end) filled it during the wait for a reply, and the kernel
+	// dropped the reply: ~9 "zero response" timeouts a night, 1 s of T0 blocked each. bind () with the
+	// interface's index is what restricts a packet socket. [JS 2026-11-15]
+	struct ifreq ifIndexReq;
+	memset (&ifIndexReq, 0, sizeof (ifIndexReq));
+	strncpy (ifIndexReq.ifr_name, ethLocal, IFNAMSIZ - 1);
+	if (ioctl (sockE, SIOCGIFINDEX, &ifIndexReq) == -1)
+	{
+		logStream (MESSAGE_ERROR) << "ConnEthernet::init no interface " << ethLocal << ": " << strerror (errno) << sendLog;
+		close (sockE);
+		return -1;
+	}
+	int ifindex = ifIndexReq.ifr_ifindex;
+	struct sockaddr_ll bindAddress;
+	memset (&bindAddress, 0, sizeof (bindAddress));
+	bindAddress.sll_family = AF_PACKET;
+	bindAddress.sll_protocol = htons (ETH_P_ALL);
+	bindAddress.sll_ifindex = ifindex;
+	if (bind (sockE, (struct sockaddr *) &bindAddress, sizeof (bindAddress)) == -1)
+	{
+		logStream (MESSAGE_ERROR) << "ConnEthernet::init bind to " << ethLocal << ": " << strerror (errno) << sendLog;
 		close (sockE);
 		return -1;
 	}
@@ -90,8 +111,8 @@ int ConnEthernet::init ()
 	// we don't use a protocoll above ethernet layer -> just use anything here
 	socket_address.sll_protocol = htons(ETH_P_IP);
 	//socket_address.sll_protocol = htons(0xFFFF);
-	// index of the network device
-	socket_address.sll_ifindex  = 2;
+	// index of the network device (base note: classic had 2, right only while ethLocal is the first one after lo)
+	socket_address.sll_ifindex  = ifindex;
 	// ARP hardware identifier is ethernet
 	socket_address.sll_hatype   = ARPHRD_ETHER;
 	// target is another host

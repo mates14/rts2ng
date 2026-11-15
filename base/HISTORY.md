@@ -5668,3 +5668,39 @@ Rerun with a 20 s deadline: given up, no "moved" message.
 
 Not run on the real focusers: needs a release and a reboot (or a restart
 of mlab-tefo, then of F0/F3).
+
+## D50 REMOTES: the lost "first packet" (2026-11-15) [JS]
+
+JS: the first REMOTES frame at a move start often has to be resent,
+cause never found. T0's log (16 Oct - 15 Nov): 264 "ConnEthernet::writeRead
+: zero response or timeout reached", all at night (14-04 UTC); since the
+worm log (8 Nov) 24 in 24.7 h with the RA stepper generator on, none in
+142 h with it off. Around the losses: a focuser start at the very moment
+of the lost request in 106 cases, filter moves and T0 offsets 5-10x the
+baseline - all at the end of a camera script or a new target, when
+`D50::scriptEnds ()` writes the worm step frequency to the RA unit while
+every device resets its values. JS's idea: the burst of rts2
+communication at a new target.
+
+That was it. eth1 itself was clean (no errors, no EEE on the r8169, ~25
+own IPv6 frames since boot). But `/proc/net/packet` showed T0's two
+REMOTES sockets on interface 0 with their queues full (213 kB =
+rmem_default), refilled within 0.1-0.3 s of each drain - while eth1
+carries ~4 frames/s: they got the whole machine's traffic, localhost
+included. `SO_BINDTODEVICE` does not restrict an `AF_PACKET` socket;
+`bind ()` does. During the up-to-1 s wait for a reply, a burst of rts2
+traffic filled the queue and the kernel dropped the reply.
+
+Under the roof (T0 tracking with PEC, block_move cleared and set back,
+parked after): 8 moves (6 tracking, 2 from park) and 24 focuser + 12
+filter moves at random moments - no loss (nothing coincided with a
+burst). `ConnEthernet::init` now binds the socket to the interface (index
+by `SIOCGIFINDEX`) and sends by that index instead of a hard-coded 2.
+
+Bench on lascaux in a user+network namespace: a veth pair, a responder
+answering every frame on one end, `ConnEthernet::writeRead` on the other,
+2000 round trips (200 ms timeout) each: quiet, old and new 0 lost; with a
+localhost UDP flood (60 kB datagrams) old 524 lost, new 0. Not on the
+mount yet: after the release and a T0 restart, `/proc/net/packet` should
+show T0's two sockets with Iface 2 and an Rmem near 0, and the timeouts
+should stop.

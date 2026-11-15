@@ -197,6 +197,12 @@ compiles. Each has more detail in `HISTORY.md` and, for classic-tree bugs,
   created after `beforeRun ()` (cloud4's TEMP_AMB) cannot be marked.
   [MJ 2026-11-03]
 
+**Raw ethernet** (`ConnEthernet`, D50's REMOTES units) [JS 2026-11-15]
+- The packet socket is `bind ()`-ed to its interface, and frames go out
+  by that interface's index. `SO_BINDTODEVICE` does not restrict a packet
+  socket: classic's received every frame of the machine and lost REMOTES
+  replies in bursts of rts2 traffic.
+
 **Event loop**
 - Nothing that runs inside `Block::pollSuccess ()` (a command handler, a
   script line) may call `oneRunLoop ()`. A nested loop leaves the outer one

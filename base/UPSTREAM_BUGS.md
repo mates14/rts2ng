@@ -2187,3 +2187,17 @@ giving up a move: "focuser moved to nan".
 
 rts2ng: -1 from `isFocusing ()` sets the hardware error as a failed
 `endFocusing ()` does.
+
+## REMOTES replies lost in the machine's other traffic (`lib/rts2/connethernet.cpp`) [JS 2026-11-15]
+
+`ConnEthernet::init` opens an `AF_PACKET`/`ETH_P_ALL` socket and limits it
+to the REMOTES interface with `SO_BINDTODEVICE`, which a packet socket
+ignores on receive (it is restricted by `bind ()` with `sll_ifindex`). The
+socket got every frame of the machine, localhost included: on D50
+`/proc/net/packet` showed both REMOTES sockets with interface 0 and the
+queue full again 0.1-0.3 s after each drain. A burst of rts2 traffic
+during the wait for a reply filled it and the kernel dropped the reply:
+~9 "zero response or timeout reached" a night, each a 1 s stall of T0
+and a resend. It also sends with `sll_ifindex = 2` hard-coded.
+
+rts2ng: `bind ()` to the interface, its index for sending.
