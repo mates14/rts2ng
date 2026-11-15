@@ -1872,7 +1872,7 @@
         // still go through the mount's own checks (horizon, ceiling, the
         // Sun); this only asks for them. Azimuth as the altaz command takes
         // it, libnova's: 0 = south, 90 = west.
-        const SERVICE = { blockMove: false, pec: false, shutter: null, sunDrying: false, sunAvoid: null, presets: [] };
+        const SERVICE = { blockMove: false, pec: false, turbo: false, shutter: null, sunDrying: false, sunAvoid: null, presets: [] };
         let serviceEl = null;
 
         function openService() {
@@ -1934,6 +1934,7 @@
                     ${onOff('tracking', 'Tracking')}
                     ${SERVICE.blockMove ? onOff('block_move', 'Block move') : ''}
                     ${SERVICE.pec ? onOff('pec', 'PEC') : ''}
+                    ${SERVICE.turbo ? onOff('speed_turbo_switch', 'Turbo slew') : ''}
                     <div class="service-row">
                         <span class="svc-label">Move to</span>
                         <button onclick="serviceCmd('T0', 'park', 'Park T0?')">park</button>
@@ -1997,6 +1998,7 @@
             tracking: { device: 'T0', name: 'TRACKING', on: 1, off: 0, what: 'tracking' },
             block_move: { device: 'T0', name: 'block_move', on: 1, off: 0, what: 'block move' },
             pec: { device: 'T0', name: 'pec', on: 1, off: 0, what: 'PEC' },
+            speed_turbo_switch: { device: 'T0', name: 'speed_turbo_switch', on: 1, off: 0, what: 'the turbo slew speed' },
             shutter: { device: SERVICE.shutter, name: 'WFshutter', on: 1, off: 0, what: 'the WF shutter', onText: 'open', offText: 'close' },
         };
 

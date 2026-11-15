@@ -4157,4 +4157,6 @@ until the next poll: d50-wfunit's setValue waits for the unit's reply,
 which seems to come only after the cover has moved, and a read 1 s after
 the set got the value from before. A switch "ask before each command" in
 the dialog's head: off, the buttons act without the question; on again
-after every reload (not stored).
+after every reload (not stored). A "Turbo slew" switch on D50 (T0's
+speed_turbo_switch: speed_turbo instead of speed_full; the driver turns it
+off at a script's end).
