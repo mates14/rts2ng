@@ -642,7 +642,12 @@ int DevClientTelescopeExec::syncTarget (bool now, int plan_id)
 		currentTarget->moveEnded ();
 		return 0;
 	}
-	int bopTel = now ? 0 : BOP_TEL_MOVE;
+	// base note: classic sent a "now" move without BOP_TEL_MOVE, so that it does
+	// not wait for exposures - but those are killed by "now" anyway (killall),
+	// and it skipped the dome's block while opening too: D50 2026-11-15 23:51,
+	// GK Per moved 0.8 s after the roof started to open (and failed at the
+	// ceiling). It waits for the block like any move. [JS 2026-11-16]
+	int bopTel = BOP_TEL_MOVE;
 	switch (ret)
 	{
 		case OBS_MOVE:

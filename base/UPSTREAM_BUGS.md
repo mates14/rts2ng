@@ -2201,3 +2201,15 @@ during the wait for a reply filled it and the kernel dropped the reply:
 and a resend. It also sends with `sll_ifindex = 2` hard-coded.
 
 rts2ng: `bind ()` to the interface, its index for sending.
+
+## A "now" move skips the dome's block; an offset revives a failed target (`lib/rts2script/execcli.cpp`, `lib/rts2tel/teld.cpp`) [JS 2026-11-16]
+
+`DevClientTelescopeExec::syncTarget` queues a "now" move with no BOP mask,
+so it also ignores a block set by the dome. `Telescope::startResyncMove`
+keeps the target when `startResync ()` fails (the horizon checks clear
+it), and stops tracking; the next offset (`change`, OFFS) slews to the
+target, and its move end does not start tracking again
+(`startTracking ()` without the check keeps TRACKING 0).
+
+rts2ng: "now" moves wait for `BOP_TEL_MOVE`; a failed move drops the
+target.

@@ -5756,3 +5756,30 @@ the move.
 The daemon logged as `python`/`python3` in the journal; JS gets a
 drop-in, `/etc/systemd/system/mlab-tefo@.service.d/journal.conf` with
 `SyslogIdentifier=tefo-%i`, at both sites (local files, not in the repo).
+
+## D50: a "now" target moved while the roof opened, then went untracked (2026-11-16) [JS]
+
+2026-11-15 23:51:01 the queue switched D50 to ON and issued `now` for GK
+Per (#11055); the dome started to open at 23:51:01.4 and T0 got the move
+at 23:51:02, refused at the ceiling (HA 14.6). Dome opened 23:51:28. From
+23:51:55 the target script's dither offsets reached T0 as "offseting"
+moves: the target was still set (and out of the ceiling by then), so the
+first one slewed from park to GK Per - with tracking off, as the failed
+move had stopped it and an offset does not restart it. The worm step
+generator came on only at 23:52:46 (`G 1` in the worm log), switched by
+hand.
+
+- `script/src/execcli.cpp` `syncTarget`: a "now" move is queued with
+  `BOP_TEL_MOVE` like any other. Classic left it out so it does not wait
+  for exposures, but "now" kills them (killall) and the cameras drop the
+  block; what remained skipped was the dome's block while opening
+  (rts2ng's dome.cpp sets `BOP_TEL_MOVE` too). A GRB (`setGrb` ->
+  `setNow`) waits for the opening too.
+- `teld/src/teld.cpp` `startResyncMove`: a failed `startResync ()` drops
+  the target (ORI, OBJ, TAR NaN) as the horizon checks do, so a later
+  offset or correction has nothing to slew to ("cannot move, null RA or
+  DEC"). That branch now also drops the waiting offset/correction, or every
+  BOP change would retry it.
+
+Built, base tests pass. Not run on the mount; the failure branch needs a
+driver whose `startResync` fails (D50's path search).

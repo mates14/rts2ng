@@ -2139,6 +2139,11 @@ int Telescope::startResyncMove (rts2core::Connection * conn, int correction, boo
 	if (std::isnan (oriRaDec->getRa ()) || std::isnan (oriRaDec->getDec ()))
 	{
 		logStream (MESSAGE_ERROR) << "cannot move, null RA or DEC " << oriRaDec->getRa () << " " << oriRaDec->getDec () << sendLog;
+		// base note: an offset without a target is dropped here, or every
+		// later BOP change (setFullBopState) would try it again. [JS 2026-11-16]
+		woffsRaDec->resetValueChanged ();
+		wcorrRaDec->setValueRaDec (0, 0);
+		wcorrRaDec->resetValueChanged ();
 		if (conn)
 			conn->sendCommandEnd (DEVDEM_E_HW, "null RA or DEC");
 		return -1;
@@ -2366,6 +2371,15 @@ int Telescope::startResyncMove (rts2core::Connection * conn, int correction, boo
 	if (ret)
 	{
 		useParkFlipping = false;
+		// base note: classic kept the target. The target script's next offset
+		// then slewed to it, with tracking still off from this failure: D50
+		// 2026-11-15 23:51, GK Per refused at the ceiling, reached by a dither
+		// offset 53 s later and not tracked. The target is dropped, as the
+		// horizon checks above do. [JS 2026-11-16]
+		setOri (NAN, NAN);
+		objRaDec->setValueRaDec (NAN, NAN);
+		tarRaDec->setValueRaDec (NAN, NAN);
+		tarAltAz->setValueAltAz (NAN, NAN);
 		stopTracking (nullptr);
 		maskState (TEL_MASK_CORRECTING | TEL_MASK_MOVING | BOP_EXPOSURE | TEL_MASK_TRACK, TEL_NOT_CORRECTING | TEL_OBSERVING, "movement failed");
 		if (conn)
